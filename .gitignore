@@ -1,0 +1,33 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+
+# Test output
+*.test
+*.out
+coverage.*
+*.coverprofile
+
+# Go workspace
+go.work
+go.work.sum
+
+# Local data and secrets
+*.db
+*.db-shm
+*.db-wal
+/data/
+.env
+.env.*
+*.key
+*.pem
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
