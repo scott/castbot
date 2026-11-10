@@ -9,10 +9,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
 	"os/exec"
-	"strconv"
 	"strings"
+	"time"
 )
 
 const Image = "castbot-runtime:s03"
@@ -48,13 +47,11 @@ type RunOpt struct {
 	WordDelay  string
 }
 
-// Run starts a container on the host network. The bootstrap value is passed
-// to the container and is not included in errors.
+// Run starts a container on its own bridge network. castlet is published
+// on 127.0.0.1 only. The runtime stays on the container's loopback, so
+// two guests cannot share a process or a port.
+// The bootstrap value is passed to the container and is not included in errors.
 func Run(ctx context.Context, opt RunOpt) (*Guest, error) {
-	port, err := freePort()
-	if err != nil {
-		return nil, err
-	}
 	buf := make([]byte, 4)
 	if _, err := rand.Read(buf); err != nil {
 		return nil, err
@@ -63,13 +60,14 @@ func Run(ctx context.Context, opt RunOpt) (*Guest, error) {
 	args := []string{
 		"run", "--rm", "-d",
 		"--name", id,
-		"--network", "host",
+		"--add-host", "host.docker.internal:host-gateway",
+		"-p", "127.0.0.1::8080",
 		"-v", opt.CAFile + ":/run/castbot-ca.pem:ro",
 		"-e", "CASTBOT_URL=" + opt.ControlURL,
 		"-e", "CASTBOT_AGENT_ID=" + opt.AgentID,
 		"-e", "CASTBOT_BOOTSTRAP_TOKEN=" + opt.Bootstrap,
 		"-e", "CASTBOT_CA_FILE=/run/castbot-ca.pem",
-		"-e", "CASTLET_ADDR=127.0.0.1:" + port,
+		"-e", "CASTLET_ADDR=:8080",
 	}
 	if opt.WordDelay != "" {
 		args = append(args, "-e", "CAST_STANDIN_WORD_DELAY="+opt.WordDelay)
@@ -87,7 +85,43 @@ func Run(ctx context.Context, opt RunOpt) (*Guest, error) {
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", id).Run()
 		return nil, fmt.Errorf("docker run: %s", strings.TrimSpace(msg))
 	}
-	return &Guest{id: id, base: "http://127.0.0.1:" + port}, nil
+	base, err := publishedURL(ctx, id)
+	if err != nil {
+		_ = exec.CommandContext(ctx, "docker", "rm", "-f", id).Run()
+		return nil, err
+	}
+	return &Guest{id: id, base: base}, nil
+}
+
+func publishedURL(ctx context.Context, id string) (string, error) {
+	var last string
+	for i := 0; i < 25; i++ {
+		out, err := exec.CommandContext(ctx, "docker", "port", id, "8080").CombinedOutput()
+		last = string(out)
+		if err == nil {
+			for _, line := range strings.Split(last, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "127.0.0.1:") {
+					return "http://" + line, nil
+				}
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	return "", fmt.Errorf("docker port: %s", strings.TrimSpace(last))
+}
+
+// Published lists the host port mappings. Callers use it to prove the
+// runtime port is not published.
+func (g *Guest) Published(ctx context.Context) (string, error) {
+	if g == nil || g.id == "" {
+		return "", errors.New("no container")
+	}
+	out, err := exec.CommandContext(ctx, "docker", "port", g.id).CombinedOutput()
+	if err != nil {
+		return "", errors.New("docker port failed")
+	}
+	return string(out), nil
 }
 
 // URL is the castlet base URL on the host.
@@ -145,13 +179,4 @@ func (g *Guest) CopyFrom(ctx context.Context, containerPath, hostPath string) er
 		return errors.New("docker cp failed")
 	}
 	return nil
-}
-
-func freePort() (string, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	defer ln.Close()
-	return strconv.Itoa(ln.Addr().(*net.TCPAddr).Port), nil
 }

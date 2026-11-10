@@ -3,12 +3,31 @@ package web
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
+	"time"
 
 	"github.com/scott/castbot/internal/bundle"
 )
+
+const guestBodyCap = 32 << 20
+
+var guestHTTP = &http.Client{
+	Timeout: 60 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+	Transport: &http.Transport{
+		Proxy:                 nil,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 10 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		DisableKeepAlives:     true,
+	},
+}
 
 func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	plain := bearerToken(r.Header.Get("Authorization"))
@@ -69,7 +88,7 @@ func (s *Server) ownerSecrets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.writeSecrets(w, r, user.ID)
+	s.writeSecretNames(w, r, user.ID)
 }
 
 func (s *Server) writeBundle(w http.ResponseWriter, r *http.Request, userID string) {
@@ -88,6 +107,23 @@ func (s *Server) writeBundle(w http.ResponseWriter, r *http.Request, userID stri
 	w.Header().Set("X-Castbot-Bundle-SHA256", b.SHA256)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
+}
+
+func (s *Server) writeSecretNames(w http.ResponseWriter, r *http.Request, userID string) {
+	secrets, err := s.store.GrantedSecrets(r.Context(), userID, r.PathValue("id"))
+	if mapStoreErr(w, r, err) {
+		return
+	}
+	type item struct {
+		Name string `json:"name"`
+	}
+	out := struct {
+		Secrets []item `json:"secrets"`
+	}{Secrets: []item{}}
+	for _, sec := range secrets {
+		out.Secrets = append(out.Secrets, item{Name: sec.Name})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) writeSecrets(w http.ResponseWriter, r *http.Request, userID string) {
@@ -121,7 +157,7 @@ func (s *Server) ownerFiles(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
-	s.proxyGuest(w, r, g, "/castlet/files")
+	s.proxyGuest(w, r, g, "/castlet/files", "")
 }
 
 func (s *Server) ownerFile(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +178,49 @@ func (s *Server) ownerFile(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusNotFound, "Not found\n")
 		return
 	}
-	s.proxyGuest(w, r, g, guestPath)
+	s.proxyGuest(w, r, g, guestPath, path.Base(strings.Trim(r.PathValue("path"), "/")))
+}
+
+func (s *Server) proxyGuest(w http.ResponseWriter, r *http.Request, g guest, guestPath, filename string) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, g.Base+guestPath, nil)
+	if err != nil {
+		writeText(w, http.StatusBadGateway, "Error\n")
+		return
+	}
+	req.Header.Set("X-Cast-Authorization", "Bearer "+g.Token)
+	res, err := guestHTTP.Do(req)
+	if err != nil {
+		writeText(w, http.StatusBadGateway, "Error\n")
+		return
+	}
+	defer res.Body.Close()
+	status := http.StatusBadGateway
+	switch res.StatusCode {
+	case http.StatusOK:
+		status = http.StatusOK
+	case http.StatusNotFound:
+		status = http.StatusNotFound
+	}
+	if res.ContentLength > guestBodyCap {
+		writeText(w, http.StatusBadGateway, "Error\n")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(res.Body, guestBodyCap+1))
+	if err != nil || len(body) > guestBodyCap {
+		writeText(w, http.StatusBadGateway, "Error\n")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	if filename == "" {
+		w.Header().Set("Content-Type", "application/json")
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", attachmentDisposition(filename))
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
 
 func fileGuestPath(rel string) (string, bool) {
@@ -160,25 +238,22 @@ func fileGuestPath(rel string) (string, bool) {
 	return "/castlet/files/" + strings.Join(parts, "/"), true
 }
 
-func (s *Server) proxyGuest(w http.ResponseWriter, r *http.Request, g guest, path string) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, g.Base+path, nil)
-	if err != nil {
-		writeText(w, http.StatusBadGateway, "Error\n")
-		return
+func attachmentDisposition(name string) string {
+	clean := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			return r
+		default:
+			return -1
+		}
+	}, name)
+	if clean == "" || clean == "." || clean == ".." {
+		clean = "download"
 	}
-	req.Header.Set("X-Cast-Authorization", "Bearer "+g.Token)
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		writeText(w, http.StatusBadGateway, "Error\n")
-		return
+	if len(clean) > 80 {
+		clean = clean[:80]
 	}
-	defer res.Body.Close()
-	if ct := res.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(res.StatusCode)
-	_, _ = io.Copy(w, res.Body)
+	return `attachment; filename="` + clean + `"`
 }
 
 func bearerToken(h string) string {

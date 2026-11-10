@@ -122,3 +122,93 @@ func TestFileAndMemoryRoundTrip(t *testing.T) {
 		t.Fatalf("memory %q %v", got, err)
 	}
 }
+
+func TestSymlinkDoesNotEscapeTheWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	mem := filepath.Join(dir, "memory")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(mem, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "hello.txt"), []byte("hello file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("hello.txt", filepath.Join(ws, "inside")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/passwd", filepath.Join(ws, "outside")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/passwd", filepath.Join(mem, "leak")); err != nil {
+		t.Fatal(err)
+	}
+	outsideDir := t.TempDir()
+	if err := os.Symlink(outsideDir, filepath.Join(ws, "jump")); err != nil {
+		t.Fatal(err)
+	}
+	sup := readySup(t, dir)
+	inside := authed(t, sup, http.MethodGet, "/castlet/files/inside", nil)
+	if inside.Code != http.StatusOK || inside.Body.String() != "hello file" {
+		t.Fatalf("inside link %d %q", inside.Code, inside.Body.String())
+	}
+	out := authed(t, sup, http.MethodGet, "/castlet/files/outside", nil)
+	if out.Code == http.StatusOK || strings.Contains(out.Body.String(), "root:") {
+		t.Fatalf("outside link was served: %d", out.Code)
+	}
+	put := authed(t, sup, http.MethodPut, "/castlet/files/jump/pwned.txt", strings.NewReader("nope"))
+	if put.Code == http.StatusNoContent {
+		t.Fatal("put followed a symlink out of the workspace")
+	}
+	if _, err := os.Stat(filepath.Join(outsideDir, "pwned.txt")); !os.IsNotExist(err) {
+		t.Fatal("symlink put wrote outside the workspace")
+	}
+	exp := authed(t, sup, http.MethodGet, "/castlet/memory", nil)
+	if exp.Code != http.StatusOK || strings.Contains(exp.Body.String(), "root:") {
+		t.Fatal("memory export followed a symlink")
+	}
+}
+
+func TestProxyRejectsOversizedBody(t *testing.T) {
+	var hits atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(up.Close)
+	sup, err := New(Config{Token: "agent-token", RuntimeURL: up.URL, AgentDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup.mu.Lock()
+	sup.ready = true
+	sup.mu.Unlock()
+	body := strings.Repeat("x", (1<<20)+1)
+	rec := authed(t, sup, http.MethodPost, "/", strings.NewReader(body))
+	if rec.Code != http.StatusRequestEntityTooLarge || hits.Load() != 0 {
+		t.Fatalf("status %d hits %d", rec.Code, hits.Load())
+	}
+}
+
+func readySup(t *testing.T, dir string) *Supervisor {
+	t.Helper()
+	sup, err := New(Config{Token: "agent-token", AgentDir: dir, RuntimeURL: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup.mu.Lock()
+	sup.ready = true
+	sup.mu.Unlock()
+	return sup
+}
+
+func authed(t *testing.T, sup *Supervisor, method, path string, body io.Reader) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, body)
+	req.Header.Set("X-Cast-Authorization", "Bearer agent-token")
+	rec := httptest.NewRecorder()
+	sup.ServeHTTP(rec, req)
+	return rec
+}

@@ -58,6 +58,7 @@ type Supervisor struct {
 	logs        *ring
 
 	mu       sync.Mutex
+	reloadMu sync.Mutex
 	token    string
 	ready    bool
 	version  string
@@ -67,6 +68,8 @@ type Supervisor struct {
 	procDone chan struct{}
 	bootErr  string
 }
+
+var errReloadBusy = errors.New("reload in progress")
 
 type secret struct {
 	Name  string
@@ -99,6 +102,10 @@ func New(cfg Config) (*Supervisor, error) {
 
 // Boot exchanges the bootstrap token, writes /app/agent, and starts the runtime.
 func (s *Supervisor) Boot(ctx context.Context) error {
+	if !s.reloadMu.TryLock() {
+		return errReloadBusy
+	}
+	defer s.reloadMu.Unlock()
 	token := s.cfg.Token
 	if token == "" {
 		var err error
@@ -134,10 +141,6 @@ func (s *Supervisor) Boot(ctx context.Context) error {
 		s.setBootErr("runtime")
 		return err
 	}
-	s.mu.Lock()
-	s.ready = true
-	s.bootErr = ""
-	s.mu.Unlock()
 	return nil
 }
 
@@ -289,7 +292,14 @@ func (s *Supervisor) controlClient() (*http.Client, error) {
 func (s *Supervisor) startRuntime(ctx context.Context) error {
 	s.stopRuntime()
 	if len(s.cfg.RuntimeCmd) == 0 {
-		return s.waitReady(ctx)
+		if err := s.waitReady(ctx); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		s.ready = true
+		s.bootErr = ""
+		s.mu.Unlock()
+		return nil
 	}
 	cmd := exec.Command(s.cfg.RuntimeCmd[0], s.cfg.RuntimeCmd[1:]...)
 	cmd.Env = s.childEnv()
@@ -302,12 +312,38 @@ func (s *Supervisor) startRuntime(ctx context.Context) error {
 	go func() {
 		_ = cmd.Wait()
 		close(done)
+		s.mu.Lock()
+		if s.procDone == done {
+			s.ready = false
+			if s.bootErr == "" {
+				s.bootErr = "runtime exited"
+			}
+		}
+		s.mu.Unlock()
 	}()
 	s.mu.Lock()
 	s.proc = cmd
 	s.procDone = done
 	s.mu.Unlock()
-	return s.waitReady(ctx)
+	if err := s.waitReady(ctx); err != nil {
+		s.stopRuntime()
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.procDone != done {
+		return errors.New("runtime exited")
+	}
+	select {
+	case <-done:
+		s.ready = false
+		s.bootErr = "runtime exited"
+		return errors.New("runtime exited")
+	default:
+	}
+	s.ready = true
+	s.bootErr = ""
+	return nil
 }
 
 func (s *Supervisor) stopRuntime() {
@@ -338,25 +374,61 @@ func (s *Supervisor) waitReady(ctx context.Context) error {
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.RuntimeURL+"/.well-known/agent.json", nil)
-		if err == nil {
-			res, err := s.proxyClient.Do(req)
-			if err == nil {
-				io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
-				res.Body.Close()
-				if res.StatusCode == http.StatusOK {
-					return nil
-				}
+		if err := s.exited(); err != nil {
+			return err
+		}
+		if s.probeRuntime() {
+			if err := s.exited(); err != nil {
+				return err
 			}
+			return nil
 		}
 		select {
 		case <-ctx.Done():
 			return errors.New("runtime did not start")
 		case <-deadline.C:
 			return errors.New("runtime did not start")
+		case <-s.doneChan():
+			return errors.New("runtime exited")
 		case <-tick.C:
 		}
 	}
+}
+
+func (s *Supervisor) doneChan() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.procDone != nil {
+		return s.procDone
+	}
+	return nil
+}
+
+func (s *Supervisor) exited() error {
+	ch := s.doneChan()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case <-ch:
+		return errors.New("runtime exited")
+	default:
+		return nil
+	}
+}
+
+func (s *Supervisor) probeRuntime() bool {
+	req, err := http.NewRequest(http.MethodGet, s.cfg.RuntimeURL+"/.well-known/agent.json", nil)
+	if err != nil {
+		return false
+	}
+	res, err := s.proxyClient.Do(req)
+	if err != nil {
+		return false
+	}
+	io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
+	res.Body.Close()
+	return res.StatusCode == http.StatusOK
 }
 
 func (s *Supervisor) childEnv() []string {
@@ -383,9 +455,12 @@ func (s *Supervisor) childEnv() []string {
 }
 
 func (s *Supervisor) reload(ctx context.Context) error {
+	if !s.reloadMu.TryLock() {
+		return errReloadBusy
+	}
+	defer s.reloadMu.Unlock()
 	s.mu.Lock()
 	token := s.token
-	prev := s.sha
 	s.mu.Unlock()
 	if token == "" {
 		return errors.New("not ready")
@@ -398,12 +473,6 @@ func (s *Supervisor) reload(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if sum == prev {
-		s.mu.Lock()
-		s.secrets = secrets
-		s.mu.Unlock()
-		return nil
-	}
 	if err := bundle.Install(s.cfg.AgentDir, raw); err != nil {
 		return err
 	}
@@ -413,14 +482,12 @@ func (s *Supervisor) reload(ctx context.Context) error {
 	s.sha = sum
 	s.ready = false
 	s.mu.Unlock()
+	// Always restart. A rotated secret has to reach the runtime env even
+	// when the bundle bytes did not change.
 	if err := s.startRuntime(ctx); err != nil {
 		s.setBootErr("runtime")
 		return err
 	}
-	s.mu.Lock()
-	s.ready = true
-	s.bootErr = ""
-	s.mu.Unlock()
 	return nil
 }
 

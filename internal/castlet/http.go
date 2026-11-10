@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -72,12 +74,7 @@ func hashEq(a, b string) bool {
 }
 
 func (s *Supervisor) health(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	ready := s.ready
-	version := s.version
-	sum := s.sha
-	bootErr := s.bootErr
-	s.mu.Unlock()
+	ready, version, sum, bootErr := s.snapshot()
 	status := http.StatusOK
 	if !ready {
 		status = http.StatusServiceUnavailable
@@ -95,6 +92,10 @@ func (s *Supervisor) health(w http.ResponseWriter, r *http.Request) {
 
 func (s *Supervisor) handleReload(w http.ResponseWriter, r *http.Request) {
 	if err := s.reload(r.Context()); err != nil {
+		if errors.Is(err, errReloadBusy) {
+			http.Error(w, "reload in progress", http.StatusConflict)
+			return
+		}
 		http.Error(w, "reload failed", http.StatusBadGateway)
 		return
 	}
@@ -112,9 +113,14 @@ func (s *Supervisor) proxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not ready", http.StatusServiceUnavailable)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	const maxProxyBody = 1 << 20
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxProxyBody+1))
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if len(body) > maxProxyBody {
+		http.Error(w, "too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, s.cfg.RuntimeURL+r.URL.RequestURI(), bytes.NewReader(body))
@@ -162,16 +168,31 @@ func (s *Supervisor) proxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Supervisor) isReady() bool {
+	ready, _, _, _ := s.snapshot()
+	return ready
+}
+
+func (s *Supervisor) snapshot() (ready bool, version, sum, bootErr string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.ready
+	if s.procDone != nil {
+		select {
+		case <-s.procDone:
+			s.ready = false
+			if s.bootErr == "" {
+				s.bootErr = "runtime exited"
+			}
+		default:
+		}
+	}
+	return s.ready, s.version, s.sha, s.bootErr
 }
 
 func (s *Supervisor) listFiles(w http.ResponseWriter, r *http.Request) {
 	root := filepath.Join(s.cfg.AgentDir, "workspace")
 	var out []map[string]any
 	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
+		if err != nil || info == nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
 		rel, err := filepath.Rel(root, p)
@@ -202,11 +223,15 @@ func (s *Supervisor) file(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPut {
-		s.putFile(w, r, full)
+		s.putFile(w, r, root, full)
 		return
 	}
-	f, err := os.Open(full)
+	f, err := openUnder(root, full)
 	if err != nil {
+		if errors.Is(err, errOutside) {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}
@@ -222,8 +247,16 @@ func (s *Supervisor) file(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, f)
 }
 
-func (s *Supervisor) putFile(w http.ResponseWriter, r *http.Request, full string) {
+func (s *Supervisor) putFile(w http.ResponseWriter, r *http.Request, root, full string) {
+	if err := ensureParent(root, full); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := ensureParent(root, full); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -234,13 +267,12 @@ func (s *Supervisor) putFile(w http.ResponseWriter, r *http.Request, full string
 	}
 	defer os.Remove(tmp.Name())
 	n, err := io.Copy(tmp, io.LimitReader(r.Body, fileCap+1))
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil || n > fileCap {
+	cerr := tmp.Close()
+	if err != nil || cerr != nil || n > fileCap {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	// Rename replaces a symlink entry. It does not follow one.
 	if err := os.Rename(tmp.Name(), full); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
@@ -258,7 +290,11 @@ func (s *Supervisor) exportMemory(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	tw := tar.NewWriter(w)
 	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
+		if err != nil || info == nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		resolved, err := filepath.EvalSymlinks(p)
+		if err != nil || !under(root, resolved) {
 			return nil
 		}
 		rel, err := filepath.Rel(root, p)
@@ -266,7 +302,7 @@ func (s *Supervisor) exportMemory(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		f, err := os.Open(p)
+		f, err := os.Open(resolved)
 		if err != nil {
 			return nil
 		}
@@ -316,11 +352,19 @@ func (s *Supervisor) importMemory(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
+		if err := ensureParent(root, full); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		f, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		if err := ensureParent(root, full); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		f, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, 0o644)
 		if err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
@@ -345,6 +389,40 @@ func safeRel(name string) (string, bool) {
 		return "", false
 	}
 	return name, true
+}
+
+var errOutside = errors.New("outside workspace")
+
+func openUnder(root, full string) (*os.File, error) {
+	resolved, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return nil, err
+	}
+	if !under(root, resolved) {
+		return nil, errOutside
+	}
+	return os.Open(resolved)
+}
+
+func ensureParent(root, full string) error {
+	cur := filepath.Dir(full)
+	for {
+		if _, err := os.Lstat(cur); err == nil {
+			resolved, err := filepath.EvalSymlinks(cur)
+			if err != nil {
+				return err
+			}
+			if resolved != root && !under(root, resolved) {
+				return errOutside
+			}
+			return nil
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return errOutside
+		}
+		cur = parent
+	}
 }
 
 func under(root, full string) bool {

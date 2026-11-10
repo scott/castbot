@@ -4,17 +4,26 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -80,31 +89,66 @@ func (t *tokenTap) Token() string {
 	return t.token
 }
 
-func writeCA(t *testing.T, ts *httptest.Server) string {
+func openControl(t *testing.T, h http.Handler) (rawURL, caPath string) {
 	t.Helper()
-	cert := ts.Certificate()
-	if cert == nil {
-		t.Fatal("test server has no certificate")
-	}
-	raw := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
-	path := filepath.Join(t.TempDir(), "ca.pem")
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return path
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "host.docker.internal"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(2 * time.Hour),
+		DNSNames:              []string{"host.docker.internal"},
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{
+		Handler: h,
+		TLSConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
+		},
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() { _ = srv.ServeTLS(ln, "", "") }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	caPath = filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caPath, pemBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	return "https://host.docker.internal:" + strconv.Itoa(port), caPath
 }
 
 func startGuest(t *testing.T, h *harness, agentID, bootstrap, delay string) (*host.Guest, string) {
 	t.Helper()
 	ensureImage(t)
 	tap := &tokenTap{next: h.srv.Handler()}
-	ts := httptest.NewTLSServer(tap)
-	t.Cleanup(ts.Close)
-	ca := writeCA(t, ts)
+	controlURL, ca := openControl(t, tap)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 	guest, err := host.Run(ctx, host.RunOpt{
-		ControlURL: ts.URL,
+		ControlURL: controlURL,
 		AgentID:    agentID,
 		Bootstrap:  bootstrap,
 		CAFile:     ca,
@@ -298,6 +342,73 @@ func TestContainerBootsFromBundle(t *testing.T) {
 	h.jar = saved
 }
 
+func TestTwoGuestsStayIsolated(t *testing.T) {
+	h := newHarnessWith(t, runtime.NewHTTP("http://127.0.0.1:1"))
+	ctx := context.Background()
+	type spec struct {
+		email, name, secretName, secretValue string
+	}
+	specs := []spec{
+		{"alice@example.com", "AliceAgent", "ALICE_TOKEN", "alice-fixture-value"},
+		{"bob@example.com", "BobAgent", "BOB_TOKEN", "bob-fixture-value"},
+	}
+	var guests []*host.Guest
+	for _, sp := range specs {
+		user, _ := h.account(sp.email, sp.name, "correct-horse-1")
+		sec, err := h.st.CreateSection(ctx, user.ID, "Work")
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent, _, err := h.st.CreateAgent(ctx, user.ID, store.AgentInput{SectionID: sec.ID, Name: sp.name, Title: "Helper", Status: "ready"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.st.PutBundle(ctx, user.ID, agent.ID, "1", "name: "+sp.name+"\n", "Reply briefly.\n"); err != nil {
+			t.Fatal(err)
+		}
+		secRow, err := h.st.PutSecret(ctx, user.ID, sp.secretName, sp.secretValue)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.st.GrantSecret(ctx, user.ID, agent.ID, secRow.ID); err != nil {
+			t.Fatal(err)
+		}
+		boot, err := h.st.IssueBootstrap(ctx, user.ID, agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		guest, token := startGuest(t, h, agent.ID, boot, "")
+		guests = append(guests, guest)
+		card := castletText(t, http.MethodGet, guest.URL()+"/.well-known/agent.json", token, nil)
+		if !strings.Contains(card, `"name":"`+sp.name+`"`) && !strings.Contains(card, `"name": "`+sp.name+`"`) {
+			t.Fatalf("%s card is %s", sp.name, card)
+		}
+		ports, err := guest.Published(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(ports, "8081") {
+			t.Fatalf("runtime port is published: %s", ports)
+		}
+		assertNamedSecret(t, guest, sp.secretName, sp.secretValue)
+	}
+	assertNamedSecret(t, guests[0], "BOB_TOKEN", "")
+	assertNamedSecret(t, guests[1], "ALICE_TOKEN", "")
+}
+
+func assertNamedSecret(t *testing.T, guest *host.Guest, name, value string) {
+	t.Helper()
+	sum := sha256.Sum256([]byte(value))
+	want := hex.EncodeToString(sum[:])
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	script := `for e in /proc/[0-9]*/environ; do tr '\000' '\n' < "$e"; done | sed -n 's/^` + name + `=//p' | tr -d '\n' | sha256sum`
+	out, err := guest.Output(ctx, "/bin/sh", "-c", script)
+	if err != nil || !strings.Contains(out, want) {
+		t.Fatalf("secret %s was not isolated", name)
+	}
+}
+
 func urlValues(body string) url.Values {
 	return url.Values{"body": {body}}
 }
@@ -335,7 +446,7 @@ func assertSecretInEnvOnly(t *testing.T, guest *host.Guest, value string) {
 	want := hex.EncodeToString(sum[:])
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	out, err := guest.Output(ctx, "/bin/sh", "-c", `for e in /proc/[0-9]*/environ; do tr '\0' '\n' < "$e"; done | sed -n 's/^FIXTURE_TOKEN=//p' | tr -d '\n' | sha256sum`)
+	out, err := guest.Output(ctx, "/bin/sh", "-c", `for e in /proc/[0-9]*/environ; do tr '\000' '\n' < "$e"; done | sed -n 's/^FIXTURE_TOKEN=//p' | tr -d '\n' | sha256sum`)
 	if err != nil || !strings.Contains(out, want) {
 		t.Fatal("runtime environment is missing the granted secret")
 	}

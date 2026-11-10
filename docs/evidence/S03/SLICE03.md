@@ -1,6 +1,6 @@
 # S03 castlet and the shared image, local Docker
 
-The shared image contains castlet and a protocol stand-in. It does not contain an agent. A container starts with an empty `/app/agent`, exchanges a one-time bootstrap token, pulls the bundle and granted fixture secrets over HTTPS, writes `/app/agent`, and starts the stand-in on `127.0.0.1:8081`. castlet listens on the only published port, checks `X-Cast-Authorization`, and proxies `POST /` and `/.well-known/agent.json`.
+The shared image contains castlet and a protocol stand-in. It does not contain an agent. A container starts with an empty `/app/agent`, exchanges a one-time bootstrap token, pulls the bundle and granted fixture secrets over HTTPS, writes `/app/agent`, and starts the stand-in on that container's own loopback at `127.0.0.1:8081`. castlet listens on the only published port, checks `X-Cast-Authorization`, and proxies `POST /` and `/.well-known/agent.json`. Each guest has its own bridge network, so one guest cannot answer for another. The browser secrets route returns names only. Workspace downloads are octet-stream attachments.
 
 This slice does not call DigitalOcean, does not push a registry, and does not create a MicroVM. CI uses the same local image. `CASTLET_RUNTIME` is the command castlet execs, so a later slice can install Cast without changing the supervisor. Fixture secrets stay plaintext in SQLite. The encrypted vault is a later slice.
 
