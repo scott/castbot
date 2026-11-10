@@ -84,7 +84,7 @@
 <div class="acct-pill"><span class="av me xs">{{.Initials}}</span><span class="grow">{{.Email}}</span><a class="link" href="/login?switch=1">Use a different account</a></div>
 <form method="post" action="/login/code">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
-<label class="otp{{if .OTPBad}} bad{{end}}" id="otp"><input class="vh" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" aria-label="6-digit code" value="{{.Code}}">{{range .Cells}}<span class="cell {{.Class}}">{{.Digit}}</span>{{end}}</label>
+<label class="otp{{if .OTPBad}} bad{{end}}" id="otp"><input class="vh" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" aria-label="6-digit code" autofocus{{if .Code}} value="{{.Code}}"{{end}}>{{range .Cells}}<span class="cell {{.Class}}">{{.Digit}}</span>{{end}}</label>
 <span class="help">Open your authenticator app and find castbot.</span>
 {{if .Hint}}<span class="help err-help"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/></svg>{{.Hint}}</span>{{end}}
 <div id="recovery-panel" hidden>

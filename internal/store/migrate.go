@@ -1,5 +1,7 @@
 package store
 
+import "database/sql"
+
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY
@@ -19,6 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_path TEXT NOT NULL DEFAULT '',
   role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
   theme TEXT NOT NULL DEFAULT 'system' CHECK (theme IN ('system', 'dark', 'light')),
+  timezone TEXT NOT NULL DEFAULT 'America/Denver',
   password_changed_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
   disabled_at TEXT
@@ -30,6 +33,7 @@ CREATE TABLE IF NOT EXISTS credentials (
   user_id TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('passkey', 'password', 'totp')),
   data TEXT NOT NULL,
+  last_step INTEGER,
   created_at TEXT NOT NULL,
   UNIQUE (user_id, kind)
 );
@@ -142,6 +146,39 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (1) ON CONFLICT(version) DO NOTHING`)
+	if err := s.ensureColumn("users", "timezone", `ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'America/Denver'`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("credentials", "last_step", `ALTER TABLE credentials ADD COLUMN last_step INTEGER`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (1) ON CONFLICT(version) DO NOTHING`); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (2) ON CONFLICT(version) DO NOTHING`)
+	return err
+}
+
+func (s *Store) ensureColumn(table, column, alter string) error {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(alter)
 	return err
 }

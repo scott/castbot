@@ -182,12 +182,15 @@ func TestLoginAndSessionCookie(t *testing.T) {
 		}
 	}
 	code, body, _ = h.do(http.MethodGet, "/login/code", "", ip, nil)
-	if code != 200 || strings.Count(body, `class="cell`) != 6 || !strings.Contains(body, `id="verify"`) || !strings.Contains(body, "disabled") {
+	if code != 200 || strings.Count(body, `class="cell`) != 6 || !strings.Contains(body, `id="verify"`) || !strings.Contains(body, "disabled") || !strings.Contains(body, "autofocus") {
 		t.Fatalf("code page cells")
 	}
 	code, body, _ = h.do(http.MethodPost, "/login/code", h.form(url.Values{"code": {"000000"}}), ip, nil)
 	if code != 200 || !strings.Contains(body, "That code did not work.") || !strings.Contains(body, "4 tries left") {
 		t.Fatalf("code error %s", body)
+	}
+	if strings.Contains(body, `value="000000"`) || !strings.Contains(body, "autofocus") || !strings.Contains(body, "otp bad") {
+		t.Fatal("wrong code stayed in the field")
 	}
 	totp, err := auth.TOTPCode(secret, h.st.Now())
 	if err != nil {
@@ -527,6 +530,181 @@ func TestNoSQLInHandlers(t *testing.T) {
 				t.Fatalf("%s contains %s", name, needle)
 			}
 		}
+	}
+}
+
+func (h *harness) sessionID() string {
+	c := h.jar["castbot_session"]
+	if c == nil {
+		return ""
+	}
+	id, ok := openSeal("session", c.Value, h.srv.key)
+	if !ok {
+		return ""
+	}
+	return id
+}
+
+func TestTOTPReplayTwoSessions(t *testing.T) {
+	h := newHarness(t)
+	now := time.Date(2026, 11, 10, 1, 1, 0, 0, time.UTC)
+	h.st.SetNow(func() time.Time { return now })
+	_, secret := h.account("replay@example.com", "Replay", "correct-horse-1")
+	h.login("replay@example.com", "correct-horse-1", secret, "203.0.113.150:9", false)
+	h.jar = map[string]*http.Cookie{}
+	h.csrf = ""
+	ip := "203.0.113.151:9"
+	h.do(http.MethodGet, "/login", "", ip, nil)
+	code, _, hdr := h.do(http.MethodPost, "/login", h.form(url.Values{"email": {"replay@example.com"}, "password": {"correct-horse-1"}}), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/login/code" {
+		t.Fatalf("second session password %d %s", code, hdr.Get("Location"))
+	}
+	totp, err := auth.TOTPCode(secret, h.st.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body, hdr := h.do(http.MethodPost, "/login/code", h.form(url.Values{"code": {totp}}), ip, nil)
+	if hdr.Get("Location") == "/" || code == http.StatusSeeOther || !strings.Contains(body, "That code did not work.") {
+		t.Fatalf("replay accepted %d %s", code, hdr.Get("Location"))
+	}
+}
+
+func TestTrustedDeviceAndPasswordRevocation(t *testing.T) {
+	h := newHarness(t)
+	now := time.Date(2026, 11, 10, 1, 1, 0, 0, time.UTC)
+	h.st.SetNow(func() time.Time { return now })
+	user, secret := h.account("alex@example.com", "Alex Rivera", "correct-horse-1")
+	ipA := "203.0.113.180:9"
+	ipB := "203.0.113.181:9"
+	pass := "correct-horse-1"
+	h.login("alex@example.com", pass, secret, ipA, true)
+	deviceA := h.jar["castbot_device"]
+	if deviceA == nil {
+		t.Fatal("missing device")
+	}
+	now = now.Add(30 * time.Second)
+	h.jar = map[string]*http.Cookie{}
+	h.csrf = ""
+	h.login("alex@example.com", pass, secret, ipB, true)
+	deviceB := h.jar["castbot_device"]
+	if deviceB == nil {
+		t.Fatal("missing second device")
+	}
+	code, _, _ := h.do(http.MethodPost, "/settings/sessions", h.form(url.Values{}), ipB, nil)
+	if code != http.StatusSeeOther {
+		t.Fatal(code)
+	}
+	h.jar = map[string]*http.Cookie{"castbot_device": deviceA}
+	h.csrf = ""
+	h.do(http.MethodGet, "/login", "", ipA, nil)
+	code, _, hdr := h.do(http.MethodPost, "/login", h.form(url.Values{"email": {"alex@example.com"}, "password": {pass}}), ipA, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/login/code" {
+		t.Fatalf("trusted device survived sign-out of others: %d %s", code, hdr.Get("Location"))
+	}
+	h.jar = map[string]*http.Cookie{"castbot_device": deviceB}
+	h.csrf = ""
+	h.do(http.MethodGet, "/login", "", ipB, nil)
+	code, _, hdr = h.do(http.MethodPost, "/login", h.form(url.Values{"email": {"alex@example.com"}, "password": {pass}, "remember": {"1"}}), ipB, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/" {
+		t.Fatalf("this browser lost its trusted device: %d %s", code, hdr.Get("Location"))
+	}
+	now = now.Add(30 * time.Second)
+	h.jar = map[string]*http.Cookie{}
+	h.csrf = ""
+	h.login("alex@example.com", pass, secret, ipA, true)
+	deviceA = h.jar["castbot_device"]
+	h.jar = map[string]*http.Cookie{"castbot_device": deviceB}
+	h.csrf = ""
+	h.do(http.MethodGet, "/login", "", ipB, nil)
+	code, _, hdr = h.do(http.MethodPost, "/login", h.form(url.Values{"email": {"alex@example.com"}, "password": {pass}, "remember": {"1"}}), ipB, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/" {
+		t.Fatalf("B device %d %s", code, hdr.Get("Location"))
+	}
+	h.do(http.MethodGet, "/settings", "", ipB, nil)
+	before := h.sessionID()
+	if before == "" {
+		t.Fatal("session id")
+	}
+	third, err := h.st.CreateSession(context.Background(), user.ID, "Mozilla/5.0 Chrome/120.0", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _, hdr = h.do(http.MethodPost, "/settings/password", h.form(url.Values{"current": {pass}, "next": {"correct-horse-2"}, "again": {"correct-horse-2"}}), ipB, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/settings?notice=password" {
+		t.Fatalf("password change %d %s", code, hdr.Get("Location"))
+	}
+	after := h.sessionID()
+	if after == "" || after == before {
+		t.Fatalf("session was not rotated %q %q", before, after)
+	}
+	if _, err := h.st.GetSession(context.Background(), before); err != store.ErrNotFound {
+		t.Fatalf("old session %v", err)
+	}
+	if _, err := h.st.GetSession(context.Background(), third.ID); err != store.ErrNotFound {
+		t.Fatalf("third session %v", err)
+	}
+	code, _, _ = h.do(http.MethodGet, "/settings", "", ipB, nil)
+	if code != 200 {
+		t.Fatal("current browser was signed out")
+	}
+	h.jar = map[string]*http.Cookie{"castbot_device": deviceA}
+	h.csrf = ""
+	h.do(http.MethodGet, "/login", "", ipA, nil)
+	code, _, hdr = h.do(http.MethodPost, "/login", h.form(url.Values{"email": {"alex@example.com"}, "password": {"correct-horse-2"}}), ipA, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/login/code" {
+		t.Fatalf("trusted device survived password change: %d %s", code, hdr.Get("Location"))
+	}
+}
+
+func TestOriginCheck(t *testing.T) {
+	h := newHarness(t)
+	_, secret := h.account("origin@example.com", "Origin", "correct-horse-1")
+	ip := "203.0.113.190:9"
+	h.login("origin@example.com", "correct-horse-1", secret, ip, false)
+	code, body, _ := h.do(http.MethodPost, "/settings/appearance", h.form(url.Values{"theme": {"light"}}), ip, map[string]string{"Origin": "https://evil.example"})
+	if code != http.StatusForbidden || !strings.Contains(body, "That request was blocked.") {
+		t.Fatalf("evil origin %d %s", code, body)
+	}
+	code, body, _ = h.do(http.MethodPost, "/settings/appearance", h.form(url.Values{"theme": {"light"}}), ip, map[string]string{"Sec-Fetch-Site": "cross-site"})
+	if code != http.StatusForbidden || !strings.Contains(body, "That request was blocked.") {
+		t.Fatalf("cross-site %d %s", code, body)
+	}
+	code, _, hdr := h.do(http.MethodPost, "/settings/appearance", h.form(url.Values{"theme": {"light"}}), ip, map[string]string{"Origin": "https://example.com"})
+	if code != http.StatusSeeOther {
+		t.Fatalf("same origin %d %s", code, hdr.Get("Location"))
+	}
+	code, _, hdr = h.do(http.MethodPost, "/settings/appearance", h.form(url.Values{"theme": {"dark"}}), ip, map[string]string{"Origin": "null", "Sec-Fetch-Site": "same-origin"})
+	if code != http.StatusSeeOther {
+		t.Fatalf("null origin from this site %d %s", code, hdr.Get("Location"))
+	}
+}
+
+func TestDenverClock(t *testing.T) {
+	h := newHarness(t)
+	now := time.Date(2026, 11, 10, 1, 1, 0, 0, time.UTC)
+	h.st.SetNow(func() time.Time { return now })
+	user, secret := h.account("clock@example.com", "Clock User", "correct-horse-1")
+	ip := "203.0.113.200:9"
+	h.login("clock@example.com", "correct-horse-1", secret, ip, false)
+	_, body, _ := h.do(http.MethodGet, "/settings", "", ip, nil)
+	if !strings.Contains(body, "Last changed Nov 9") || !strings.Contains(body, "Signed in since Nov 9") {
+		t.Fatalf("settings clock: %s", body)
+	}
+	if strings.Contains(body, "Nov 10") {
+		t.Fatal("settings still used UTC")
+	}
+	code, _, _ := h.do(http.MethodPost, "/new-agent", h.form(url.Values{"name": {"Echo"}, "title": {"Helper"}}), ip, nil)
+	if code != http.StatusSeeOther {
+		t.Fatal(code)
+	}
+	agents, err := h.st.ListAgents(context.Background(), user.ID)
+	if err != nil || len(agents) != 1 {
+		t.Fatal(err)
+	}
+	_, body, _ = h.do(http.MethodPost, "/agents/"+agents[0].ID+"/messages", h.form(url.Values{"body": {"hello there"}}), ip, nil)
+	_, body, _ = h.do(http.MethodGet, "/agents/"+agents[0].ID, "", ip, nil)
+	if !strings.Contains(body, "6:01 PM") || strings.Contains(body, "1:01 AM") {
+		t.Fatalf("message clock: %s", body)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/scott/castbot/internal/store"
@@ -128,6 +129,14 @@ func (s *Server) wrap(next http.Handler) http.Handler {
 				http.Error(w, "Bad request", http.StatusBadRequest)
 				return
 			}
+			if !sameOrigin(r) {
+				s.render(w, http.StatusForbidden, "auth", finish(page{
+					Page: "auth", Title: "Request blocked", Theme: "dark",
+					Banner: true, BannerLead: "That request was blocked.", BannerRest: "Reload the page and try again.",
+					BannerIcon: "warn",
+				}))
+				return
+			}
 			if !csrfOK(r, st.CSRF) {
 				s.render(w, http.StatusForbidden, "auth", finish(page{
 					Page: "auth", Title: "Form expired", Theme: "dark",
@@ -179,6 +188,25 @@ func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) (store.User
 		return store.User{}, store.Session{}, false
 	}
 	return *st.User, *st.Session, true
+}
+
+func sameOrigin(r *http.Request) bool {
+	site := r.Header.Get("Sec-Fetch-Site")
+	if site == "cross-site" {
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" || origin == "null" {
+		if origin == "null" {
+			return site == "same-origin" || site == "none"
+		}
+		return site == "" || site == "same-origin" || site == "none"
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
 }
 
 func csrfOK(r *http.Request, want string) bool {

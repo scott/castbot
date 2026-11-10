@@ -52,16 +52,23 @@
       }
     }
 
+    function scrollChat() {
+      var box = document.querySelector(".ch-body");
+      if (box) box.scrollTop = box.scrollHeight;
+    }
+    scrollChat();
+    window.addEventListener("load", scrollChat);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(scrollChat);
+
+    document.body.addEventListener("htmx:afterSwap", function (ev) {
+      var target = ev.detail && ev.detail.target;
+      if (target && target.id === "msgs") scrollChat();
+    });
     document.body.addEventListener("htmx:afterRequest", function (ev) {
       var elt = ev.detail && ev.detail.elt;
-      if (!elt || elt.id !== "composer" || !ev.detail.successful) {
-        return;
-      }
+      if (!elt || elt.id !== "composer" || !ev.detail.successful) return;
       elt.reset();
-      var msgs = document.getElementById("msgs");
-      if (msgs && msgs.lastElementChild) {
-        msgs.lastElementChild.scrollIntoView();
-      }
+      scrollChat();
     });
 
     var shows = document.querySelectorAll("[data-show-password]");
@@ -111,6 +118,9 @@
         }
       });
       input.addEventListener("input", function () {
+        if (otp.classList.contains("bad")) {
+          otp.classList.remove("bad");
+        }
         paint();
         if (!sent && input.value.length === 6 && verify && verify.form) {
           sent = true;
@@ -118,6 +128,7 @@
         }
       });
       paint();
+      input.focus();
     }
 
     var recovery = document.getElementById("use-recovery");

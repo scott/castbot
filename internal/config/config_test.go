@@ -1,15 +1,22 @@
 package config
 
 import (
+	"bytes"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func fakeSessionKey() string {
+	return hex.EncodeToString(bytes.Repeat([]byte{0x5a}, 32))
+}
 
 func TestRejectsLoosePermissions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "castbot.env")
-	body := "CASTBOT_SESSION_KEY=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\n"
+	body := "CASTBOT_SESSION_KEY=" + fakeSessionKey() + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +30,7 @@ func TestLoadKey(t *testing.T) {
 	path := filepath.Join(dir, "castbot.env")
 	body := "" +
 		"# placeholder comment\n" +
-		"CASTBOT_SESSION_KEY=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\n" +
+		"CASTBOT_SESSION_KEY=" + fakeSessionKey() + "\n" +
 		"CASTBOT_ADDR=127.0.0.1:9\n" +
 		"CASTBOT_DB=" + filepath.Join(dir, "t.db") + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -49,7 +56,7 @@ func TestLoadKey(t *testing.T) {
 func TestRejectsZeroKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "castbot.env")
-	body := "CASTBOT_SESSION_KEY=0000000000000000000000000000000000000000000000000000000000000000\n"
+	body := "CASTBOT_SESSION_KEY=" + strings.Repeat("0", 64) + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

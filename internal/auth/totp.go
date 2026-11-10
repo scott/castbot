@@ -44,30 +44,42 @@ func TOTPCode(secret string, t time.Time) (string, error) {
 
 // TOTPVerify accepts the current code and one step on either side.
 func TOTPVerify(secret, code string, t time.Time) bool {
+	_, ok := TOTPMatch(secret, code, t)
+	return ok
+}
+
+// TOTPMatch returns the newest 30 second step that matches code.
+// It accepts the current step and one step on either side.
+func TOTPMatch(secret, code string, t time.Time) (int64, bool) {
 	code = strings.TrimSpace(code)
 	if len(code) != 6 {
-		return false
+		return 0, false
 	}
 	for _, c := range code {
 		if c < '0' || c > '9' {
-			return false
+			return 0, false
 		}
 	}
 	key, err := decodeSecret(secret)
 	if err != nil {
-		return false
+		return 0, false
 	}
-	counter := uint64(t.Unix() / 30)
+	counter := t.Unix() / 30
+	var matched int64
+	ok := false
 	for _, delta := range []int64{-1, 0, 1} {
-		step := int64(counter) + delta
+		step := counter + delta
 		if step < 0 {
 			continue
 		}
 		if subtle.ConstantTimeCompare([]byte(hotp(key, uint64(step))), []byte(code)) == 1 {
-			return true
+			if !ok || step > matched {
+				matched = step
+				ok = true
+			}
 		}
 	}
-	return false
+	return matched, ok
 }
 
 func decodeSecret(secret string) ([]byte, error) {

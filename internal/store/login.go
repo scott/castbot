@@ -157,28 +157,95 @@ func (s *Store) CheckCode(ctx context.Context, challengeID, code, recovery, ip s
 	if recovery != "" {
 		return Attempt{Status: "recovery", User: user, Email: ch.Email}, nil
 	}
-	secret, err := s.credential(ctx, user.ID, "totp")
+	accepted, err := s.acceptCode(ctx, user, ch, code, ip)
 	if err != nil {
 		return Attempt{}, err
 	}
-	if !auth.TOTPVerify(secret, code, s.Now()) {
-		att, ferr := s.fail(ctx, ch.Email, ip, user)
-		if ferr != nil {
-			return Attempt{}, ferr
-		}
-		if att.Status == "locked" {
-			_ = s.DeleteChallenge(ctx, ch.ID)
-		}
-		att.User = user
-		return att, nil
+	if accepted {
+		return Attempt{Status: "ok", User: user, Email: ch.Email}, nil
 	}
-	if err := s.clearLimits(ctx, ch.Email, ip); err != nil {
-		return Attempt{}, err
+	att, ferr := s.fail(ctx, ch.Email, ip, user)
+	if ferr != nil {
+		return Attempt{}, ferr
 	}
-	if err := s.DeleteChallenge(ctx, ch.ID); err != nil {
-		return Attempt{}, err
+	if att.Status == "locked" {
+		_ = s.DeleteChallenge(ctx, ch.ID)
 	}
-	return Attempt{Status: "ok", User: user, Email: ch.Email}, nil
+	att.User = user
+	return att, nil
+}
+
+// acceptCode records the matched TOTP step in the same transaction that accepts it.
+// A step at or below the last accepted step is rejected.
+func (s *Store) acceptCode(ctx context.Context, user User, ch Challenge, code, ip string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var secret string
+	var last sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT data, last_step FROM credentials WHERE user_id = ? AND kind = 'totp'`, user.ID).Scan(&secret, &last)
+	if err != nil {
+		return false, scanErr(err)
+	}
+	step, ok := auth.TOTPMatch(secret, code, s.Now())
+	if !ok || (last.Valid && step <= last.Int64) {
+		return false, nil
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE credentials SET last_step = ? WHERE user_id = ? AND kind = 'totp' AND (last_step IS NULL OR last_step < ?)`, step, user.ID, step)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n != 1 {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM login_limits WHERE (scope = ? AND subject = ?) OR (scope = ? AND subject = ?)`,
+		scopeEmail, ch.Email, scopeIP, ip); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM login_challenges WHERE id = ? AND user_id = ?`, ch.ID, user.ID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// SignOutOthers removes every other session and every trusted device except the one named by deviceToken.
+func (s *Store) SignOutOthers(ctx context.Context, userID, keepSessionID, deviceToken string) (int, error) {
+	keepDevice, _, _ := splitToken(deviceToken)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ? AND id <> ?`, userID, keepSessionID)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	q := `DELETE FROM trusted_devices WHERE user_id = ?`
+	args := []any{userID}
+	if keepDevice != "" {
+		q = `DELETE FROM trusted_devices WHERE user_id = ? AND id <> ?`
+		args = append(args, keepDevice)
+	}
+	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 // TrustedDevice reports whether cookie token belongs to userID and is still inside 30 days.

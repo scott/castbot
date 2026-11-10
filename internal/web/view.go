@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/scott/castbot/internal/store"
 )
@@ -144,12 +145,12 @@ func letter(name string) string {
 	return strings.ToUpper(string(r[0]))
 }
 
-func presentAgent(a store.Agent, on bool) agentView {
+func presentAgent(a store.Agent, on bool, loc *time.Location) agentView {
 	v := agentView{
 		ID: a.ID, Name: a.Name, Title: a.Title, Letter: letter(a.Name), Color: a.Color,
 		Model: a.Model, Status: a.Status, Approvals: a.Approvals, Unread: a.Unread, On: on,
 		SizeLabel: sizeLabel(a.Size), IdleLabel: idleLabel(a.IdleTimeout),
-		Created: monthDay(a.CreatedAt),
+		Created: monthDay(a.CreatedAt, loc),
 	}
 	if v.Color == "" {
 		v.Color = "c0"
@@ -232,31 +233,59 @@ func idleLabel(sec int) string {
 	return fmt.Sprintf("After %d min idle", sec/60)
 }
 
-func monthDay(stamp string) string {
-	t, err := time.Parse(time.RFC3339, stamp)
-	if err != nil {
-		return ""
+func userLocation(name string) *time.Location {
+	if name == "" {
+		name = "America/Denver"
 	}
-	return t.UTC().Format("Jan 2")
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		loc, err = time.LoadLocation("America/Denver")
+		if err != nil {
+			return time.UTC
+		}
+	}
+	return loc
 }
 
-func clockLabel(stamp string) string {
+func inZone(stamp string, loc *time.Location) (time.Time, bool) {
 	t, err := time.Parse(time.RFC3339, stamp)
 	if err != nil {
-		return ""
+		return time.Time{}, false
 	}
-	return t.UTC().Format("3:04 PM")
+	if loc == nil {
+		loc = userLocation("")
+	}
+	return t.In(loc), true
 }
 
-func dayLabel(stamp string, now time.Time) string {
-	t, err := time.Parse(time.RFC3339, stamp)
-	if err != nil {
+func monthDay(stamp string, loc *time.Location) string {
+	t, ok := inZone(stamp, loc)
+	if !ok {
 		return ""
 	}
-	if t.UTC().Format("2006-01-02") == now.UTC().Format("2006-01-02") {
+	return t.Format("Jan 2")
+}
+
+func clockLabel(stamp string, loc *time.Location) string {
+	t, ok := inZone(stamp, loc)
+	if !ok {
+		return ""
+	}
+	return t.Format("3:04 PM")
+}
+
+func dayLabel(stamp string, now time.Time, loc *time.Location) string {
+	t, ok := inZone(stamp, loc)
+	if !ok {
+		return ""
+	}
+	if loc == nil {
+		loc = userLocation("")
+	}
+	if t.Format("2006-01-02") == now.In(loc).Format("2006-01-02") {
 		return "Today"
 	}
-	return t.UTC().Format("Jan 2")
+	return t.Format("Jan 2")
 }
 
 func otpCells(code string) []cellView {

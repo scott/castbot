@@ -70,7 +70,7 @@ func (s *Server) renderChat(w http.ResponseWriter, r *http.Request, user store.U
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	p.Agent = presentAgent(agent, true)
+	p.Agent = presentAgent(agent, true, userLocation(user.Timezone))
 	p.HasAgent = true
 	p.Pane = pane
 	p.markOn(agent.ID)
@@ -85,7 +85,7 @@ func (s *Server) renderChat(w http.ResponseWriter, r *http.Request, user store.U
 			http.Error(w, "Error", http.StatusInternalServerError)
 			return
 		}
-		p.Messages = presentMessages(msgs, p.Agent, s.store.Now())
+		p.Messages = presentMessages(msgs, p.Agent, s.store.Now(), userLocation(user.Timezone))
 	}
 	switch tab {
 	case "home":
@@ -133,18 +133,13 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	echo := "Echo: " + body
-	msg, err := s.store.CreateMessage(r.Context(), user.ID, threads[0].ID, "agent", agent.ID, echo)
-	if err != nil {
+	if _, err := s.store.CreateMessage(r.Context(), user.ID, threads[0].ID, "agent", agent.ID, echo); err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
 	if r.Header.Get("HX-Request") == "true" {
-		av := presentAgent(agent, true)
-		p := page{Messages: presentMessages([]store.Message{
-			{ID: "pending", AuthorKind: "user", Body: body, CreatedAt: s.store.Now().Format(time.RFC3339)},
-			msg,
-		}, av, s.store.Now())}
-		// The user message was stored. Reload the last two so ids match.
+		av := presentAgent(agent, true, userLocation(user.Timezone))
+		loc := userLocation(user.Timezone)
 		msgs, err := s.store.ListMessages(r.Context(), user.ID, threads[0].ID)
 		if err != nil {
 			http.Error(w, "Error", http.StatusInternalServerError)
@@ -153,7 +148,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		if len(msgs) >= 2 {
 			msgs = msgs[len(msgs)-2:]
 		}
-		p.Messages = presentMessages(msgs, av, s.store.Now())
+		p := page{Messages: presentMessages(msgs, av, s.store.Now(), loc)}
 		for i := range p.Messages {
 			p.Messages[i].ShowDay = false
 		}
@@ -173,7 +168,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	sv, err := s.sessionSummary(r, user.ID, sess.ID)
+	sv, err := s.sessionSummary(r, user, sess.ID)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
@@ -232,7 +227,7 @@ func (s *Server) passwordForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) savePassword(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.requireUser(w, r)
+	user, sess, ok := s.requireUser(w, r)
 	if !ok {
 		return
 	}
@@ -264,10 +259,17 @@ func (s *Server) savePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	if err := s.store.UpdatePassword(r.Context(), user.ID, encoded); err != nil {
+	nextSess, err := s.store.ChangePassword(r.Context(), user.ID, sess.ID, encoded)
+	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
+	maxAge := 0
+	if nextSess.Remember {
+		maxAge = 30 * 24 * 3600
+	}
+	s.setCookie(w, cookieSession, seal("session", nextSess.ID, s.key), "/", maxAge)
+	clearCookie(w, cookieDevice, "/")
 	http.Redirect(w, r, "/settings?notice=password", http.StatusSeeOther)
 }
 
@@ -310,7 +312,7 @@ func (s *Server) sessionsConfirm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	sv, err := s.sessionSummary(r, user.ID, sess.ID)
+	sv, err := s.sessionSummary(r, user, sess.ID)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
@@ -334,7 +336,7 @@ func (s *Server) sessionsEnd(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := s.store.DeleteOtherSessions(r.Context(), user.ID, sess.ID); err != nil {
+	if _, err := s.store.SignOutOthers(r.Context(), user.ID, sess.ID, deviceCookie(r)); err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
@@ -443,11 +445,12 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 	if err != nil {
 		return page{}, err
 	}
+	loc := userLocation(user.Timezone)
 	by := map[string][]agentView{}
 	approvals := 0
 	for _, a := range agents {
 		approvals += a.Approvals
-		by[a.SectionID] = append(by[a.SectionID], presentAgent(a, false))
+		by[a.SectionID] = append(by[a.SectionID], presentAgent(a, false, loc))
 	}
 	var sv []sectionView
 	for _, sec := range sections {
@@ -469,7 +472,7 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 		Empty:     len(agents) == 0,
 		RoleLine:  roleLine(user.Role, user.WorkspaceName),
 		PasswordOn: func() string {
-			d := monthDay(user.PasswordChangedAt)
+			d := monthDay(user.PasswordChangedAt, loc)
 			if d == "" {
 				return "Password is set"
 			}
@@ -486,8 +489,9 @@ func (p *page) markOn(id string) {
 	}
 }
 
-func (s *Server) sessionSummary(r *http.Request, userID, currentID string) (sessView, error) {
-	list, err := s.store.ListSessions(r.Context(), userID)
+func (s *Server) sessionSummary(r *http.Request, user store.User, currentID string) (sessView, error) {
+	loc := userLocation(user.Timezone)
+	list, err := s.store.ListSessions(r.Context(), user.ID)
 	if err != nil {
 		return sessView{}, err
 	}
@@ -500,7 +504,7 @@ func (s *Server) sessionSummary(r *http.Request, userID, currentID string) (sess
 		}
 		labels = append(labels, deviceLabel(sess.UserAgent))
 	}
-	line := "Signed in since " + current.CreatedAt.UTC().Format("Jan 2") + " · " + deviceLabel(current.UserAgent)
+	line := "Signed in since " + current.CreatedAt.In(loc).Format("Jan 2") + " · " + deviceLabel(current.UserAgent)
 	other := "No other sessions"
 	n := len(labels)
 	switch n {
@@ -536,12 +540,16 @@ func itoa(n int) string {
 	return string(b[i:])
 }
 
-func presentMessages(msgs []store.Message, agent agentView, now time.Time) []msgView {
+func presentMessages(msgs []store.Message, agent agentView, now time.Time, loc *time.Location) []msgView {
+	if loc == nil {
+		loc = userLocation("")
+	}
+	now = now.In(loc)
 	var out []msgView
 	prev := ""
 	for _, m := range msgs {
-		day := dayLabel(m.CreatedAt, now)
-		v := msgView{ID: m.ID, Author: m.AuthorKind, Body: m.Body, Stamp: clockLabel(m.CreatedAt), Day: day}
+		day := dayLabel(m.CreatedAt, now, loc)
+		v := msgView{ID: m.ID, Author: m.AuthorKind, Body: m.Body, Stamp: clockLabel(m.CreatedAt, loc), Day: day}
 		if day != "" && day != prev {
 			v.ShowDay = true
 			prev = day

@@ -111,7 +111,7 @@ func (s *Server) codePost(w http.ResponseWriter, r *http.Request) {
 	}
 	if att.Status != "ok" {
 		p := page{
-			Code: code, OTPBad: true, Banner: true, BannerIcon: "warn",
+			OTPBad: true, Banner: true, BannerIcon: "warn",
 			BannerLead: "That code did not work.",
 			BannerRest: "It may be mistyped or expired. Codes change every 30 seconds, so enter the newest one.",
 		}

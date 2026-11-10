@@ -716,7 +716,7 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 .otp .cell.now::after { content: ""; width: 2px; height: 26px; background: var(--acc); }
 .otp.bad .cell { border-color: var(--err); color: var(--err); background: var(--err-soft); }
 .center-link { justify-self: center; font-size: 13.5px; }
-.btn.lg.wide + .btn.lg.wide { margin-top: -6px; }
+.btn.lg.wide + .btn.lg.wide { margin-top: 12px; }
 
 /* ---------- 08 settings ---------- */
 .acct.on { background: var(--raise); }
@@ -801,6 +801,13 @@ textarea.ph::placeholder { color: var(--tx3); }
 .sb, .main, .pane { height: 100vh; overflow: auto; }
 .sb-foot { position: sticky; bottom: 0; background: var(--bg2); }
 .ch-body { min-height: 0; }
+.main:has(.ch-body) { overflow: hidden; height: 100vh; height: 100dvh; }
+.ch-body { flex: 1 1 auto; overflow-x: hidden; overflow-y: auto; }
+.ch-h, .comp-wrap { flex: none; }
+@media (max-width: 760px) {
+  .p-chat .main:has(.ch-body) { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+  .p-chat .comp-wrap { position: static; }
+}
 @media (max-width: 760px) {
   .menu-pop { width: min(220px, calc(100vw - 32px)); }
   .menu-pop input, .menu-pop .btn { height: 44px; }

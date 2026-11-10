@@ -157,6 +157,71 @@ func TestLockout(t *testing.T) {
 	}
 }
 
+func TestTOTPReplay(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 10, 1, 1, 0, 0, time.UTC)
+	cur := now
+	s.SetNow(func() time.Time { return cur })
+	hash, err := auth.Hash("right-password-1", s.argon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := auth.NewTOTPSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := s.CreateUser(ctx, NewUser{Email: "replay@example.com", DisplayName: "Replay", Workspace: "Personal", PasswordHash: hash, TOTPSecret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := auth.TOTPCode(secret, cur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err := s.BeginChallenge(ctx, user, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, err := s.CheckCode(ctx, ch.ID, code, "", "203.0.113.10")
+	if err != nil || ok.Status != "ok" {
+		t.Fatalf("first %s %v", ok.Status, err)
+	}
+	ch, err = s.BeginChallenge(ctx, user, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.CheckCode(ctx, ch.ID, code, "", "203.0.113.10")
+	if err != nil || again.Status != "fail" {
+		t.Fatalf("replay %s %v", again.Status, err)
+	}
+	older, err := auth.TOTPCode(secret, cur.Add(-30*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err = s.BeginChallenge(ctx, user, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := s.CheckCode(ctx, ch.ID, older, "", "203.0.113.10")
+	if err != nil || old.Status != "fail" {
+		t.Fatalf("older step %s %v", old.Status, err)
+	}
+	cur = now.Add(30 * time.Second)
+	next, err := auth.TOTPCode(secret, cur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err = s.BeginChallenge(ctx, user, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := s.CheckCode(ctx, ch.ID, next, "", "203.0.113.10")
+	if err != nil || fresh.Status != "ok" {
+		t.Fatalf("next step %s %v", fresh.Status, err)
+	}
+}
+
 func TestFailureHints(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
