@@ -438,7 +438,7 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 			view.Lead = "The machine is paused. A chat message wakes it."
 			view.CanWake = h != nil
 		case "creating":
-			view.Lead = "The machine is starting."
+			view.Lead = "The machine is waking."
 		case "failed":
 			view.Lead = failedLead(*agent)
 			view.CanRetry = h != nil
