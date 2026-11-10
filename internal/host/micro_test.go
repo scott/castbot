@@ -337,10 +337,16 @@ func assertCreateBody(t *testing.T, raw []byte, secret string) {
 	}
 }
 
+type urlStep struct {
+	Hostname string
+	Status   string
+}
+
 type scriptAPI struct {
 	srv        *httptest.Server
 	mu         sync.Mutex
 	gets       []string
+	urls       []urlStep
 	getN       int
 	reason     string
 	deletes    int
@@ -380,18 +386,19 @@ func (a *scriptAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "nope "+a.secret+" "+strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), http.StatusInternalServerError)
 			return
 		}
-		writeVM(w, http.StatusCreated, "vm-1", "creating", "")
+		writeVM(w, http.StatusCreated, "vm-1", "creating", "", urlStep{})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v2/microvms/"):
 		state := "running"
 		if a.getN < len(a.gets) {
 			state = a.gets[a.getN]
 		}
+		step := a.urlAt(a.getN)
 		a.getN++
-		writeVM(w, http.StatusOK, "vm-1", state, a.reason)
+		writeVM(w, http.StatusOK, "vm-1", state, a.reason, step)
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pause"):
-		writeVM(w, http.StatusOK, "vm-1", "paused", "")
+		writeVM(w, http.StatusOK, "vm-1", "paused", "", urlStep{Hostname: "vm-1.example.test"})
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/resume"):
-		writeVM(w, http.StatusOK, "vm-1", "running", "")
+		writeVM(w, http.StatusOK, "vm-1", "running", "", urlStep{Hostname: "vm-1.example.test"})
 	case r.Method == http.MethodDelete:
 		a.deletes++
 		w.WriteHeader(http.StatusNoContent)
@@ -400,7 +407,20 @@ func (a *scriptAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func writeVM(w http.ResponseWriter, status int, id, state, reason string) {
+func (a *scriptAPI) urlAt(i int) urlStep {
+	if len(a.urls) == 0 {
+		return urlStep{Hostname: "vm-1.example.test"}
+	}
+	if i >= len(a.urls) {
+		return a.urls[len(a.urls)-1]
+	}
+	return a.urls[i]
+}
+
+func writeVM(w http.ResponseWriter, status int, id, state, reason string, step urlStep) {
+	if step.Hostname == "" && step.Status == "" && len(step.Hostname) == 0 {
+		step.Hostname = "vm-1.example.test"
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -411,7 +431,7 @@ func writeVM(w http.ResponseWriter, status int, id, state, reason string) {
 			"size":           map[string]int{"cpu": 1, "memory": 2048},
 			"source":         map[string]string{"oci_ref": "example.invalid/castbot-runtime:s04"},
 			"urls": []map[string]any{{
-				"default": true, "hostname": "vm-1.example.test", "port": 8080,
+				"default": true, "hostname": step.Hostname, "status": step.Status, "port": 8080,
 			}},
 		},
 	})
@@ -460,22 +480,13 @@ func TestLiveLeftoversSkipProtectedMachines(t *testing.T) {
 }
 
 func TestEdgeURLRejectsArbitraryHosts(t *testing.T) {
-	if got := endpoint([]struct {
-		Default  bool   `json:"default"`
-		Hostname string `json:"hostname"`
-	}{{Default: true, Hostname: "http://127.0.0.1:9"}}, false); got != "" {
+	if got := endpoint([]apiURL{{Default: true, Hostname: "http://127.0.0.1:9"}}, false); got != "" {
 		t.Fatalf("http endpoint %q", got)
 	}
-	if got := endpoint([]struct {
-		Default  bool   `json:"default"`
-		Hostname string `json:"hostname"`
-	}{{Default: true, Hostname: "https://evil.example.net"}}, false); got != "" {
+	if got := endpoint([]apiURL{{Default: true, Hostname: "https://evil.example.net"}}, false); got != "" {
 		t.Fatalf("arbitrary https %q", got)
 	}
-	if got := endpoint([]struct {
-		Default  bool   `json:"default"`
-		Hostname string `json:"hostname"`
-	}{{Default: true, Hostname: "vm.mkc1.microvm.ondigitalocean.com"}}, false); got != "https://vm.mkc1.microvm.ondigitalocean.com" {
+	if got := endpoint([]apiURL{{Default: true, Hostname: "vm.mkc1.microvm.ondigitalocean.com"}}, false); got != "https://vm.mkc1.microvm.ondigitalocean.com" {
 		t.Fatalf("real edge %q", got)
 	}
 	var hits int
@@ -515,6 +526,78 @@ func TestReloadStopsWhenTheContextEnds(t *testing.T) {
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("reload ignored the context for %s", time.Since(start))
+	}
+}
+
+func TestPollWaitsForHostnameThenAcceptsIt(t *testing.T) {
+	const secret = "cbt_bootstrap_secret_value"
+	api := newScriptAPI(t, secret)
+	api.gets = []string{"running", "running", "running"}
+	api.urls = []urlStep{
+		{Status: "PENDING"},
+		{Status: "PENDING"},
+		{Hostname: "vm-1.mkc1.microvm.ondigitalocean.com", Status: "ACTIVE"},
+	}
+	m := newTestClient(t, api, "machine-token-for-tests")
+	m.insecure = false
+	m.addressFor = time.Second
+	vm, err := m.Create(context.Background(), testSpec(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vm.AddressRejected || vm.Endpoint != "https://vm-1.mkc1.microvm.ondigitalocean.com" {
+		t.Fatalf("vm %+v", vm)
+	}
+	if api.deletes != 0 {
+		t.Fatalf("deletes %d", api.deletes)
+	}
+	if api.getN < 3 {
+		t.Fatalf("polls %d", api.getN)
+	}
+}
+
+func TestPublishedBadHostnameIsRejected(t *testing.T) {
+	const secret = "cbt_bootstrap_secret_value"
+	api := newScriptAPI(t, secret)
+	api.gets = []string{"running"}
+	api.urls = []urlStep{{Hostname: "evil.example.net", Status: "ACTIVE"}}
+	m := newTestClient(t, api, "machine-token-for-tests")
+	m.insecure = false
+	m.addressFor = time.Second
+	start := time.Now()
+	vm, err := m.Create(context.Background(), testSpec(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("waited %s for a published hostname", time.Since(start))
+	}
+	if !vm.AddressRejected || vm.Endpoint != "" {
+		t.Fatalf("vm %+v", vm)
+	}
+	if api.deletes != 0 {
+		t.Fatalf("create deleted the machine itself: %d", api.deletes)
+	}
+}
+
+func TestUnpublishedHostnameIsNotRejected(t *testing.T) {
+	const secret = "cbt_bootstrap_secret_value"
+	api := newScriptAPI(t, secret)
+	api.gets = []string{"running"}
+	api.urls = []urlStep{{Status: "PENDING"}}
+	m := newTestClient(t, api, "machine-token-for-tests")
+	m.insecure = false
+	m.addressFor = 40 * time.Millisecond
+	start := time.Now()
+	vm, err := m.Create(context.Background(), testSpec(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("poll ran for %s", time.Since(start))
+	}
+	if vm.AddressRejected || vm.Endpoint != "" || vm.State != "running" {
+		t.Fatalf("vm %+v", vm)
 	}
 }
 

@@ -59,6 +59,12 @@ type Server struct {
 	trusted   []*net.IPNet
 	base      context.Context
 	prov      sync.WaitGroup
+	gitBase   string
+	gitHTTP   *http.Client
+
+	reloadMu sync.Mutex
+	reloads  map[string]*reloadGate
+	reloadWG sync.WaitGroup
 }
 
 // guest is one local castlet the control plane can proxy files through.
@@ -113,6 +119,7 @@ func (s *Server) Close() {
 	done := make(chan struct{})
 	go func() {
 		s.prov.Wait()
+		s.reloadWG.Wait()
 		close(done)
 	}()
 	select {
@@ -200,12 +207,17 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /new-agent", s.newAgent)
 	mux.HandleFunc("POST /new-agent", s.createAgent)
+	mux.HandleFunc("POST /new-agent/import", s.importNew)
 	mux.HandleFunc("GET /approvals", s.workspacePage)
 	mux.HandleFunc("GET /routines", s.workspacePage)
 	mux.HandleFunc("GET /files", s.workspacePage)
 	mux.HandleFunc("GET /usage", s.workspacePage)
 
 	mux.HandleFunc("GET /agents/{id}", s.chat)
+	mux.HandleFunc("GET /agents/{id}/edit", s.editAgent)
+	mux.HandleFunc("POST /agents/{id}/edit", s.saveAgent)
+	mux.HandleFunc("POST /agents/{id}/import", s.importAgent)
+	mux.HandleFunc("GET /agents/{id}/avatar", s.agentAvatar)
 	mux.HandleFunc("GET /agents/{id}/machine", s.agentTab)
 	mux.HandleFunc("GET /agents/{id}/routines", s.agentTab)
 	mux.HandleFunc("GET /agents/{id}/files", s.agentTab)
@@ -256,6 +268,17 @@ func (s *Server) Handler() http.Handler {
 	return s.wrap(mux)
 }
 
+func postLimit(path string) int64 {
+	switch {
+	case path == "/new-agent/import" || strings.HasSuffix(path, "/import"):
+		return 5 << 20
+	case path == "/new-agent" || strings.HasSuffix(path, "/edit"):
+		return 2 << 20
+	default:
+		return 1 << 20
+	}
+}
+
 func (s *Server) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", csp)
@@ -266,8 +289,14 @@ func (s *Server) wrap(next http.Handler) http.Handler {
 		r = r.WithContext(context.WithValue(r.Context(), stateKey, st))
 		// castlet calls these with a bearer token, not a browser form.
 		if r.Method == http.MethodPost && !strings.HasPrefix(r.URL.Path, "/api/castlet/") {
-			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-			if err := r.ParseForm(); err != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, postLimit(r.URL.Path))
+			var err error
+			if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+				err = r.ParseMultipartForm(8 << 20)
+			} else {
+				err = r.ParseForm()
+			}
+			if err != nil {
 				http.Error(w, "Bad request", http.StatusBadRequest)
 				return
 			}
@@ -494,7 +523,18 @@ func trustedIP(raw string, nets []*net.IPNet) bool {
 }
 
 // ParseTrustedProxies parses a comma-separated list of IPs and CIDRs.
+// A prefix broader than /8 for IPv4 or /32 for IPv6 is refused.
 func ParseTrustedProxies(raw string) ([]*net.IPNet, error) {
+	return parseTrustedProxies(raw, false)
+}
+
+// ParseTrustedProxiesAllowWide is ParseTrustedProxies with the broad-prefix
+// refusal turned off. Call it only when the operator set the override flag.
+func ParseTrustedProxiesAllowWide(raw string) ([]*net.IPNet, error) {
+	return parseTrustedProxies(raw, true)
+}
+
+func parseTrustedProxies(raw string, allowWide bool) ([]*net.IPNet, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, nil
@@ -510,9 +550,16 @@ func ParseTrustedProxies(raw string) ([]*net.IPNet, error) {
 			if err != nil {
 				return nil, err
 			}
-			ones, _ := n.Mask.Size()
+			var ones, bits int
+			n, ones, bits = normalizeProxy(n)
 			if ones == 0 {
 				return nil, errors.New("trusted proxy must not match every address")
+			}
+			if !allowWide && bits == 32 && ones < 8 {
+				return nil, errors.New("trusted proxy is broader than /8")
+			}
+			if !allowWide && bits == 128 && ones < 32 {
+				return nil, errors.New("trusted proxy is broader than /32")
 			}
 			out = append(out, n)
 			continue
@@ -524,6 +571,23 @@ func ParseTrustedProxies(raw string) ([]*net.IPNet, error) {
 		out = append(out, oneIP(ip))
 	}
 	return out, nil
+}
+
+// normalizeProxy turns an IPv4-mapped prefix into an IPv4 prefix so
+// ::ffff:0.0.0.0/96 is judged as /0, not as an IPv6 /96.
+func normalizeProxy(n *net.IPNet) (*net.IPNet, int, int) {
+	ones, bits := n.Mask.Size()
+	if bits == 128 && n.IP.To4() != nil {
+		if ones < 96 {
+			ones = 0
+		} else {
+			ones -= 96
+		}
+		bits = 32
+		ip := n.IP.To4().Mask(net.CIDRMask(ones, 32))
+		return &net.IPNet{IP: ip, Mask: net.CIDRMask(ones, 32)}, ones, bits
+	}
+	return n, ones, bits
 }
 
 func oneIP(ip net.IP) *net.IPNet {

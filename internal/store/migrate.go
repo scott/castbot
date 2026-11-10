@@ -103,8 +103,11 @@ CREATE TABLE IF NOT EXISTS agents (
   title TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   avatar_color TEXT NOT NULL DEFAULT 'c0',
+  avatar_path TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
   bundle_version TEXT NOT NULL DEFAULT '',
+  pending_bundle TEXT NOT NULL DEFAULT '',
+  kept_yaml TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK (status IN ('draft', 'provisioning', 'ready', 'paused', 'failed', 'deleted')),
   activity TEXT NOT NULL DEFAULT '',
   unread INTEGER NOT NULL DEFAULT 0,
@@ -239,6 +242,32 @@ CREATE TABLE IF NOT EXISTS agent_vms (
 
 CREATE INDEX IF NOT EXISTS idx_agent_vms_user ON agent_vms(user_id, agent_id);
 
+-- Avatar bytes stay with the owning user. avatar_path on agents is only
+-- the content type, so a list query can tell that an image exists.
+CREATE TABLE IF NOT EXISTS agent_avatars (
+  agent_id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  bytes BLOB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_avatars_user ON agent_avatars(user_id, agent_id);
+
+-- Import drafts hold the keys the form does not own between review and save.
+-- The form posts the id, never the document.
+CREATE TABLE IF NOT EXISTS import_drafts (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL DEFAULT '',
+  kept_yaml TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_import_drafts_user ON import_drafts(user_id, agent_id);
+
 -- max_agents is the only cap. Running hours are not metered here.
 CREATE TABLE IF NOT EXISTS user_quotas (
   user_id TEXT PRIMARY KEY,
@@ -264,6 +293,15 @@ func (s *Store) migrate() error {
 	if err := s.ensureColumn("credentials", "last_step", `ALTER TABLE credentials ADD COLUMN last_step INTEGER`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("agents", "avatar_path", `ALTER TABLE agents ADD COLUMN avatar_path TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agents", "pending_bundle", `ALTER TABLE agents ADD COLUMN pending_bundle TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agents", "kept_yaml", `ALTER TABLE agents ADD COLUMN kept_yaml TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
 	if err := s.allowRetried(); err != nil {
 		return err
 	}
@@ -274,7 +312,7 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.ensureInstance(); err != nil {
 		return err
 	}
-	for _, version := range []int{1, 2, 3, 4, 5, 6, 7} {
+	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10} {
 		if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING`, version); err != nil {
 			return err
 		}

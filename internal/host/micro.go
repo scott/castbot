@@ -21,23 +21,27 @@ const apiRoot = "https://api.digitalocean.com"
 // Options configures the machine API client.
 // Token is a writable machine token. Tests pass a stand-in and a BaseURL.
 type Options struct {
-	Token        string
-	BaseURL      string
-	HTTP         *http.Client
-	Interval     time.Duration
-	RetryFor     time.Duration
+	Token    string
+	BaseURL  string
+	HTTP     *http.Client
+	Interval time.Duration
+	RetryFor time.Duration
+	// AddressFor is how long Create keeps polling after the API says running
+	// while the hostname is still empty. Zero waits 60 seconds.
+	AddressFor   time.Duration
 	InsecureEdge bool
 }
 
 // MicroVM is the AgentHost that provisions one machine per agent.
 type MicroVM struct {
-	token    string
-	base     string
-	http     *http.Client
-	edge     *http.Client
-	interval time.Duration
-	retryFor time.Duration
-	insecure bool
+	token      string
+	base       string
+	http       *http.Client
+	edge       *http.Client
+	interval   time.Duration
+	retryFor   time.Duration
+	addressFor time.Duration
+	insecure   bool
 
 	mu    sync.Mutex
 	cache map[string]statusHit
@@ -69,13 +73,18 @@ func New(opt Options) (*MicroVM, error) {
 	if retryFor <= 0 {
 		retryFor = 30 * time.Second
 	}
+	addressFor := opt.AddressFor
+	if addressFor <= 0 {
+		addressFor = 60 * time.Second
+	}
 	return &MicroVM{
-		token:    opt.Token,
-		base:     base,
-		http:     client,
-		interval: interval,
-		retryFor: retryFor,
-		insecure: opt.InsecureEdge,
+		token:      opt.Token,
+		base:       base,
+		http:       client,
+		interval:   interval,
+		retryFor:   retryFor,
+		addressFor: addressFor,
+		insecure:   opt.InsecureEdge,
 		edge: &http.Client{
 			Timeout: 20 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -354,14 +363,33 @@ func (m *MicroVM) Reload(ctx context.Context, endpoint, agentToken string) error
 func (m *MicroVM) poll(ctx context.Context, id string) (Machine, error) {
 	tick := time.NewTicker(m.interval)
 	defer tick.Stop()
+	var waiting time.Time
+	budget := m.addressFor
+	if budget <= 0 {
+		budget = 60 * time.Second
+	}
 	for {
 		vm, err := m.get(ctx, id)
 		if err != nil {
 			return Machine{}, err
 		}
 		switch vm.State {
-		case "running", "failed", "terminated", "paused":
+		case "failed", "terminated", "paused":
 			return vm, nil
+		case "running":
+			// A running machine can still have an empty hostname. The API
+			// publishes it only once the URL is ACTIVE. Keep polling until
+			// it appears. A published hostname that fails the edge check is
+			// rejected immediately and is not treated like a missing one.
+			if vm.Endpoint != "" || vm.AddressRejected {
+				return vm, nil
+			}
+			if waiting.IsZero() {
+				waiting = time.Now()
+			}
+			if time.Since(waiting) >= budget {
+				return vm, nil
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -570,43 +598,70 @@ type apiVM struct {
 	Source struct {
 		OCI string `json:"oci_ref"`
 	} `json:"source"`
-	URLs []struct {
-		Default  bool   `json:"default"`
-		Hostname string `json:"hostname"`
-	} `json:"urls"`
+	URLs []apiURL `json:"urls"`
+}
+
+type apiURL struct {
+	Default  bool   `json:"default"`
+	Hostname string `json:"hostname"`
+	Status   string `json:"status"`
 }
 
 func (v apiVM) machine(insecure bool) Machine {
+	ep, rejected := classifyAddress(v.URLs, insecure)
 	return Machine{
-		ID:       v.ID,
-		Name:     v.Name,
-		State:    v.State,
-		Failure:  v.Failure,
-		Endpoint: endpoint(v.URLs, insecure),
-		Image:    v.Source.OCI,
-		Region:   v.Region,
-		CPU:      v.Size.CPU,
-		Memory:   v.Size.Memory,
-		Tags:     append([]string(nil), v.Tags...),
+		ID:              v.ID,
+		Name:            v.Name,
+		State:           v.State,
+		Failure:         v.Failure,
+		Endpoint:        ep,
+		AddressRejected: rejected,
+		Image:           v.Source.OCI,
+		Region:          v.Region,
+		CPU:             v.Size.CPU,
+		Memory:          v.Size.Memory,
+		Tags:            append([]string(nil), v.Tags...),
 	}
 }
 
-func endpoint(urls []struct {
-	Default  bool   `json:"default"`
-	Hostname string `json:"hostname"`
-}, insecure bool) string {
-	raw := ""
+// classifyAddress separates a hostname that is not published yet from one
+// that was published and then failed the edge check.
+func classifyAddress(urls []apiURL, insecure bool) (endpoint string, rejected bool) {
+	raw, status, ok := chooseURL(urls)
+	if !ok || strings.EqualFold(status, "PENDING") || strings.TrimSpace(raw) == "" {
+		return "", false
+	}
+	ep := endpointFromHost(raw, insecure)
+	if ep == "" {
+		return "", true
+	}
+	return ep, false
+}
+
+func chooseURL(urls []apiURL) (hostname, status string, ok bool) {
+	var picked apiURL
+	found := false
 	for _, u := range urls {
-		if u.Hostname == "" {
-			continue
-		}
-		if u.Default || raw == "" {
-			raw = u.Hostname
+		if !found || u.Default {
+			picked = u
+			found = true
 		}
 		if u.Default {
 			break
 		}
 	}
+	if !found {
+		return "", "", false
+	}
+	return picked.Hostname, picked.Status, true
+}
+
+func endpoint(urls []apiURL, insecure bool) string {
+	ep, _ := classifyAddress(urls, insecure)
+	return ep
+}
+
+func endpointFromHost(raw string, insecure bool) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""

@@ -18,15 +18,16 @@ const (
 
 // Config is the process configuration. The session key is read only from the env file.
 type Config struct {
-	EnvFile      string
-	Addr         string
-	DBPath       string
-	RuntimeURL   string
-	SessionKey   []byte
-	MachineToken string
-	Image        string
-	PublicURL    string
-	Trusted      string
+	EnvFile          string
+	Addr             string
+	DBPath           string
+	RuntimeURL       string
+	SessionKey       []byte
+	MachineToken     string
+	Image            string
+	PublicURL        string
+	Trusted          string
+	AllowWideProxies bool
 }
 
 // Load reads CASTBOT_ENV_FILE (or castbot.env). The file must be mode 0600.
@@ -86,15 +87,16 @@ func LoadFile(path string) (Config, error) {
 		return Config{}, errors.New("CASTBOT_SESSION_KEY must not be all zeros")
 	}
 	cfg := Config{
-		EnvFile:      path,
-		Addr:         vals["CASTBOT_ADDR"],
-		DBPath:       vals["CASTBOT_DB"],
-		RuntimeURL:   vals["CASTBOT_RUNTIME_URL"],
-		SessionKey:   key,
-		MachineToken: vals["CASTBOT_DO_TOKEN"],
-		Image:        vals["CASTBOT_IMAGE"],
-		PublicURL:    vals["CASTBOT_PUBLIC_URL"],
-		Trusted:      vals["CASTBOT_TRUSTED_PROXIES"],
+		EnvFile:          path,
+		Addr:             vals["CASTBOT_ADDR"],
+		DBPath:           vals["CASTBOT_DB"],
+		RuntimeURL:       vals["CASTBOT_RUNTIME_URL"],
+		SessionKey:       key,
+		MachineToken:     vals["CASTBOT_DO_TOKEN"],
+		Image:            vals["CASTBOT_IMAGE"],
+		PublicURL:        vals["CASTBOT_PUBLIC_URL"],
+		Trusted:          vals["CASTBOT_TRUSTED_PROXIES"],
+		AllowWideProxies: vals["CASTBOT_ALLOW_WIDE_PROXIES"] == "1",
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = defaultAddr
@@ -124,6 +126,9 @@ func LoadFile(path string) (Config, error) {
 	}
 	if v := os.Getenv("CASTBOT_TRUSTED_PROXIES"); v != "" {
 		cfg.Trusted = v
+	}
+	if v, ok := os.LookupEnv("CASTBOT_ALLOW_WIDE_PROXIES"); ok {
+		cfg.AllowWideProxies = v == "1"
 	}
 	return cfg, nil
 }

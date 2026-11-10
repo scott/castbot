@@ -94,7 +94,13 @@ func serve(args []string) {
 
 func attachMachine(app *web.Server, cfg config.Config) {
 	if cfg.Trusted != "" {
-		nets, err := web.ParseTrustedProxies(cfg.Trusted)
+		var nets []*net.IPNet
+		var err error
+		if cfg.AllowWideProxies {
+			nets, err = web.ParseTrustedProxiesAllowWide(cfg.Trusted)
+		} else {
+			nets, err = web.ParseTrustedProxies(cfg.Trusted)
+		}
 		if err != nil {
 			log.Fatal("trusted proxies")
 		}

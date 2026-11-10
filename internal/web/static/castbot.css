@@ -143,6 +143,7 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 
 /* avatars */
 .av { width: 34px; height: 34px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font: 700 14px var(--hd); color: #10161a; flex: none; position: relative; }
+.av img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .av.xs { width: 26px; height: 26px; border-radius: 8px; font-size: 12px; }
 .av.lg { width: 48px; height: 48px; border-radius: 14px; font-size: 20px; }
 .av.c1 { background: #ffb38a; } .av.c2 { background: #8fd8c4; } .av.c3 { background: #c9b6ff; }
@@ -384,6 +385,12 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 /* new agent */
 .na { display: grid; grid-template-columns: minmax(0,1fr) 340px; gap: 28px; padding: 0 32px 40px; align-items: start; }
 .na-form { display: grid; gap: 18px; min-width: 0; }
+.na-form .err { color: var(--err); font-size: 12.5px; }
+.toolrow { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 8px; align-items: center; min-width: 0; }
+.toolrow label { display: flex; align-items: center; gap: 8px; min-height: 44px; min-width: 0; }
+.toolrow .selwrap { min-width: 0; }
+.file input { max-width: 100%; }
+.skip { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13.5px; }
 .card { background: var(--surf); border: 1px solid var(--line); border-radius: var(--r2); padding: 18px 20px; display: grid; gap: 14px; min-width: 0; }
 .card-h { display: flex; align-items: center; gap: 10px; }
 .card-h .num { width: 26px; height: 26px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font: 700 13px var(--mono); background: var(--acc-soft); color: var(--acc); flex: none; }
@@ -399,7 +406,7 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 .tpl .t2 { font-size: 12.5px; color: var(--tx3); line-height: 1.4; }
 .or { display: flex; align-items: center; gap: 10px; color: var(--tx3); font-size: 12.5px; font-weight: 600; }
 .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
-.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
 .three { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
 .secret { display: grid; grid-template-columns: minmax(0,200px) minmax(0,1fr) auto; gap: 8px; align-items: center; }
 .secret .inp.mono input { letter-spacing: .12em; }
@@ -587,6 +594,7 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
   .card { padding: 16px 14px; }
   .tpl-grid { grid-template-columns: 1fr 1fr; }
   .two { grid-template-columns: 1fr; }
+  .toolrow { grid-template-columns: 1fr; }
   .three { grid-template-columns: 1fr; }
   .secret { grid-template-columns: minmax(0,1fr) auto; }
   .secret .k { grid-column: 1 / -1; }

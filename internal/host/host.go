@@ -75,17 +75,21 @@ func InstanceTag(id string) string {
 
 // Machine is the record returned by the machine API.
 // Endpoint is the edge base URL. It is empty until the API publishes a hostname.
+// AddressRejected is set only when a published hostname fails the https and
+// .microvm.ondigitalocean.com check. An empty Endpoint with AddressRejected
+// false means the hostname was not published yet.
 type Machine struct {
-	ID       string
-	Name     string
-	State    string
-	Failure  string
-	Endpoint string
-	Image    string
-	Region   string
-	CPU      int
-	Memory   int
-	Tags     []string
+	ID              string
+	Name            string
+	State           string
+	Failure         string
+	Endpoint        string
+	AddressRejected bool
+	Image           string
+	Region          string
+	CPU             int
+	Memory          int
+	Tags            []string
 }
 
 // AgentHost is the control plane's view of one agent machine.
