@@ -61,6 +61,42 @@ WHERE agent_bundles.user_id = excluded.user_id`,
 	return s.LatestBundle(ctx, userID, agentID)
 }
 
+// SetPendingBundle records a bundle version that still has to be reloaded
+// onto a machine that was not running when it was saved.
+func (s *Store) SetPendingBundle(ctx context.Context, userID, agentID, version string) error {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return err
+	}
+	version = strings.TrimSpace(version)
+	if version == "" || len(version) > 64 {
+		return ErrInvalid
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE agents SET pending_bundle = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, version, agentID, userID)
+	return err
+}
+
+// ClearPendingBundle forgets a pending reload after it succeeded.
+func (s *Store) ClearPendingBundle(ctx context.Context, userID, agentID string) error {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE agents SET pending_bundle = '' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID)
+	return err
+}
+
+// PendingBundle is the version waiting for the next time the machine is running.
+func (s *Store) PendingBundle(ctx context.Context, userID, agentID string) (string, error) {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return "", err
+	}
+	var version string
+	err := s.db.QueryRowContext(ctx, `SELECT pending_bundle FROM agents WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID).Scan(&version)
+	if err != nil {
+		return "", scanErr(err)
+	}
+	return version, nil
+}
+
 // LatestBundle returns the newest bundle for one of the caller's agents.
 func (s *Store) LatestBundle(ctx context.Context, userID, agentID string) (AgentBundle, error) {
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {

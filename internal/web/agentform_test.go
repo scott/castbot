@@ -81,7 +81,7 @@ func TestAgentFormRoundTrip(t *testing.T) {
 	fields["name"] = []string{""}
 	fields["model"] = []string{"not-a-cast-model"}
 	code, body, _ = h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, fields, nil)
-	if code != http.StatusBadRequest || !strings.Contains(body, "Use a name up to 40 characters.") || !strings.Contains(body, "That model is not in the provider manifest.") || !strings.Contains(body, "not-a-cast-model") || !strings.Contains(body, "Be concise.") {
+	if code != http.StatusBadRequest || !strings.Contains(body, "A name is required.") || !strings.Contains(body, "That model is not in the provider manifest.") || !strings.Contains(body, "not-a-cast-model") || !strings.Contains(body, "Be concise.") {
 		t.Fatalf("validation %d %s", code, snippet(body))
 	}
 	got, err := h.st.GetAgent(context.Background(), user.ID, agent.ID)
@@ -114,7 +114,7 @@ func TestImportReviewAndRejects(t *testing.T) {
 	})
 	fields := map[string][]string{"form": {"agent"}, "section": {sec.ID}}
 	code, body, _ := h.send(http.MethodPost, "/new-agent/import", ip, fields, map[string][]byte{"archive": archive})
-	if code != 200 || !strings.Contains(body, "docs/.env") || strings.Contains(body, "super-secret-value") || !strings.Contains(body, "Imported instructions.") || !strings.Contains(body, `value="Imported"`) {
+	if code != 200 || (!strings.Contains(body, "<li>docs/.env</li>") && !strings.Contains(body, "<li>.env</li>")) || strings.Contains(body, "super-secret-value") || !strings.Contains(body, "Imported instructions.") || !strings.Contains(body, `value="Imported"`) {
 		t.Fatalf("review %d %s", code, snippet(body))
 	}
 	if strings.Contains(body, "\u2014") {
@@ -140,6 +140,11 @@ func TestImportReviewAndRejects(t *testing.T) {
 	}
 
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "matching-refs") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"ref":"refs/heads/main"}]`))
+			return
+		}
 		if r.URL.Path != "/acme/helper/tar.gz/main" {
 			http.NotFound(w, r)
 			return
@@ -241,6 +246,56 @@ func TestSaveReloadsRunningAndLeavesPaused(t *testing.T) {
 	bundle, err := h.st.LatestBundle(context.Background(), agent.UserID, agent.ID)
 	if err != nil || !strings.Contains(bundle.Instructions, "Stay paused.") || strings.Contains(bundle.YAML, "super-secret-value") {
 		t.Fatalf("bundle %v %s", err, bundle.YAML)
+	}
+	before, _ = fake.Snapshot()
+	if code, _, _ = h.do(http.MethodPost, "/agents/"+agent.ID+"/machine/wake", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
+		t.Fatal(code)
+	}
+	after, _ = fake.Snapshot()
+	if countCall(before, after, "reload") != 1 || grew(before, after, "create") {
+		t.Fatalf("wake reload before %v after %v", before, after)
+	}
+}
+
+func TestSaveDoesNotWakeAnAutoPausedMachine(t *testing.T) {
+	ip := "203.0.113.186:9"
+	h, fake, agent := machineUser(t, ip)
+	model := firstModel(t)
+	if _, err := h.st.PutBundle(context.Background(), agent.UserID, agent.ID, "1", "name: Atlas\nbrain:\n  model: "+model+"\n  instructions_file: instructions.md\ntools:\n  builtin: []\n", "Be concise."); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
+		t.Fatal(code)
+	}
+	waitMachine(t, h, agent, ip, "Pause")
+	plain, err := h.st.IssueBootstrap(context.Background(), agent.UserID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := h.st.ExchangeBootstrap(context.Background(), agent.ID, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SaveVMToken(context.Background(), agent.ID, token); err != nil {
+		t.Fatal(err)
+	}
+	fake.SetForce("paused")
+	sec, err := h.st.SystemSection(context.Background(), agent.UserID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := map[string][]string{
+		"form": {"agent"}, "name": {"Atlas"}, "title": {"Helper"}, "section": {sec.ID},
+		"model": {model}, "instructions": {"Stay paused."},
+	}
+	before, _ := fake.Snapshot()
+	code, _, hdr := h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, fields, nil)
+	if code != http.StatusSeeOther || !strings.Contains(hdr.Get("Location"), "notice=paused") {
+		t.Fatalf("save %d %s", code, hdr.Get("Location"))
+	}
+	after, _ := fake.Snapshot()
+	if grew(before, after, "reload") || grew(before, after, "wake") || !grew(before, after, "status") {
+		t.Fatalf("auto pause calls before %v after %v", before, after)
 	}
 }
 
@@ -374,6 +429,19 @@ func onlyAgent(t *testing.T, h *harness, userID string) store.Agent {
 		t.Fatalf("agents %d %v", len(list), err)
 	}
 	return list[0]
+}
+
+func countCall(before, after []string, name string) int {
+	if len(after) < len(before) {
+		return 0
+	}
+	n := 0
+	for _, call := range after[len(before):] {
+		if call == name {
+			n++
+		}
+	}
+	return n
 }
 
 func grew(before, after []string, name string) bool {

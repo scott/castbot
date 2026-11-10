@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS agents (
   avatar_path TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
   bundle_version TEXT NOT NULL DEFAULT '',
+  pending_bundle TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK (status IN ('draft', 'provisioning', 'ready', 'paused', 'failed', 'deleted')),
   activity TEXT NOT NULL DEFAULT '',
   unread INTEGER NOT NULL DEFAULT 0,
@@ -280,6 +281,9 @@ func (s *Store) migrate() error {
 	if err := s.ensureColumn("agents", "avatar_path", `ALTER TABLE agents ADD COLUMN avatar_path TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("agents", "pending_bundle", `ALTER TABLE agents ADD COLUMN pending_bundle TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
 	if err := s.allowRetried(); err != nil {
 		return err
 	}
@@ -290,7 +294,7 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.ensureInstance(); err != nil {
 		return err
 	}
-	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8} {
+	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9} {
 		if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING`, version); err != nil {
 			return err
 		}

@@ -545,7 +545,8 @@ func parseTrustedProxies(raw string, allowWide bool) ([]*net.IPNet, error) {
 			if err != nil {
 				return nil, err
 			}
-			ones, bits := n.Mask.Size()
+			var ones, bits int
+			n, ones, bits = normalizeProxy(n)
 			if ones == 0 {
 				return nil, errors.New("trusted proxy must not match every address")
 			}
@@ -565,6 +566,23 @@ func parseTrustedProxies(raw string, allowWide bool) ([]*net.IPNet, error) {
 		out = append(out, oneIP(ip))
 	}
 	return out, nil
+}
+
+// normalizeProxy turns an IPv4-mapped prefix into an IPv4 prefix so
+// ::ffff:0.0.0.0/96 is judged as /0, not as an IPv6 /96.
+func normalizeProxy(n *net.IPNet) (*net.IPNet, int, int) {
+	ones, bits := n.Mask.Size()
+	if bits == 128 && n.IP.To4() != nil {
+		if ones < 96 {
+			ones = 0
+		} else {
+			ones -= 96
+		}
+		bits = 32
+		ip := n.IP.To4().Mask(net.CIDRMask(ones, 32))
+		return &net.IPNet{IP: ip, Mask: net.CIDRMask(ones, 32)}, ones, bits
+	}
+	return n, ones, bits
 }
 
 func oneIP(ip net.IP) *net.IPNet {

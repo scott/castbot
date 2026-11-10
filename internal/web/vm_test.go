@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -298,6 +299,18 @@ func TestClientAddr(t *testing.T) {
 	if got := clientAddr("10.0.0.1:9", "198.51.100.3, unknown, 10.1.1.1", nets); got != "10.1.1.1" {
 		t.Fatalf("trusted then junk %s", got)
 	}
+	if _, err := ParseTrustedProxies("::ffff:0.0.0.0/96"); err == nil {
+		t.Fatal("ipv4-mapped /96")
+	}
+	if _, err := ParseTrustedProxies("::ffff:0:0/96"); err == nil {
+		t.Fatal("ipv4-mapped /96")
+	}
+	if _, err := ParseTrustedProxiesAllowWide("::ffff:0.0.0.0/96"); err == nil {
+		t.Fatal("ipv4-mapped /96 with the override")
+	}
+	if nets, err := ParseTrustedProxies("::ffff:10.0.0.0/104"); err != nil || len(nets) != 1 || !nets[0].Contains(net.ParseIP("10.1.2.3")) || nets[0].Contains(net.ParseIP("11.0.0.1")) {
+		t.Fatalf("mapped /104 %v %v", nets, err)
+	}
 	if _, err := ParseTrustedProxies("0.0.0.0/0"); err == nil {
 		t.Fatal("accepted every address")
 	}
@@ -535,6 +548,18 @@ func TestStartingMachineIsNotReady(t *testing.T) {
 	}
 	if strings.Contains(machine, "The machine is running.") {
 		t.Fatal("machine page said it is running while it is starting")
+	}
+}
+
+func TestCreatingCopyMatchesTheChip(t *testing.T) {
+	ip := "203.0.113.187:9"
+	h, _, agent := machineUser(t, ip)
+	if _, err := h.st.BeginVM(context.Background(), agent.UserID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s05"); err != nil {
+		t.Fatal(err)
+	}
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	if code != 200 || !strings.Contains(body, "The machine is starting.") || !strings.Contains(body, ">Starting<") || strings.Contains(body, "The machine is waking.") {
+		t.Fatalf("creating copy %d %s", code, snippet(body))
 	}
 }
 

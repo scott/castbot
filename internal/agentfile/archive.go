@@ -10,6 +10,8 @@ import (
 	"os"
 	"path"
 	"strings"
+
+	"github.com/scott/castbot/internal/castcfg"
 )
 
 const (
@@ -28,14 +30,17 @@ var (
 	errNoAgent   = errors.New("folder has no agent.yaml")
 )
 
-// Folder is the agent.yaml and instructions.md from an upload.
+// Folder is the agent.yaml and instructions from an upload.
 // Skipped names the files that were left out because they can hold secrets.
+// MissingInstructions is set when brain.instructions_file names a file
+// that is not in the folder.
 type Folder struct {
-	YAML         string
-	Instructions string
-	SpecName     string
-	Skipped      []string
-	LeftOut      []string
+	YAML                string
+	Instructions        string
+	InstructionsFile    string
+	MissingInstructions bool
+	Skipped             []string
+	LeftOut             []string
 }
 
 // ReadArchive extracts a zip, tar, or gzip tar. It rejects path traversal,
@@ -138,10 +143,15 @@ func unpackTar(raw []byte) (map[string][]byte, error) {
 		if err != nil {
 			return nil, errFormat
 		}
-		if hdr.Typeflag == tar.TypeDir {
+		switch hdr.Typeflag {
+		case tar.TypeDir:
 			continue
-		}
-		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != '\x00' {
+		case tar.TypeXGlobalHeader, tar.TypeXHeader:
+			// git archive starts with a pax global header. It is metadata,
+			// not a file, and it is not a link.
+			continue
+		case tar.TypeReg, tar.TypeRegA:
+		default:
 			return nil, errSymlink
 		}
 		name, err := cleanEntry(hdr.Name)
@@ -183,6 +193,7 @@ func cleanEntry(name string) (string, error) {
 }
 
 func folderFrom(files map[string][]byte, subpath string) (Folder, error) {
+	files = stripArchiveRoot(files)
 	subpath = strings.Trim(path.Clean("/"+subpath), "/")
 	if subpath == "." {
 		subpath = ""
@@ -208,12 +219,25 @@ func folderFrom(files map[string][]byte, subpath string) (Folder, error) {
 	}
 	var folder Folder
 	folder.YAML = string(files[yamlPath])
-	inst := "instructions.md"
-	if dir != "" {
-		inst = dir + "/instructions.md"
+	instName := "instructions.md"
+	if named := castcfg.InstructionsFile(folder.YAML); named != "" {
+		instName = named
 	}
-	if body, ok := files[inst]; ok {
+	folder.InstructionsFile = instName
+	rel, relErr := cleanEntry(instName)
+	inst := ""
+	if relErr == nil {
+		inst = rel
+		if dir != "" {
+			inst = dir + "/" + rel
+		}
+	}
+	if relErr != nil {
+		folder.MissingInstructions = true
+	} else if body, ok := files[inst]; ok {
 		folder.Instructions = string(body)
+	} else if rel != "instructions.md" {
+		folder.MissingInstructions = true
 	}
 	for name := range files {
 		if !under(name, dir) {
@@ -239,12 +263,44 @@ func folderFrom(files map[string][]byte, subpath string) (Folder, error) {
 	return folder, nil
 }
 
+// stripArchiveRoot removes the single top directory git archive adds.
+// A file at the root means the upload has no wrapper, so nothing is removed.
+func stripArchiveRoot(files map[string][]byte) map[string][]byte {
+	if len(files) == 0 {
+		return files
+	}
+	root := ""
+	for name := range files {
+		slash := strings.Index(name, "/")
+		if slash < 0 {
+			return files
+		}
+		first := name[:slash]
+		if root == "" {
+			root = first
+			continue
+		}
+		if first != root {
+			return files
+		}
+	}
+	out := make(map[string][]byte, len(files))
+	prefix := root + "/"
+	for name, body := range files {
+		out[strings.TrimPrefix(name, prefix)] = body
+	}
+	return out
+}
+
 func inSubpath(name, sub string) bool {
 	if sub == "" {
 		return true
 	}
 	dir := path.Dir(name)
-	return dir == sub || strings.HasSuffix(dir, "/"+sub)
+	if dir == "." {
+		dir = ""
+	}
+	return dir == sub || strings.HasPrefix(dir, sub+"/")
 }
 
 func under(name, dir string) bool {
@@ -256,14 +312,23 @@ func under(name, dir string) bool {
 
 func secretName(name string) bool {
 	base := strings.ToLower(path.Base(name))
-	if base == ".env" || strings.HasPrefix(base, ".env.") {
+	if base == ".env" || base == ".envrc" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".env") {
 		return true
 	}
 	switch base {
-	case "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".netrc", "credentials.json", "secrets.json", "secrets.yaml", "secrets.yml":
+	case ".npmrc", ".pypirc", ".netrc", "kubeconfig", "credentials.json", "secrets.json", "secrets.yaml", "secrets.yml":
 		return true
 	}
-	if strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") || strings.HasSuffix(base, ".p12") {
+	if strings.HasPrefix(base, "id_rsa") || strings.HasPrefix(base, "id_dsa") || strings.HasPrefix(base, "id_ecdsa") || strings.HasPrefix(base, "id_ed25519") {
+		return true
+	}
+	if strings.HasPrefix(base, "service-account") && strings.HasSuffix(base, ".json") {
+		return true
+	}
+	if strings.HasPrefix(base, "credentials") && strings.HasSuffix(base, ".json") {
+		return true
+	}
+	if strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") || strings.HasSuffix(base, ".p12") || strings.HasSuffix(base, ".keystore") {
 		return true
 	}
 	return false

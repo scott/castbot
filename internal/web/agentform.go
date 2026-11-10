@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/scott/castbot/internal/agentfile"
 	"github.com/scott/castbot/internal/castcfg"
@@ -27,7 +26,7 @@ type agentForm struct {
 	SectionErr, ModelErr          string
 	InstructionsErr, ToolErr      string
 	AvatarErr, ImportErr, SaveErr string
-	Notice, ToolNote              string
+	Notice, ToolNote, Kept        string
 	Sections                      []sectionView
 	Models                        []string
 	Tools                         []toolField
@@ -122,6 +121,7 @@ func (s *Server) formFromAgent(ctx context.Context, user store.User, agent store
 	}
 	f.Instructions = bundle.Instructions
 	f.Version = spec.Version
+	f.Kept = string(spec.Kept)
 	if f.Model == "" {
 		f.Model = spec.Model
 	}
@@ -230,7 +230,7 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 		}
 		return
 	}
-	if err := s.storeBundle(r.Context(), user.ID, agent.ID, spec); err != nil {
+	if _, err := s.storeBundle(r.Context(), user.ID, agent.ID, spec); err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
@@ -278,7 +278,8 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if err := s.storeBundle(r.Context(), user.ID, agent.ID, spec); err != nil {
+	version, err := s.storeBundle(r.Context(), user.ID, agent.ID, spec)
+	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
@@ -293,7 +294,7 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	notice, reloadErr := s.applyBundle(r.Context(), user.ID, fresh)
+	notice, reloadErr := s.applyBundle(r.Context(), user.ID, fresh, version)
 	if reloadErr != nil {
 		f.SaveErr = "The agent could not be reloaded. The saved copy is updated. No new machine was created."
 		f.HasAvatar = fresh.AvatarPath != ""
@@ -365,6 +366,8 @@ func (s *Server) reviewImport(w http.ResponseWriter, r *http.Request, user store
 				f.ImportErr = "Private repositories are out of scope. Use a public github.com URL."
 			} else if agentfile.IsOversize(err) {
 				f.ImportErr = "That archive is too large."
+			} else if strings.Contains(err.Error(), "slash") {
+				f.ImportErr = "A branch name with a slash needs ?ref= on the URL."
 			} else {
 				f.ImportErr = "The repository archive could not be downloaded."
 			}
@@ -401,6 +404,14 @@ func (s *Server) reviewImport(w http.ResponseWriter, r *http.Request, user store
 	f.LeftOut = folder.LeftOut
 	if note := unknownTools(spec); note != "" {
 		f.ToolNote = note
+	}
+	f.Kept = string(spec.Kept)
+	if folder.MissingInstructions {
+		if folder.InstructionsFile != "" && !strings.Contains(folder.InstructionsFile, "..") && !strings.Contains(folder.InstructionsFile, "\\") {
+			f.InstructionsErr = "The instructions file " + folder.InstructionsFile + " was not in the folder."
+		} else {
+			f.InstructionsErr = "That instructions file is not allowed."
+		}
 	}
 	if f.Model != "" && !castcfg.KnownModel(f.Model) {
 		f.ModelErr = "That model is not in the provider manifest."
@@ -461,6 +472,7 @@ func unknownTools(spec castcfg.Spec) string {
 }
 
 func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec, []byte, string, bool) {
+	f.Kept = r.FormValue("kept")
 	f.Name = strings.TrimSpace(r.FormValue("name"))
 	f.Title = strings.TrimSpace(r.FormValue("title"))
 	f.SectionID = strings.TrimSpace(r.FormValue("section"))
@@ -492,7 +504,10 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 		f.ToolErr = "Unknown tool."
 		good = false
 	}
-	if f.Name == "" || len(f.Name) > 40 {
+	if f.Name == "" {
+		f.NameErr = "A name is required."
+		good = false
+	} else if len(f.Name) > 40 {
 		f.NameErr = "Use a name up to 40 characters."
 		good = false
 	}
@@ -527,6 +542,7 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 	spec := castcfg.Spec{
 		Name: f.Name, Title: f.Title, Version: safeVersion(f.Version),
 		Model: f.Model, Instructions: f.Instructions, Permissions: map[string]string{},
+		Kept: []byte(f.Kept),
 	}
 	for _, tool := range f.Tools {
 		if !tool.On {
@@ -588,21 +604,22 @@ func safeVersion(v string) string {
 	return v
 }
 
-func (s *Server) storeBundle(ctx context.Context, userID, agentID string, spec castcfg.Spec) error {
+func (s *Server) storeBundle(ctx context.Context, userID, agentID string, spec castcfg.Spec) (string, error) {
 	raw, err := castcfg.RenderYAML(spec)
 	if err != nil {
-		return err
+		return "", err
 	}
 	version := strings.TrimSpace(spec.Version)
 	if version == "" {
 		version = "1"
 	}
 	stamp := s.store.Now().UTC().Format("20060102150405.000000000")
-	_, err = s.store.PutBundle(ctx, userID, agentID, stamp+"-"+version, string(raw), spec.Instructions)
-	return err
+	version = stamp + "-" + version
+	_, err = s.store.PutBundle(ctx, userID, agentID, version, string(raw), spec.Instructions)
+	return version, err
 }
 
-func (s *Server) applyBundle(ctx context.Context, userID string, agent store.Agent) (string, error) {
+func (s *Server) applyBundle(ctx context.Context, userID string, agent store.Agent, version string) (string, error) {
 	vm, err := s.store.LiveVM(ctx, userID, agent.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return "saved", nil
@@ -610,24 +627,42 @@ func (s *Server) applyBundle(ctx context.Context, userID string, agent store.Age
 	if err != nil {
 		return "", err
 	}
-	if vm.State == "paused" {
+	state, _ := s.observedMachine(ctx, userID, agent.ID, vm)
+	if state == "paused" {
+		if err := s.store.SetPendingBundle(ctx, userID, agent.ID, version); err != nil {
+			return "", err
+		}
 		return "paused", nil
 	}
-	if vm.State != "running" {
+	if state != "running" {
+		if err := s.store.SetPendingBundle(ctx, userID, agent.ID, version); err != nil {
+			return "", err
+		}
 		return "starting", nil
 	}
 	endpoint, token, err := s.store.VMCredentials(ctx, userID, agent.ID)
 	if err != nil || endpoint == "" || token == "" {
+		if err := s.store.SetPendingBundle(ctx, userID, agent.ID, version); err != nil {
+			return "", err
+		}
 		return "starting", nil
 	}
 	h, _, _ := s.hostConfig()
 	if h == nil {
 		return "saved", nil
 	}
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 35*time.Second)
-	defer cancel()
-	if err := h.Reload(rctx, endpoint, token); err != nil {
+	if err := s.store.SetPendingBundle(ctx, userID, agent.ID, version); err != nil {
 		return "", err
+	}
+	if err := s.applyPending(ctx, userID, agent.ID); err != nil {
+		return "", err
+	}
+	left, err := s.store.PendingBundle(ctx, userID, agent.ID)
+	if err != nil {
+		return "", err
+	}
+	if left != "" {
+		return "starting", nil
 	}
 	return "reloaded", nil
 }

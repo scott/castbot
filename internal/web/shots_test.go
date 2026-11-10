@@ -482,6 +482,7 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 	}
 	scrollTop(t, ctx)
 	shotPage(t, ctx, filepath.Join(dir, "filled-"+theme+"-"+name+".png"))
+	saveFull(t, ctx, filepath.Join(dir, "controls-"+theme+"-"+name+".png"))
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.SetValue(`form.na input[name="name"]`, "", chromedp.ByQuery),
 		chromedp.SetValue(`form.na select[name="model"]`, "", chromedp.ByQuery),
@@ -676,7 +677,7 @@ func shootMachine(t *testing.T, browser context.Context, dir string, width, heig
 	fake.SetForce("creating")
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.Reload(),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Waking")>=0&&t.indexOf("The machine is waking.")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Waking")>=0&&t.indexOf("The machine is waking.")>=0&&t.indexOf("The machine is starting.")<0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -697,6 +698,48 @@ func seedAgent(t *testing.T, st *store.Store, userID, name string) store.Agent {
 		t.Fatal(err)
 	}
 	return agent
+}
+
+func saveFull(t *testing.T, ctx context.Context, path string) {
+	t.Helper()
+	var height int
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(() => {
+		const app = document.querySelector('.app');
+		const main = document.querySelector('.main');
+		const sb = document.querySelector('.sb');
+		if (app) app.style.height = 'auto';
+		if (main) { main.style.height = 'auto'; main.style.overflow = 'visible'; }
+		if (sb) { sb.style.height = 'auto'; sb.style.overflow = 'visible'; }
+		const card = document.querySelector('#tools-card');
+		return card ? Math.ceil(card.getBoundingClientRect().bottom + window.scrollY) : 0;
+	})()`), &height)); err != nil {
+		t.Fatal(err)
+	}
+	if height < 900 {
+		t.Fatalf("tools card bottom %d", height)
+	}
+	var buf []byte
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		buf, err = cdppage.CaptureScreenshot().
+			WithFormat(cdppage.CaptureScreenshotFormatPng).
+			WithCaptureBeyondViewport(true).
+			Do(ctx)
+		return err
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if len(buf) < 24 || string(buf[:8]) != "\x89PNG\r\n\x1a\n" {
+		t.Fatalf("screenshot %s is not a png (%d bytes)", path, len(buf))
+	}
+	wide := int(buf[16])<<24 | int(buf[17])<<16 | int(buf[18])<<8 | int(buf[19])
+	tall := int(buf[20])<<24 | int(buf[21])<<16 | int(buf[22])<<8 | int(buf[23])
+	if tall < 1100 || wide > 1280 {
+		t.Fatalf("screenshot %s is %dx%d", path, wide, tall)
+	}
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func saveShot(t *testing.T, ctx context.Context, path string) {

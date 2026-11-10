@@ -93,3 +93,64 @@ func TestSweepCopiedDatabaseKeepsUnknownAgents(t *testing.T) {
 		t.Fatal("a copied database deleted an agent it does not know")
 	}
 }
+
+func TestSweepSkipsAnAgentThatStillHasALiveRow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "live.db")
+	st, err := store.Open(path, store.Options{Argon: auth.Params{Time: 1, Memory: 8 * 1024, Threads: 1, KeyLen: 32}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ctx := context.Background()
+	secret, err := auth.NewTOTPSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := auth.Hash("correct-horse-1", st.Argon())
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := st.CreateUser(ctx, store.NewUser{
+		Email: "live@example.com", DisplayName: "Live", Workspace: "Personal",
+		PasswordHash: hash, TOTPSecret: secret, Theme: "dark",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, err := st.SystemSection(ctx, user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := st.CreateAgent(ctx, user.ID, store.AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.BeginVM(ctx, user.ID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s04"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReleaseVM(ctx, user.ID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.BeginVM(ctx, user.ID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s04"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishVM(ctx, user.ID, agent.ID, "vm-live", "https://vm.example", "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := st.InstanceID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := make([]byte, 32)
+	srv := New(st, key, nil)
+	t.Cleanup(srv.Close)
+	fake := host.NewFake()
+	srv.SetHost(fake, "example.invalid/castbot-runtime:s04", "https://castbot.example")
+	tag := host.InstanceTag(inst)
+	fake.Machines["vm-next"] = host.Machine{ID: "vm-next", Name: "castbot-next", State: "running", Tags: []string{"castbot", tag, "agent:" + agent.ID}}
+	srv.SweepMachines(ctx)
+	if _, ok := fake.Machines["vm-next"]; !ok {
+		t.Fatal("a live row did not protect the agent's other machine")
+	}
+}

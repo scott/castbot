@@ -406,7 +406,7 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 .tpl .t2 { font-size: 12.5px; color: var(--tx3); line-height: 1.4; }
 .or { display: flex; align-items: center; gap: 10px; color: var(--tx3); font-size: 12.5px; font-weight: 600; }
 .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
-.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
 .three { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
 .secret { display: grid; grid-template-columns: minmax(0,200px) minmax(0,1fr) auto; gap: 8px; align-items: center; }
 .secret .inp.mono input { letter-spacing: .12em; }

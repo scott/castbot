@@ -80,3 +80,30 @@ func TestRenderDropsSecretsAndAsksForWrites(t *testing.T) {
 		t.Fatal("defaults")
 	}
 }
+
+func TestRenderKeepsKeysTheFormDoesNotOwn(t *testing.T) {
+	raw := "name: Atlas\ndescription: Helper\nversion: 2\nbrain:\n  model: openrouter/not-real\n  model_override: fast\n  instructions_file: prompts/system.md\ntools:\n  builtin: [read]\n  mcp:\n    demo: {}\nskills:\n  - review\nruntime:\n  image: local\nenv:\n  API_KEY: super-secret-value\n"
+	spec, err := ParseYAML(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.InstructionsFile != "prompts/system.md" {
+		t.Fatal(spec.InstructionsFile)
+	}
+	if strings.Contains(string(spec.Kept), "super-secret-value") || strings.Contains(string(spec.Kept), "API_KEY") {
+		t.Fatal("kept a secret")
+	}
+	out, err := RenderYAML(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	for _, needle := range []string{"model_override: fast", "mcp:", "skills:", "runtime:", "image: local"} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("missing %s\n%s", needle, text)
+		}
+	}
+	if strings.Contains(text, "super-secret-value") || strings.Contains(text, "API_KEY") {
+		t.Fatalf("secret returned\n%s", text)
+	}
+}

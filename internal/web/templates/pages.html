@@ -262,6 +262,7 @@
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="form" value="agent">
 <input type="hidden" name="version" value="{{.AgentForm.Version}}">
+<textarea class="vh" name="kept" tabindex="-1" aria-hidden="true">{{.AgentForm.Kept}}</textarea>
 <div class="na-form">
 {{if .AgentForm.Notice}}<div class="banner ok" role="status"><span class="grow">{{.AgentForm.Notice}}</span></div>{{end}}
 {{if .AgentForm.SaveErr}}<div class="banner err" role="alert"><span class="grow">{{.AgentForm.SaveErr}}</span></div>{{end}}
@@ -270,7 +271,7 @@
 <p class="fineprint">A zip or tar of a Cast agent folder, or a public https github.com URL. Private repositories are out of scope. Files such as .env are skipped and listed here before you save.</p>
 {{if .AgentForm.ImportErr}}<p class="err">{{.AgentForm.ImportErr}}</p>{{end}}
 <div class="field"><span class="lab">Archive</span><div class="file"><input type="file" name="archive" accept=".zip,.tar,.gz,.tgz,application/gzip,application/zip" aria-label="Archive"></div></div>
-<div class="field"><span class="lab">GitHub URL <span class="opt">optional</span></span><div class="inp{{if .AgentForm.ImportErr}} bad{{end}}"><input name="github" value="{{.AgentForm.GitHub}}" placeholder="https://github.com/owner/repo" aria-label="GitHub URL" autocapitalize="off" spellcheck="false"></div></div>
+<div class="field"><span class="lab">GitHub URL <span class="opt">optional</span></span><div class="inp{{if .AgentForm.ImportErr}} bad{{end}}"><input name="github" value="{{.AgentForm.GitHub}}" placeholder="https://github.com/owner/repo" aria-label="GitHub URL" autocapitalize="off" spellcheck="false"></div><p class="help">A branch name with a slash needs ?ref=branch/name.</p></div>
 <button class="btn sm" type="submit" formaction="{{.AgentForm.ImportAction}}">Review import</button>
 {{if .AgentForm.Skipped}}<div><span class="lab">Skipped files</span><ul class="skip">{{range .AgentForm.Skipped}}<li>{{.}}</li>{{end}}</ul><p class="fineprint">These files can hold secrets, so they were not added.</p></div>{{end}}
 {{if .AgentForm.LeftOut}}<p class="fineprint">Other files were left out. The saved agent keeps the instructions and the agent file only.</p>{{end}}
@@ -286,11 +287,11 @@
 <div class="field"><span class="lab">Avatar <span class="opt">optional</span></span><div class="file"><input type="file" name="avatar" accept="image/png,image/jpeg,image/gif,image/webp" aria-label="Avatar"></div>{{if .AgentForm.HasAvatar}}<p class="fineprint">An avatar is saved. A new file replaces it.</p>{{end}}{{if .AgentForm.AvatarErr}}<span class="err">{{.AgentForm.AvatarErr}}</span>{{end}}<p class="help">PNG, JPEG, GIF, or WebP. Up to 512 KB.</p></div>
 <div class="field"><span class="lab">Instructions</span><textarea class="ta" name="instructions" maxlength="200000" aria-label="Instructions">{{.AgentForm.Instructions}}</textarea>{{if .AgentForm.InstructionsErr}}<span class="err">{{.AgentForm.InstructionsErr}}</span>{{end}}</div>
 </section>
-<section class="card">
+<section class="card" id="model-card">
 <div class="card-h"><span class="num">3</span><h3>Model</h3></div>
 <div class="field"><span class="lab">Model</span><div class="selwrap"><select class="sel" name="model" aria-label="Model"><option value="">Choose a model</option>{{range .AgentForm.Models}}<option value="{{.}}"{{if eq . $.AgentForm.Model}} selected{{end}}>{{.}}</option>{{end}}</select></div>{{if .AgentForm.ModelErr}}<span class="err">{{.AgentForm.ModelErr}}</span>{{end}}<p class="help">The list is the provider manifest. An unknown model is not replaced with a default.</p></div>
 </section>
-<section class="card">
+<section class="card" id="tools-card">
 <div class="card-h"><span class="num">4</span><h3>Tools</h3></div>
 <p class="fineprint">Write and shell tools ask before they run. Read tools are allowed. You can change each one.</p>
 {{if .AgentForm.ToolErr}}<p class="err">{{.AgentForm.ToolErr}}</p>{{end}}

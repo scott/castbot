@@ -29,10 +29,31 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 			if err != nil && !errors.Is(err, store.ErrNotFound) {
 				return nil, err
 			}
-			if err == nil && endpoint != "" && token != "" {
+			state, endpoint := s.observedMachine(ctx, job.UserID, job.AgentID, vm)
+			if state == "paused" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
+				got, werr := h.Wake(ctx, vm.MicroVMID)
+				if werr != nil {
+					return nil, &run.Notice{Text: "The machine is paused."}
+				}
+				if err := s.store.ApplyVMState(ctx, job.UserID, job.AgentID, got.State, got.Endpoint, ""); err != nil {
+					return nil, err
+				}
+				state = got.State
+				if got.Endpoint != "" {
+					endpoint = got.Endpoint
+				}
+			}
+			if err := s.applyPending(ctx, job.UserID, job.AgentID); err != nil {
+				return nil, err
+			}
+			endpoint, token, err = s.store.VMCredentials(ctx, job.UserID, job.AgentID)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return nil, err
+			}
+			if state == "running" && err == nil && endpoint != "" && token != "" {
 				return h.Stream(ctx, endpoint, token, req)
 			}
-			if endpoint == "" && vm.State != "creating" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
+			if endpoint == "" && state != "creating" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
 				return nil, &run.Notice{Text: "The machine address was not accepted."}
 			}
 			return nil, &run.Notice{Text: "The machine is starting."}
@@ -341,6 +362,12 @@ func (s *Server) machineAction(w http.ResponseWriter, r *http.Request, kind stri
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
+	if kind != "pause" && got.State == "running" {
+		if err := s.applyPending(r.Context(), user.ID, agent.ID); err != nil {
+			s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusBadGateway, "The machine woke, but the saved agent could not be reloaded.")
+			return
+		}
+	}
 	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID)+"/machine", http.StatusSeeOther)
 }
 
@@ -388,6 +415,59 @@ func (s *Server) removeMachine(ctx context.Context, userID string, agent store.A
 	return s.store.MarkVMDeleted(ctx, userID, agent.ID)
 }
 
+// observedMachine asks the machine API for the state. Status does not wake
+// the guest. The database row is updated when the API answers.
+func (s *Server) observedMachine(ctx context.Context, userID, agentID string, vm store.VM) (state, endpoint string) {
+	state = vm.State
+	endpoint = vm.Endpoint
+	h, _, _ := s.hostConfig()
+	if h == nil || vm.MicroVMID == "" || vm.MicroVMID == "pending" {
+		return state, endpoint
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	got, err := h.Status(cctx, vm.MicroVMID)
+	cancel()
+	if err != nil {
+		return state, endpoint
+	}
+	_ = s.store.ApplyVMState(ctx, userID, agentID, got.State, got.Endpoint, "")
+	if got.Endpoint != "" {
+		endpoint = got.Endpoint
+	}
+	return got.State, endpoint
+}
+
+// applyPending reloads a bundle that was saved while the machine was not
+// running. It does nothing unless the machine is running, and it clears the
+// mark only after the reload succeeds.
+func (s *Server) applyPending(ctx context.Context, userID, agentID string) error {
+	version, err := s.store.PendingBundle(ctx, userID, agentID)
+	if err != nil || version == "" {
+		return err
+	}
+	vm, err := s.store.LiveVM(ctx, userID, agentID)
+	if err != nil || vm.State != "running" {
+		return err
+	}
+	endpoint, token, err := s.store.VMCredentials(ctx, userID, agentID)
+	if err != nil || endpoint == "" || token == "" {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	h, _, _ := s.hostConfig()
+	if h == nil {
+		return nil
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 35*time.Second)
+	defer cancel()
+	if err := h.Reload(rctx, endpoint, token); err != nil {
+		return err
+	}
+	return s.store.ClearPendingBundle(ctx, userID, agentID)
+}
+
 func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Agent) machineView {
 	view := machineView{Lead: "No machine is attached."}
 	h, image, publicURL := s.hostConfig()
@@ -408,6 +488,9 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 			}
 			if fresh, ferr := s.store.LiveVM(ctx, userID, agent.ID); ferr == nil {
 				vm = fresh
+			}
+			if vm.State == "running" {
+				_ = s.applyPending(ctx, userID, agent.ID)
 			}
 		}
 	}
@@ -438,7 +521,11 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 			view.Lead = "The machine is paused. A chat message wakes it."
 			view.CanWake = h != nil
 		case "creating":
-			view.Lead = "The machine is waking."
+			if agent.Activity == "Waking" {
+				view.Lead = "The machine is waking."
+			} else {
+				view.Lead = "The machine is starting."
+			}
 		case "failed":
 			view.Lead = failedLead(*agent)
 			view.CanRetry = h != nil

@@ -75,7 +75,7 @@ func (s *Store) BeginVM(ctx context.Context, userID, agentID, name, image string
 VALUES (?, ?, ?, ?, 'pending', ?, '', ?, 'creating', '', ?)`, id, agent.WorkspaceID, userID, agentID, name, image, stamp); err != nil {
 		return VM{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE agents SET status = 'provisioning', activity = 'Waking' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE agents SET status = 'provisioning', activity = 'Starting' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID); err != nil {
 		return VM{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -106,10 +106,11 @@ func (s *Store) FinishVM(ctx context.Context, userID, agentID, microID, endpoint
 // ApplyVMState copies a machine API state onto the caller's row.
 // It does not contact the guest.
 func (s *Store) ApplyVMState(ctx context.Context, userID, agentID, state, endpoint, failure string) error {
-	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+	agent, err := s.GetAgent(ctx, userID, agentID)
+	if err != nil {
 		return err
 	}
-	status, activity, ok := agentStatusFor(state)
+	status, activity, ok := agentStatusFor(state, agent.Status)
 	if !ok {
 		return ErrInvalid
 	}
@@ -210,8 +211,16 @@ func (s *Store) OrphanCandidate(ctx context.Context, agentID string) (bool, erro
 	if agentID == "" {
 		return false, nil
 	}
+	var live int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_vms WHERE agent_id = ? AND deleted_at IS NULL AND state NOT IN ('failed', 'deleted')`, agentID).Scan(&live)
+	if err != nil {
+		return false, err
+	}
+	if live > 0 {
+		return false, nil
+	}
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_vms WHERE agent_id = ? AND (
+	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_vms WHERE agent_id = ? AND (
 		state IN ('failed', 'deleted')
 		OR deleted_at IS NOT NULL
 		OR (state = 'creating' AND microvm_id = 'pending')
@@ -336,14 +345,17 @@ func (s *Store) Quota(ctx context.Context, userID string) (used, max int, err er
 	return used, max, err
 }
 
-func agentStatusFor(state string) (status, activity string, ok bool) {
+func agentStatusFor(state, prev string) (status, activity string, ok bool) {
 	switch state {
 	case "running":
 		return "ready", "", true
 	case "paused":
 		return "paused", "", true
 	case "creating":
-		return "provisioning", "Waking", true
+		if prev == "paused" {
+			return "provisioning", "Waking", true
+		}
+		return "provisioning", "Starting", true
 	case "failed", "terminated":
 		return "failed", "", true
 	default:

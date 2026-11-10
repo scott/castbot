@@ -183,7 +183,7 @@ func agentSub(a store.Agent) (string, string) {
 	case "provisioning":
 		label := a.Activity
 		if label == "" {
-			label = "Resuming"
+			label = "Starting"
 		}
 		return joinDot(a.Title, label), "start"
 	default:
@@ -209,7 +209,7 @@ func statusBits(a store.Agent) (dot, class, label, meta string) {
 	case "provisioning":
 		label := a.Activity
 		if label == "" {
-			label = "Waking"
+			label = "Starting"
 		}
 		return "start", "start", label, "mkc1"
 	case "paused":

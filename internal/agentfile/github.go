@@ -4,6 +4,7 @@ package agentfile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -13,11 +14,14 @@ import (
 )
 
 // Repo is a public GitHub repository the user named.
+// Unresolved is the path after /tree/ when the ref may contain a slash.
+// Fetch resolves it against the public refs API.
 type Repo struct {
-	Owner   string
-	Name    string
-	Ref     string
-	Subpath string
+	Owner      string
+	Name       string
+	Ref        string
+	Subpath    string
+	Unresolved []string
 }
 
 // ParseGitHub accepts an https URL whose host is github.com.
@@ -55,27 +59,54 @@ func ParseGitHub(raw string) (Repo, error) {
 	repo := Repo{Owner: parts[0], Name: strings.TrimSuffix(parts[1], ".git")}
 	ref := strings.TrimSpace(u.Query().Get("ref"))
 	rest := parts[2:]
-	if len(rest) > 0 {
-		if rest[0] != "tree" || len(rest) < 2 {
+	if len(rest) == 0 {
+		if !refOK(ref) {
 			return Repo{}, errors.New("repository URL is not a public github.com URL")
 		}
-		if ref == "" {
-			ref = rest[1]
-			rest = rest[2:]
-		} else {
-			rest = rest[2:]
+		repo.Ref = ref
+		return repo, nil
+	}
+	if rest[0] != "tree" || len(rest) < 2 {
+		return Repo{}, errors.New("repository URL is not a public github.com URL")
+	}
+	tree := rest[1:]
+	if ref != "" {
+		sub, ok := splitRef(tree, ref)
+		if !ok || !refOK(ref) || !subpathOK(sub) {
+			return Repo{}, errors.New("repository URL is not a public github.com URL")
+		}
+		repo.Ref = ref
+		repo.Subpath = sub
+		return repo, nil
+	}
+	if len(tree) == 1 {
+		if !refOK(tree[0]) {
+			return Repo{}, errors.New("repository URL is not a public github.com URL")
+		}
+		repo.Ref = tree[0]
+		return repo, nil
+	}
+	for _, part := range tree {
+		if !refOK(part) && !subpathOK(part) {
+			return Repo{}, errors.New("repository URL is not a public github.com URL")
 		}
 	}
-	if !refOK(ref) {
-		return Repo{}, errors.New("repository URL is not a public github.com URL")
-	}
-	sub := strings.Join(rest, "/")
-	if !subpathOK(sub) {
-		return Repo{}, errors.New("repository URL is not a public github.com URL")
-	}
-	repo.Ref = ref
-	repo.Subpath = sub
+	repo.Unresolved = tree
 	return repo, nil
+}
+
+// splitRef takes the segments after /tree/ and a known ref. The ref may
+// contain slashes, so it can cover more than one segment.
+func splitRef(tree []string, ref string) (string, bool) {
+	joined := strings.Join(tree, "/")
+	if joined == ref {
+		return "", true
+	}
+	prefix := ref + "/"
+	if strings.HasPrefix(joined, prefix) {
+		return strings.TrimPrefix(joined, prefix), true
+	}
+	return "", false
 }
 
 func gitName(s string) bool {
@@ -142,6 +173,13 @@ func Fetch(ctx context.Context, client *http.Client, base string, repo Repo) ([]
 	if !gitName(repo.Owner) || !gitName(repo.Name) || !refOK(repo.Ref) {
 		return nil, errors.New("repository URL is not a public github.com URL")
 	}
+	if len(repo.Unresolved) > 0 {
+		resolved, err := resolveRef(ctx, client, base, repo)
+		if err != nil {
+			return nil, err
+		}
+		repo = resolved
+	}
 	ref := repo.Ref
 	if ref == "" {
 		ref = "HEAD"
@@ -192,6 +230,9 @@ func githubRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 3 {
 		return errors.New("redirect left github")
 	}
+	if !strings.EqualFold(req.URL.Scheme, "https") {
+		return errors.New("redirect left github")
+	}
 	switch strings.ToLower(req.URL.Hostname()) {
 	case "github.com", "codeload.github.com", "api.github.com":
 		if req.URL.User != nil {
@@ -201,4 +242,84 @@ func githubRedirect(req *http.Request, via []*http.Request) error {
 	default:
 		return errors.New("redirect left github")
 	}
+}
+
+// resolveRef picks the longest public branch or tag that matches the
+// segments after /tree/. The remainder is the subpath. A miss asks for ?ref=.
+func resolveRef(ctx context.Context, client *http.Client, base string, repo Repo) (Repo, error) {
+	if len(repo.Unresolved) == 0 {
+		return repo, nil
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 20 * time.Second, CheckRedirect: githubRedirect}
+	}
+	api := "https://api.github.com"
+	if base != "" && !strings.Contains(strings.ToLower(base), "codeload.github.com") {
+		api = strings.TrimRight(base, "/")
+	}
+	joined := strings.Join(repo.Unresolved, "/")
+	names, err := matchingRefs(ctx, client, api, repo, repo.Unresolved[0])
+	if err != nil {
+		return Repo{}, err
+	}
+	best := ""
+	for _, name := range names {
+		if name == joined || strings.HasPrefix(joined, name+"/") {
+			if len(name) > len(best) {
+				best = name
+			}
+		}
+	}
+	if best == "" {
+		return Repo{}, errors.New("a branch name with a slash needs ?ref=")
+	}
+	sub, ok := splitRef(repo.Unresolved, best)
+	if !ok || !refOK(best) || !subpathOK(sub) {
+		return Repo{}, errors.New("a branch name with a slash needs ?ref=")
+	}
+	repo.Ref = best
+	repo.Subpath = sub
+	repo.Unresolved = nil
+	return repo, nil
+}
+
+func matchingRefs(ctx context.Context, client *http.Client, api string, repo Repo, prefix string) ([]string, error) {
+	var names []string
+	for _, kind := range []string{"heads", "tags"} {
+		u := api + "/repos/" + repo.Owner + "/" + repo.Name + "/git/matching-refs/" + kind + "/" + prefix
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, errors.New("repository archive is unavailable")
+		}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		res, err := client.Do(req)
+		if err != nil {
+			return nil, errors.New("repository archive is unavailable")
+		}
+		body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		if err != nil {
+			return nil, errors.New("repository archive is unavailable")
+		}
+		if res.StatusCode == http.StatusNotFound {
+			continue
+		}
+		if res.StatusCode != http.StatusOK {
+			return nil, errors.New("a branch name with a slash needs ?ref=")
+		}
+		var list []struct {
+			Ref string `json:"ref"`
+		}
+		if err := json.Unmarshal(body, &list); err != nil {
+			return nil, errors.New("a branch name with a slash needs ?ref=")
+		}
+		needle := "refs/" + kind + "/"
+		for _, item := range list {
+			name := strings.TrimPrefix(item.Ref, needle)
+			if name != "" && name != item.Ref {
+				names = append(names, name)
+			}
+		}
+	}
+	return names, nil
 }
