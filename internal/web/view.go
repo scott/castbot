@@ -32,6 +32,11 @@ type msgView struct {
 	ShowDay                                     bool
 }
 
+type liveView struct {
+	RunID, Color, Letter, Text, Error, CSRF string
+	Failed                                  bool
+}
+
 type sessView struct {
 	CurrentLine string
 	OtherLine   string
@@ -58,6 +63,7 @@ type page struct {
 	Agent      agentView
 	HasAgent   bool
 	Messages   []msgView
+	Lives      []liveView
 	Tab        string
 	Notice     string
 	EditName   bool

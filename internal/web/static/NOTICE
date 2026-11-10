@@ -5,3 +5,5 @@ https://openfontlicense.org
 Script
 htmx 2.0.4 is used under the BSD 2-Clause License.
 https://github.com/bigskysoftware/htmx/blob/master/LICENSE
+The htmx SSE extension 2.2.3 (sse.js) is used under the BSD 2-Clause License.
+https://github.com/bigskysoftware/htmx-extensions/blob/main/LICENSE

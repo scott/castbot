@@ -12,9 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"net"
+
 	"github.com/scott/castbot/internal/auth"
 	"github.com/scott/castbot/internal/config"
 	"github.com/scott/castbot/internal/demo"
+	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
 	"github.com/scott/castbot/internal/web"
 	"golang.org/x/term"
@@ -45,13 +48,38 @@ func serve(args []string) {
 	_ = fs.Parse(args)
 	cfg, st := openStore()
 	defer st.Close()
+	client, stopRuntime := openRuntime(cfg)
+	defer stopRuntime()
+	app := web.New(st, cfg.SessionKey, client)
+	defer app.Close()
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           web.New(st, cfg.SessionKey).Handler(),
+		Handler:           app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Printf("castbot listening on %s", cfg.Addr)
 	log.Fatal(srv.ListenAndServe())
+}
+
+func openRuntime(cfg config.Config) (runtime.Client, func()) {
+	if cfg.RuntimeURL != "" {
+		log.Printf("agent runtime at %s", cfg.RuntimeURL)
+		return runtime.NewHTTP(cfg.RuntimeURL), func() {}
+	}
+	echo := runtime.NewEcho(runtime.EchoOptions{Name: "castbot", WordDelay: 30 * time.Millisecond})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatal(err)
+	}
+	srv := &http.Server{Handler: echo, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	log.Printf("echo runtime on %s", ln.Addr().String())
+	return runtime.NewHTTP("http://" + ln.Addr().String()), func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+		echo.Close()
+	}
 }
 
 func createUser(args []string) {

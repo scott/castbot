@@ -140,6 +140,33 @@ CREATE INDEX IF NOT EXISTS idx_agents_user ON agents(user_id, section_id);
 CREATE INDEX IF NOT EXISTS idx_threads_user ON threads(user_id, agent_id);
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(user_id, thread_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+-- runs are owned rows. run_events inherit ownership through the run and are
+-- reached only after a query scoped by the caller's user id.
+CREATE TABLE IF NOT EXISTS runs (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  routine_run_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'streaming', 'waiting_approval', 'done', 'failed', 'stopped')),
+  stream_offset INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  error TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS run_events (
+  run_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('text', 'permission', 'tool', 'error', 'done')),
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id, thread_id, started_at);
 `
 
 func (s *Store) migrate() error {
@@ -155,7 +182,10 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (1) ON CONFLICT(version) DO NOTHING`); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (2) ON CONFLICT(version) DO NOTHING`)
+	if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (2) ON CONFLICT(version) DO NOTHING`); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (3) ON CONFLICT(version) DO NOTHING`)
 	return err
 }
 

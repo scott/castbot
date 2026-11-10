@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/auth"
+	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
 )
 
@@ -26,6 +27,17 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	echo := runtime.NewEcho(runtime.EchoOptions{Name: "echo"})
+	up := httptest.NewServer(echo)
+	t.Cleanup(func() {
+		up.Close()
+		echo.Close()
+	})
+	return newHarnessWith(t, runtime.NewHTTP(up.URL))
+}
+
+func newHarnessWith(t *testing.T, client runtime.Client) *harness {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"), store.Options{Argon: auth.Params{Time: 1, Memory: 8 * 1024, Threads: 1, KeyLen: 32}})
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +47,9 @@ func newHarness(t *testing.T) *harness {
 	for i := range key {
 		key[i] = 0x11
 	}
-	return &harness{t: t, srv: New(st, key), st: st, jar: map[string]*http.Cookie{}}
+	srv := New(st, key, client)
+	t.Cleanup(srv.Close)
+	return &harness{t: t, srv: srv, st: st, jar: map[string]*http.Cookie{}}
 }
 
 func (h *harness) account(email, name, password string) (store.User, string) {
@@ -385,8 +399,12 @@ func TestCSRFThemeEchoAndSessions(t *testing.T) {
 		t.Fatal(err, len(agents))
 	}
 	code, body, _ = h.do(http.MethodPost, "/agents/"+agents[0].ID+"/messages", h.form(url.Values{"body": {"hello there"}}), ip, map[string]string{"HX-Request": "true"})
-	if code != 200 || !strings.Contains(body, "Echo: hello there") || !strings.Contains(body, "hello there") {
+	if code != 200 || !strings.Contains(body, `sse-connect="/runs/`) || !strings.Contains(body, "hello there") || !strings.Contains(body, "Replying") {
 		t.Fatalf("echo %d %s", code, body)
+	}
+	body = h.poll(ip, "/agents/"+agents[0].ID, "You said: hello there")
+	if !strings.Contains(body, "You said: hello there") {
+		t.Fatalf("stored reply missing: %s", body)
 	}
 	if _, err := h.st.CreateSession(context.Background(), user.ID, "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1", true); err != nil {
 		t.Fatal(err)
@@ -433,6 +451,17 @@ func TestAuthzMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runRow, err := h.st.CreateRun(ctx, a.ID, thread.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SetMessageRun(ctx, a.ID, msg.ID, runRow.ID); err != nil {
+		t.Fatal(err)
+	}
+	const marker = "run-secret-marker-s02"
+	if _, err := h.st.FailRun(ctx, a.ID, runRow.ID, marker, 0); err != nil {
+		t.Fatal(err)
+	}
 	bSec, err := h.st.CreateSection(ctx, b.ID, "B-Private-Section")
 	if err != nil {
 		t.Fatal(err)
@@ -462,6 +491,8 @@ func TestAuthzMatrix(t *testing.T) {
 		{http.MethodGet, "/threads/" + thread.ID + "/messages", "", http.StatusOK},
 		{http.MethodGet, "/messages/" + msg.ID, "", http.StatusOK},
 		{http.MethodPost, "/messages/" + msg.ID, "body=updated+body", http.StatusOK},
+		{http.MethodGet, "/runs/" + runRow.ID, "", http.StatusOK},
+		{http.MethodGet, "/runs/" + runRow.ID + "/events", "", http.StatusOK},
 		{http.MethodGet, "/sections/" + pinned.ID, "", http.StatusOK},
 	}
 	removes := []step{
@@ -484,6 +515,7 @@ func TestAuthzMatrix(t *testing.T) {
 	}
 
 	h.login("b@example.com", "correct-horse-1", bSecret, "203.0.113.90:9", false)
+	h.assertRunHidden(runRow.ID, marker, "203.0.113.90:9")
 	_, homeB, _ := h.do(http.MethodGet, "/", "", "203.0.113.90:9", nil)
 	if strings.Contains(homeB, "A-Only-Agent") || strings.Contains(homeB, "A-Private-Section") {
 		t.Fatal("B home leaked A")
@@ -498,6 +530,15 @@ func TestAuthzMatrix(t *testing.T) {
 	h.jar = map[string]*http.Cookie{}
 	h.csrf = ""
 	h.login("a@example.com", "correct-horse-1", aSecret, "203.0.113.91:9", false)
+	code, resumeBody, _ := h.do(http.MethodGet, "/runs/"+runRow.ID+"/events", "", "203.0.113.91:9", map[string]string{"Last-Event-ID": "1"})
+	if code != http.StatusOK || strings.Contains(resumeBody, marker) {
+		t.Fatalf("owner resume %d %s", code, resumeBody)
+	}
+	code, _, hdr := h.do(http.MethodPost, "/runs/"+runRow.ID+"/retry", h.form(url.Values{}), "203.0.113.91:9", nil)
+	if code != http.StatusSeeOther {
+		t.Fatalf("retry %d %s", code, hdr.Get("Location"))
+	}
+	h.waitRuns(a.ID, thread.ID)
 	_, homeA, _ := h.do(http.MethodGet, "/", "", "203.0.113.91:9", nil)
 	if strings.Contains(homeA, "B-Only-Agent") || strings.Contains(homeA, "B-Private-Section") {
 		t.Fatal("A home leaked B")
@@ -702,9 +743,64 @@ func TestDenverClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, body, _ = h.do(http.MethodPost, "/agents/"+agents[0].ID+"/messages", h.form(url.Values{"body": {"hello there"}}), ip, nil)
-	_, body, _ = h.do(http.MethodGet, "/agents/"+agents[0].ID, "", ip, nil)
+	body = h.poll(ip, "/agents/"+agents[0].ID, "6:01 PM")
 	if !strings.Contains(body, "6:01 PM") || strings.Contains(body, "1:01 AM") {
 		t.Fatalf("message clock: %s", body)
+	}
+}
+
+func (h *harness) assertRunHidden(runID, marker, ip string) {
+	h.t.Helper()
+	for _, path := range []string{"/runs/" + runID, "/runs/" + runID + "/events"} {
+		code, body, _ := h.do(http.MethodGet, path, "", ip, nil)
+		if code != http.StatusNotFound || strings.Contains(body, marker) {
+			h.t.Fatalf("hidden %s %d %s", path, code, body)
+		}
+	}
+	code, body, _ := h.do(http.MethodGet, "/runs/"+runID+"/events", "", ip, map[string]string{"Last-Event-ID": "1"})
+	if code != http.StatusNotFound || strings.Contains(body, marker) {
+		h.t.Fatalf("hidden resume %d %s", code, body)
+	}
+	code, body, _ = h.do(http.MethodPost, "/runs/"+runID+"/retry", h.form(url.Values{}), ip, nil)
+	if code != http.StatusNotFound || strings.Contains(body, marker) {
+		h.t.Fatalf("hidden retry %d %s", code, body)
+	}
+}
+
+func (h *harness) waitRuns(userID, threadID string) {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		runs, err := h.st.ListThreadRuns(context.Background(), userID, threadID)
+		if err != nil {
+			h.t.Fatal(err)
+		}
+		busy := false
+		for _, row := range runs {
+			if row.Status == "queued" || row.Status == "streaming" || row.Status == "waiting_approval" {
+				busy = true
+			}
+		}
+		if !busy {
+			return
+		}
+		if time.Now().After(deadline) {
+			h.t.Fatal("run did not finish")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func (h *harness) poll(ip, path, needle string) string {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var body string
+	for {
+		_, body, _ = h.do(http.MethodGet, path, "", ip, nil)
+		if strings.Contains(body, needle) || time.Now().After(deadline) {
+			return body
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

@@ -794,7 +794,10 @@ textarea.ph::placeholder { color: var(--tx3); }
   height: 40px; width: 100%; min-width: 0; border-radius: 8px;
   border: 1px solid var(--line2); background: var(--bg); padding: 0 8px;
 }
-.m-user, .m-agent .body, .m-agent .body p, .acct-pill .grow, .set-row .v, .auth-card, .key-row .t2 { overflow-wrap: anywhere; }
+.m-agent.pending .stamp { color: var(--acc); }
+.errbox { display: grid; gap: 8px; max-width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--err); background: var(--err-soft); }
+.errbox p { margin: 0; color: var(--err); }
+.m-user, .m-agent .body, .m-agent .body p, .acct-pill .grow, .set-row .v, .auth-card, .key-row .t2, .errbox { overflow-wrap: anywhere; }
 .m-user, .m-agent .body p { white-space: pre-wrap; }
 .app, .main, .sb, .pane, .auth, .ch-h { min-width: 0; }
 .app { height: 100vh; }

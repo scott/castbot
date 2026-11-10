@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/scott/castbot/internal/run"
+	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
 )
 
@@ -39,13 +41,24 @@ type requestState struct {
 
 // Server is the HTTP application. It never queries SQLite itself.
 type Server struct {
-	store *store.Store
-	key   []byte
+	store  *store.Store
+	key    []byte
+	runs   *run.Runner
+	cancel context.CancelFunc
 }
 
 // New builds a server. key is the 32-byte session key.
-func New(st *store.Store, key []byte) *Server {
-	return &Server{store: st, key: key}
+// client talks to the agent runtime. S03 and S04 swap that client.
+func New(st *store.Store, key []byte, client runtime.Client) *Server {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Server{store: st, key: key, runs: run.New(ctx, st, client), cancel: cancel}
+}
+
+// Close stops run goroutines started by this server.
+func (s *Server) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 // Handler is the application router with security headers.
@@ -85,6 +98,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}", s.updateAgent)
 	mux.HandleFunc("POST /agents/{id}/delete", s.deleteAgent)
 	mux.HandleFunc("POST /agents/{id}/messages", s.postMessage)
+	mux.HandleFunc("GET /runs/{id}/events", s.runEvents)
+	mux.HandleFunc("GET /runs/{id}", s.getRun)
+	mux.HandleFunc("POST /runs/{id}/retry", s.retryRun)
 	mux.HandleFunc("GET /agents", s.listAgents)
 
 	mux.HandleFunc("GET /sections", s.listSections)

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"embed"
 	"html/template"
 	"strings"
@@ -21,3 +22,11 @@ var views = template.Must(template.New("root").Funcs(template.FuncMap{
 		return parts[0]
 	},
 }).ParseFS(templateFS, "templates/*.html"))
+
+func execTemplate(name string, data any) (string, error) {
+	var buf bytes.Buffer
+	if err := views.ExecuteTemplate(&buf, name, data); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
