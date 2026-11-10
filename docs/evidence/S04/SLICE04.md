@@ -10,7 +10,7 @@ Each account gets a machine cap of 4, stored in `user_quotas`. The slot is reser
 
 A reload that returns 409 is retried for about 30 seconds, or until the context ends. castlet rejects an http control plane URL unless the test flag `AllowHTTP` is set. The command leaves that flag false. Guest calls require https and a `.microvm.ondigitalocean.com` host unless the test flag `InsecureEdge` is set.
 
-Create runs after the response is sent. A disconnected browser does not cancel it. Startup drops stale pending rows and deletes `castbot`-tagged machines with no row. Demo machines and the `castbot-s00` tag are left alone. Only `CASTBOT_DO_TOKEN` enables the machine host.
+Create runs after the response is sent. A disconnected browser does not cancel it. Each database has its own instance id, and every machine it creates is tagged `castbot-inst:<id>` as well as `castbot` and `agent:<id>`. Startup drops stale pending rows and deletes only this database's untracked machines. Machines that lack the tag, including another castbot database on the same token, are left alone. Demo names, `castbot-s00`, and `castbot-live` stay as well. Only `CASTBOT_DO_TOKEN` enables the machine host.
 
 ## Live timing
 

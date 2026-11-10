@@ -417,6 +417,23 @@ func writeVM(w http.ResponseWriter, status int, id, state, reason string) {
 	})
 }
 
+func TestCreateBodyIncludesInstanceTag(t *testing.T) {
+	const secret = "cbt_bootstrap_secret_value"
+	api := newScriptAPI(t, secret)
+	m := newTestClient(t, api, "machine-token-for-tests")
+	spec := testSpec(secret)
+	spec.Tags = []string{"castbot-inst:0123456789abcdef0123456789abcdef"}
+	if _, err := m.Create(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(api.body), `"castbot-inst:0123456789abcdef0123456789abcdef"`) {
+		t.Fatalf("body %s", api.body)
+	}
+	if !strings.Contains(string(api.body), `"castbot"`) || !strings.Contains(string(api.body), `"agent:abc123"`) {
+		t.Fatalf("body %s", api.body)
+	}
+}
+
 func TestLiveWindowRequiresFortyMinutes(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	if err := LiveWindow(time.Time{}, false, now); err == nil {

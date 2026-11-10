@@ -152,6 +152,19 @@ func (s *Store) ReleaseVM(ctx context.Context, userID, agentID string) error {
 	return err
 }
 
+// NoteAgent stores a short status line on the caller's agent.
+func (s *Store) NoteAgent(ctx context.Context, userID, agentID, activity string) error {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return err
+	}
+	activity = strings.TrimSpace(activity)
+	if len(activity) > 180 {
+		activity = activity[:180]
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE agents SET activity = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, activity, agentID, userID)
+	return err
+}
+
 // ReleaseStalePending drops creating rows that never received a machine id
 // and are older than the cutoff. A process that died during create leaves
 // the quota slot taken. This runs at startup and is not a user handler.

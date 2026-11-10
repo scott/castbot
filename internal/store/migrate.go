@@ -245,6 +245,13 @@ CREATE TABLE IF NOT EXISTS user_quotas (
   workspace_id TEXT NOT NULL,
   max_agents INTEGER NOT NULL
 );
+
+-- One row per database. Machines this process creates are tagged with it,
+-- and the orphan sweep deletes only that tag.
+CREATE TABLE IF NOT EXISTS instance (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  id TEXT NOT NULL
+);
 `
 
 func (s *Store) migrate() error {
@@ -264,7 +271,10 @@ func (s *Store) migrate() error {
 SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_quotas)`, DefaultMaxAgents); err != nil {
 		return err
 	}
-	for _, version := range []int{1, 2, 3, 4, 5, 6} {
+	if err := s.ensureInstance(); err != nil {
+		return err
+	}
+	for _, version := range []int{1, 2, 3, 4, 5, 6, 7} {
 		if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING`, version); err != nil {
 			return err
 		}

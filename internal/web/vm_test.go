@@ -42,6 +42,13 @@ func TestMachineHandlers(t *testing.T) {
 			if spec.Idle != 5*time.Minute || spec.Name != host.MachineName(agent.ID) || spec.Bootstrap == "" {
 				t.Fatalf("idle %s name %s", spec.Idle, spec.Name)
 			}
+			inst, err := h.st.InstanceID(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !containsTag(spec.Tags, host.InstanceTag(inst)) {
+				t.Fatalf("create tags %#v", spec.Tags)
+			}
 			code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
 			if code != 200 || !strings.Contains(body, "Pause") || strings.Contains(body, spec.Bootstrap) || strings.Contains(body, "vm.example") {
 				t.Fatalf("page leaked or missed pause: %d", code)
@@ -426,9 +433,17 @@ func TestSweepReleasesStaleAndOrphans(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.st.SetNow(nil)
-	fake.Machines["demo"] = host.Machine{ID: "demo", Name: "cast-demo-agent-1", State: "paused", Tags: []string{"castbot"}}
-	fake.Machines["probe"] = host.Machine{ID: "probe", Name: "leftover-probe", State: "paused", Tags: []string{"castbot", "castbot-s00"}}
-	fake.Machines["orphan"] = host.Machine{ID: "orphan", Name: "castbot-leftover", State: "running", Tags: []string{"castbot", "castbot-live"}}
+	inst, err := h.st.InstanceID(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := host.InstanceTag(inst)
+	fake.Machines["demo"] = host.Machine{ID: "demo", Name: "cast-demo-agent-1", State: "paused", Tags: []string{"castbot", tag}}
+	fake.Machines["probe"] = host.Machine{ID: "probe", Name: "leftover-probe", State: "paused", Tags: []string{"castbot", "castbot-s00", tag}}
+	fake.Machines["live"] = host.Machine{ID: "live", Name: "castbot-harness", State: "running", Tags: []string{"castbot", "castbot-live", tag}}
+	fake.Machines["foreign"] = host.Machine{ID: "foreign", Name: "castbot-other", State: "running", Tags: []string{"castbot", "agent:someone"}}
+	fake.Machines["other"] = host.Machine{ID: "other", Name: "castbot-other-inst", State: "running", Tags: []string{"castbot", "castbot-inst:ffffffffffffffffffffffffffffffff"}}
+	fake.Machines["orphan"] = host.Machine{ID: "orphan", Name: "castbot-leftover", State: "running", Tags: []string{"castbot", tag, "agent:old"}}
 	h.srv.SweepMachines(context.Background())
 	if _, err := h.st.LiveVM(context.Background(), agent.UserID, agent.ID); err != store.ErrNotFound {
 		t.Fatal(err)
@@ -443,15 +458,67 @@ func TestSweepReleasesStaleAndOrphans(t *testing.T) {
 	if _, ok := fake.Machines["orphan"]; ok {
 		t.Fatal("orphan remained")
 	}
-	if _, ok := fake.Machines["demo"]; !ok {
-		t.Fatal("demo machine was deleted")
-	}
-	if _, ok := fake.Machines["probe"]; !ok {
-		t.Fatal("probe machine was deleted")
+	for _, id := range []string{"demo", "probe", "live", "foreign", "other"} {
+		if _, ok := fake.Machines[id]; !ok {
+			t.Fatalf("%s was deleted", id)
+		}
 	}
 	_, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
 	if !strings.Contains(body, "Try again") {
 		t.Fatal(body)
+	}
+}
+
+func TestSweepFreshDatabaseDeletesNothing(t *testing.T) {
+	h := newHarness(t)
+	fake := host.NewFake()
+	h.srv.SetHost(fake, "example.invalid/castbot-runtime:s04", "https://castbot.example")
+	fake.Machines["a"] = host.Machine{ID: "a", Name: "castbot-aaa", State: "running", Tags: []string{"castbot", "agent:aaa"}}
+	fake.Machines["b"] = host.Machine{ID: "b", Name: "castbot-bbb", State: "paused", Tags: []string{"castbot", "agent:bbb"}}
+	fake.Machines["c"] = host.Machine{ID: "c", Name: "castbot-ccc", State: "running", Tags: []string{"castbot", "agent:ccc", "castbot-inst:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+	h.srv.SweepMachines(context.Background())
+	if len(fake.Deletes) != 0 {
+		t.Fatalf("fresh database deleted %#v", fake.Deletes)
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if _, ok := fake.Machines[id]; !ok {
+			t.Fatalf("%s was deleted", id)
+		}
+	}
+}
+
+func TestStartingMachineIsNotReady(t *testing.T) {
+	ip := "203.0.113.164:9"
+	h, _, agent := machineUser(t, ip)
+	if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
+		t.Fatal(code)
+	}
+	waitMachine(t, h, agent, ip, "Pause")
+	_, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID, "", ip, nil)
+	if strings.Contains(body, "dot run") || strings.Contains(body, "chip run") {
+		t.Fatal("starting machine used the ready dot")
+	}
+	if !strings.Contains(body, "dot start") || !strings.Contains(body, "Starting") {
+		t.Fatal("starting state was not shown")
+	}
+}
+
+func TestRejectedAddressIsAnError(t *testing.T) {
+	ip := "203.0.113.165:9"
+	h, fake, agent := machineUser(t, ip)
+	fake.BlankEndpoint = true
+	if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
+		t.Fatal(code)
+	}
+	waitMachine(t, h, agent, ip, "The machine address was not accepted.")
+	if _, err := h.st.LiveVM(context.Background(), agent.UserID, agent.ID); err != store.ErrNotFound {
+		t.Fatal(err)
+	}
+	if len(fake.Deletes) != 1 {
+		t.Fatalf("deletes %#v", fake.Deletes)
+	}
+	if _, err := h.st.GetAgent(context.Background(), agent.UserID, agent.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -488,6 +555,15 @@ func waitMachine(t *testing.T, h *harness, agent store.Agent, ip, needle string)
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("machine page never showed %q (%d bytes)", needle, len(last))
+}
+
+func containsTag(tags []string, want string) bool {
+	for _, tag := range tags {
+		if tag == want {
+			return true
+		}
+	}
+	return false
 }
 
 func containsCall(calls []string, want string) bool {

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/scott/castbot/internal/host"
@@ -22,14 +23,17 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 	client := s.client
 	s.mu.Unlock()
 	if h != nil {
-		_, liveErr := s.store.LiveVM(ctx, job.UserID, job.AgentID)
+		vm, liveErr := s.store.LiveVM(ctx, job.UserID, job.AgentID)
 		if liveErr == nil {
 			endpoint, token, err := s.store.VMCredentials(ctx, job.UserID, job.AgentID)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return nil, err
+			}
 			if err == nil && endpoint != "" && token != "" {
 				return h.Stream(ctx, endpoint, token, req)
 			}
-			if err != nil && !errors.Is(err, store.ErrNotFound) {
-				return nil, err
+			if endpoint == "" && vm.State != "creating" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
+				return nil, &run.Notice{Text: "The machine address was not accepted."}
 			}
 			return nil, &run.Notice{Text: "The machine is starting."}
 		}
@@ -101,15 +105,25 @@ func (s *Server) finishProvision(ctx context.Context, h host.AgentHost, userID s
 	if idle <= 0 {
 		idle = host.DefaultIdle
 	}
+	inst, err := s.store.InstanceID(ctx)
+	if err != nil {
+		s.releaseQuiet(userID, agent.ID)
+		return
+	}
 	created, err := h.Create(ctx, host.CreateSpec{
 		Name: host.MachineName(agent.ID), AgentID: agent.ID, Image: image,
 		Region: host.DefaultRegion, CPU: host.DefaultCPU, MemoryMiB: host.DefaultMemoryMiB,
 		Idle: idle, HTTPPort: host.DefaultHTTPPort,
 		ControlURL: publicURL, Bootstrap: boot,
+		Tags: []string{host.InstanceTag(inst)},
 	})
-	if err != nil || created.State != "running" || created.ID == "" {
+	if err != nil || created.State != "running" || created.ID == "" || created.Endpoint == "" {
 		if created.ID != "" {
 			s.deleteQuiet(h, created.ID)
+		}
+		if err == nil && created.ID != "" && created.Endpoint == "" {
+			s.releaseNoted(userID, agent.ID, "The machine address was not accepted. You can try again.")
+			return
 		}
 		s.releaseQuiet(userID, agent.ID)
 		return
@@ -135,9 +149,16 @@ func detach(ctx context.Context) context.Context {
 }
 
 func (s *Server) releaseQuiet(userID, agentID string) {
+	s.releaseNoted(userID, agentID, "")
+}
+
+func (s *Server) releaseNoted(userID, agentID, note string) {
 	cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_ = s.store.ReleaseVM(cctx, userID, agentID)
+	if note != "" {
+		_ = s.store.NoteAgent(cctx, userID, agentID, note)
+	}
 }
 
 func (s *Server) deleteQuiet(h host.AgentHost, id string) {
@@ -149,9 +170,10 @@ func (s *Server) deleteQuiet(h host.AgentHost, id string) {
 	_ = h.Delete(cctx, id)
 }
 
-// SweepMachines drops stale pending reservations and deletes castbot-tagged
-// machines that have no row. It runs at startup. Demo machines and the
-// leftover probe tag are left alone.
+// SweepMachines drops stale pending reservations and deletes machines this
+// database created that have no live row. A machine without this database's
+// castbot-inst tag is left alone, including other castbot processes that
+// share the token. Demo names, castbot-s00, and castbot-live stay as well.
 func (s *Server) SweepMachines(ctx context.Context) {
 	n, err := s.store.ReleaseStalePending(ctx, stalePending)
 	if err != nil {
@@ -168,6 +190,12 @@ func (s *Server) SweepMachines(ctx context.Context) {
 	if !ok || h == nil {
 		return
 	}
+	inst, err := s.store.InstanceID(ctx)
+	if err != nil || inst == "" {
+		log.Printf("instance id unavailable")
+		return
+	}
+	tag := host.InstanceTag(inst)
 	vms, err := lister.List(ctx)
 	if err != nil {
 		log.Printf("machine list failed")
@@ -179,7 +207,10 @@ func (s *Server) SweepMachines(ctx context.Context) {
 		return
 	}
 	for _, vm := range vms {
-		if vm.ID == "" || !hasTag(vm, "castbot") {
+		if vm.ID == "" || !hasTag(vm, tag) {
+			continue
+		}
+		if hasTag(vm, "castbot-live") {
 			continue
 		}
 		if err := host.GuardDelete(vm); err != nil {
@@ -194,6 +225,47 @@ func (s *Server) SweepMachines(ctx context.Context) {
 		}
 		log.Printf("deleted orphan machine")
 	}
+}
+
+func failedLead(agent store.Agent) string {
+	if strings.TrimSpace(agent.Activity) != "" {
+		return agent.Activity
+	}
+	return "The machine did not start. You can try again."
+}
+
+// paintAgent keeps a machine that is not ready to chat off the green ready dot.
+func (s *Server) paintAgent(ctx context.Context, userID string, a store.Agent, on bool, loc *time.Location) agentView {
+	v := presentAgent(a, on, loc)
+	if v.Dot != "run" {
+		return v
+	}
+	s.mu.Lock()
+	h := s.machine
+	s.mu.Unlock()
+	if h == nil {
+		return v
+	}
+	vm, err := s.store.LiveVM(ctx, userID, a.ID)
+	if err != nil {
+		return v
+	}
+	endpoint, token, credErr := s.store.VMCredentials(ctx, userID, a.ID)
+	if credErr == nil && endpoint != "" && token != "" {
+		return v
+	}
+	if endpoint == "" && vm.State != "creating" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
+		v.Dot = "err"
+		v.ChipClass = "err"
+		v.ChipLabel = "Failed"
+		v.Sub, v.SubClass = joinDot(a.Title, "Address rejected"), "err"
+		return v
+	}
+	v.Dot = "start"
+	v.ChipClass = "start"
+	v.ChipLabel = "Starting"
+	v.Sub, v.SubClass = joinDot(a.Title, "Starting"), "start"
+	return v
 }
 
 func hasTag(vm host.Machine, tag string) bool {
@@ -321,7 +393,7 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 		view.CanStart = agent.Status == "draft" || agent.Status == "failed"
 		view.CanRetry = agent.Status == "failed"
 		if agent.Status == "failed" {
-			view.Lead = "The machine did not start. You can try again."
+			view.Lead = failedLead(*agent)
 		} else {
 			view.Lead = "This agent has no machine yet."
 		}
@@ -340,7 +412,7 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 		case "creating":
 			view.Lead = "The machine is waking."
 		case "failed":
-			view.Lead = "The machine did not start. You can try again."
+			view.Lead = failedLead(*agent)
 			view.CanRetry = h != nil
 		default:
 			view.Lead = "The machine record is saved. A check does not wake it."

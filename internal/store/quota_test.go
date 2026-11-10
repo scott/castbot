@@ -6,6 +6,24 @@ import (
 	"testing"
 )
 
+func TestInstanceIDIsStablePerDatabase(t *testing.T) {
+	ctx := context.Background()
+	a := testStore(t)
+	b := testStore(t)
+	first, err := a.InstanceID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := a.InstanceID(ctx)
+	if err != nil || again != first {
+		t.Fatalf("stable %q %q %v", first, again, err)
+	}
+	other, err := b.InstanceID(ctx)
+	if err != nil || other == first || other == "" {
+		t.Fatalf("other %q %v", other, err)
+	}
+}
+
 func TestQuotaAndVMScope(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

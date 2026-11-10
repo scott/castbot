@@ -80,7 +80,7 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	p.Agent = presentAgent(agent, true, userLocation(user.Timezone))
+	p.Agent = s.paintAgent(r.Context(), user.ID, agent, true, userLocation(user.Timezone))
 	p.HasAgent = true
 	p.Machine = machine
 	p.FormError = formError
@@ -471,7 +471,7 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 	approvals := 0
 	for _, a := range agents {
 		approvals += a.Approvals
-		by[a.SectionID] = append(by[a.SectionID], presentAgent(a, false, loc))
+		by[a.SectionID] = append(by[a.SectionID], s.paintAgent(r.Context(), user.ID, a, false, loc))
 	}
 	var sv []sectionView
 	for _, sec := range sections {

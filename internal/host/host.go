@@ -62,8 +62,15 @@ type CreateSpec struct {
 	HTTPPort   int
 	ControlURL string
 	Bootstrap  string
-	// Tags are added after castbot and agent:<id>. The live harness sets castbot-live.
+	// Tags are added after castbot and agent:<id>. The server adds
+	// castbot-inst:<id>. The live harness sets castbot-live.
 	Tags []string
+}
+
+// InstanceTag is the tag that ties a machine to one database.
+// The orphan sweep deletes only machines that carry this exact tag.
+func InstanceTag(id string) string {
+	return "castbot-inst:" + strings.TrimSpace(id)
 }
 
 // Machine is the record returned by the machine API.

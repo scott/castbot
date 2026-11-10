@@ -24,6 +24,8 @@ type Fake struct {
 	WaitCreate <-chan struct{}
 	// CreateStarted is signaled when Create begins. Tests use a buffer of 1.
 	CreateStarted chan struct{}
+	// BlankEndpoint makes Create return a running machine with no address.
+	BlankEndpoint bool
 }
 
 // NewFake returns an empty host.
@@ -81,10 +83,23 @@ func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 	if len(f.Creates) > 1 {
 		id = "vm-test-" + spec.AgentID
 	}
+	endpoint := "https://vm.example"
+	if f.BlankEndpoint {
+		endpoint = ""
+	}
+	tags := []string{"castbot", "agent:" + spec.AgentID}
+	seen := map[string]bool{"castbot": true, "agent:" + spec.AgentID: true}
+	for _, tag := range spec.Tags {
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
 	m := Machine{
 		ID: id, Name: spec.Name, State: "running",
-		Endpoint: "https://vm.example", Image: spec.Image, Region: spec.Region,
-		CPU: spec.CPU, Memory: spec.MemoryMiB, Tags: []string{"castbot", "agent:" + spec.AgentID},
+		Endpoint: endpoint, Image: spec.Image, Region: spec.Region,
+		CPU: spec.CPU, Memory: spec.MemoryMiB, Tags: tags,
 	}
 	if f.ForceState != "" {
 		m.State = f.ForceState
