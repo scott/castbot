@@ -29,6 +29,16 @@ var (
 	ErrInvalid   = errors.New("invalid")
 	// ErrQuota is the per-user machine cap. It is not a billing product.
 	ErrQuota = errors.New("agent limit reached")
+	// ErrCLICap is the active Cast CLI token cap for one agent.
+	ErrCLICap = errors.New("cli token cap")
+	// ErrCLIRate is the short window on minting Cast CLI tokens.
+	ErrCLIRate = errors.New("cli token rate")
+)
+
+const (
+	cliActiveCap  = 10
+	cliMintMax    = 5
+	cliMintWindow = time.Minute
 )
 
 // Store scopes every owned-row query by the caller's user id.

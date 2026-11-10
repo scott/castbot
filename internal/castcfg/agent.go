@@ -430,11 +430,16 @@ func rejectDuplicates(n *yaml.Node, path string) error {
 func secretKey(key string) bool {
 	k := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
 	switch k {
+	case "max_tokens", "sort_key":
+		return false
 	case "env", "headers", "token", "secret", "password", "api_key", "apikey",
 		"access_token", "refresh_token", "authorization", "private_key",
 		"client_secret", "credentials", "auth_token", "secret_key":
 		return true
 	default:
+		if strings.HasSuffix(k, "_tokens") {
+			return false
+		}
 		if strings.Contains(k, "token") || strings.Contains(k, "secret") ||
 			strings.Contains(k, "password") || strings.Contains(k, "passwd") ||
 			strings.Contains(k, "api_key") || strings.Contains(k, "apikey") ||

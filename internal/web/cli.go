@@ -19,11 +19,12 @@ type cliFlash struct {
 type flashKey struct{}
 
 type importBlob struct {
-	Name     string `json:"name"`
-	AgentID  string `json:"agent_id"`
-	URL      string `json:"url"`
-	Provider string `json:"provider"`
-	Token    string `json:"token"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name,omitempty"`
+	AgentID     string `json:"agent_id"`
+	URL         string `json:"url"`
+	Provider    string `json:"provider"`
+	Token       string `json:"token"`
 }
 
 func (s *Server) exportCLI(w http.ResponseWriter, r *http.Request) {
@@ -49,20 +50,32 @@ func (s *Server) exportCLI(w http.ResponseWriter, r *http.Request) {
 		flash.note = "This agent has no machine address yet."
 	} else {
 		_, plain, err := s.store.IssueCLIToken(r.Context(), user.ID, agent.ID)
-		if err != nil {
+		if err == store.ErrCLICap {
+			flash.note = "Revoke a token before adding another."
+		} else if err == store.ErrCLIRate {
+			flash.note = "Too many tokens were added just now. Wait a minute and try again."
+		} else if err != nil {
 			http.Error(w, "Error", http.StatusInternalServerError)
 			return
+		} else {
+			slug, err := s.store.CLISlug(r.Context(), user.ID, agent.ID)
+			if err != nil {
+				http.Error(w, "Error", http.StatusInternalServerError)
+				return
+			}
+			raw, err := json.MarshalIndent(importBlob{
+				Name: slug, DisplayName: agent.Name, AgentID: agent.ID, URL: endpoint, Provider: "microvm", Token: plain,
+			}, "", "  ")
+			if err != nil {
+				http.Error(w, "Error", http.StatusInternalServerError)
+				return
+			}
+			flash.blob = string(raw)
+			flash.note = "Copy this now. It is shown once."
+			if push := s.pushCLITokens(r.Context(), user.ID, agent.ID); push != "" {
+				flash.note = flash.note + " " + push
+			}
 		}
-		raw, err := json.MarshalIndent(importBlob{
-			Name: agent.Name, AgentID: agent.ID, URL: endpoint, Provider: "microvm", Token: plain,
-		}, "", "  ")
-		if err != nil {
-			http.Error(w, "Error", http.StatusInternalServerError)
-			return
-		}
-		flash.blob = string(raw)
-		flash.note = "Copy this now. It is shown once."
-		s.pushCLITokens(r.Context(), user.ID, agent.ID)
 	}
 	r = r.WithContext(context.WithValue(r.Context(), flashKey{}, flash))
 	s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusOK, "")
@@ -80,7 +93,9 @@ func (s *Server) revokeCLI(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.RevokeCLIToken(r.Context(), user.ID, agentID, r.PathValue("token")); s.missing(w, err) {
 		return
 	}
-	s.pushCLITokens(r.Context(), user.ID, agentID)
+	if push := s.pushCLITokens(r.Context(), user.ID, agentID); push != "" {
+		r = r.WithContext(context.WithValue(r.Context(), flashKey{}, cliFlash{note: push}))
+	}
 	if r.Header.Get("HX-Request") == "true" {
 		s.renderCLISection(w, r, user, agentID)
 		return
@@ -116,6 +131,12 @@ func (s *Server) renderCLISection(w http.ResponseWriter, r *http.Request, user s
 		}
 		p.CLITokens = append(p.CLITokens, view)
 	}
+	if slug, err := s.store.CLISlug(r.Context(), user.ID, agent.ID); err == nil {
+		p.CLIName = slug
+	}
+	if flash, ok := r.Context().Value(flashKey{}).(cliFlash); ok && flash.note != "" {
+		p.CLINote = flash.note
+	}
 	s.render(w, http.StatusOK, "cliBox", p)
 }
 
@@ -133,6 +154,30 @@ func (s *Server) machineCLITokens(w http.ResponseWriter, r *http.Request) {
 		tokens = []store.CLIHash{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tokens": tokens})
+}
+
+func (s *Server) machineCLIUsed(w http.ResponseWriter, r *http.Request) {
+	userID, ok := s.machineUser(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	if err := dec.Decode(&body); err != nil || body.ID == "" {
+		writeText(w, http.StatusBadRequest, "bad request\n")
+		return
+	}
+	if err := s.store.TouchCLIToken(r.Context(), userID, r.PathValue("id"), body.ID); err != nil {
+		if err == store.ErrNotFound {
+			writeText(w, http.StatusNotFound, "Not found\n")
+			return
+		}
+		writeText(w, http.StatusInternalServerError, "Error\n")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) machineJournal(w http.ResponseWriter, r *http.Request) {
@@ -164,37 +209,40 @@ func (s *Server) machineJournal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"last": last})
 }
 
-func (s *Server) pushCLITokens(ctx context.Context, userID, agentID string) {
+func (s *Server) pushCLITokens(ctx context.Context, userID, agentID string) string {
 	vm, err := s.store.LiveVM(ctx, userID, agentID)
 	if err != nil {
-		return
+		return ""
 	}
 	state, endpoint := s.observedMachine(ctx, userID, agentID, vm)
 	if state != "running" || endpoint == "" {
-		return
+		return "The machine is not running, so it was not updated."
 	}
 	_, token, err := s.store.VMCredentials(ctx, userID, agentID)
 	if err != nil || token == "" {
-		return
+		return "The machine is not running, so it was not updated."
 	}
 	hashes, err := s.store.ListCLITokenHashes(ctx, userID, agentID)
 	if err != nil {
-		return
+		return ""
 	}
 	if hashes == nil {
 		hashes = []store.CLIHash{}
 	}
 	body, err := json.Marshal(map[string]any{"tokens": hashes})
 	if err != nil {
-		return
+		return ""
 	}
 	s.mu.Lock()
 	h := s.machine
 	s.mu.Unlock()
 	if h == nil {
-		return
+		return ""
 	}
-	_ = h.PushCLI(ctx, endpoint, token, body)
+	if err := h.PushCLI(ctx, endpoint, token, body); err != nil {
+		return "The machine did not accept the token change."
+	}
+	return ""
 }
 
 func (s *Server) pullJournal(ctx context.Context, userID, agentID, endpoint, token string) {

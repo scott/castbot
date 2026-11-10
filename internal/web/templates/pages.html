@@ -334,6 +334,7 @@
 <section class="cli-box" id="cast-cli">
 <h3>Cast CLI</h3>
 <p class="fineprint">A token for the Cast CLI on your computer. It is shown once. castbot does not hand out a cloud token. castbot owns this machine.</p>
+{{if .CLIName}}<p class="fineprint">CLI name: <span class="mono">{{.CLIName}}</span>. cast connect uses this name.</p>{{end}}
 {{if .CLINote}}<p class="fineprint">{{.CLINote}}</p>{{end}}
 {{if .CLIBlob}}<pre class="cli-blob">{{.CLIBlob}}</pre>{{end}}
 <form method="post" action="/agents/{{.Agent.ID}}/cli"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Add to Cast CLI</button></form>

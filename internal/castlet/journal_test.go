@@ -106,6 +106,111 @@ func TestIncompleteTurnIsMarked(t *testing.T) {
 	}
 }
 
+func TestRevokedTokenFailsClosed(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"jsonrpc\":\"2.0\",\"result\":{\"parts\":[{\"kind\":\"text\",\"text\":\"pong\"}]}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(up.Close)
+	hash := sha256Hex("cli-token-for-tests")
+	open := true
+	var used int
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !open {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cli-used") {
+			used++
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_, _ = io.WriteString(w, `{"tokens":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","hash":"`+hash+`","revoked":false}]}`)
+	}))
+	t.Cleanup(cp.Close)
+	sup, err := New(Config{
+		Token: "agent-token", RuntimeURL: up.URL, AgentDir: t.TempDir(),
+		ControlURL: cp.URL, AgentID: "agent", AllowHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup.MarkReady()
+	body := `{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user","parts":[{"kind":"text","text":"hi"}]},"metadata":{"sessionId":"sess-1"}}}`
+	send := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	send.Header.Set("X-Cast-Authorization", "Bearer cli-token-for-tests")
+	rec := httptest.NewRecorder()
+	sup.ServeHTTP(rec, send)
+	if rec.Code != http.StatusOK || used != 1 {
+		t.Fatalf("first %d used %d", rec.Code, used)
+	}
+	open = false
+	again := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	again.Header.Set("X-Cast-Authorization", "Bearer cli-token-for-tests")
+	rec = httptest.NewRecorder()
+	sup.ServeHTTP(rec, again)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("stale cache %d", rec.Code)
+	}
+}
+
+func TestDecisionKeepsThePermissionSession(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"jsonrpc\":\"2.0\",\"result\":{\"metadata\":{\"permissionRequest\":{\"id\":\"perm-1\",\"tool\":\"bash\"}}}}\n\n")
+		_, _ = io.WriteString(w, "data: {\"jsonrpc\":\"2.0\",\"result\":{\"parts\":[{\"kind\":\"text\",\"text\":\"wait\"}]}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(up.Close)
+	sup, err := New(Config{Token: "agent-token", RuntimeURL: up.URL, AgentDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup.MarkReady()
+	body := `{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user","messageId":"msg-1","parts":[{"kind":"text","text":"hi"}]},"metadata":{"sessionId":"sess-9","streamId":"run-9"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("X-Cast-Authorization", "Bearer agent-token")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	sup.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatal(rec.Code)
+	}
+	respond := `{"jsonrpc":"2.0","id":"2","method":"permission/respond","params":{"id":"perm-1","approved":true}}`
+	dec := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(respond))
+	dec.Header.Set("X-Cast-Authorization", "Bearer agent-token")
+	rec = httptest.NewRecorder()
+	sup.ServeHTTP(rec, dec)
+	if rec.Code != http.StatusOK {
+		t.Fatal(rec.Code)
+	}
+	entries := sup.journalAfter(0)
+	var request, decision journalEntry
+	for _, e := range entries {
+		if e.Kind == "request" {
+			request = e
+		}
+		if e.Kind == "decision" {
+			decision = e
+		}
+	}
+	if request.SessionID != "sess-9" || request.MessageID != "msg-1" || request.StreamID != "run-9" {
+		t.Fatalf("request %+v", request)
+	}
+	if decision.SessionID != "sess-9" || decision.RequestID != "perm-1" || decision.Decision != "approved" {
+		t.Fatalf("decision %+v", decision)
+	}
+	later := sup.journalAfter(request.Seq)
+	if len(later) == 0 || later[0].Seq <= request.Seq {
+		t.Fatalf("tail %+v", later)
+	}
+	raw := string(mustRead(t, sup.stateDir()+"/journal.seq"))
+	if strings.TrimSpace(raw) == "" || strings.TrimSpace(raw) == "1" {
+		t.Fatalf("seq file %s", raw)
+	}
+}
+
 func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])

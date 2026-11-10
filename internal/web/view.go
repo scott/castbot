@@ -103,6 +103,7 @@ type page struct {
 	Machine    machineView
 	CLIBlob    string
 	CLINote    string
+	CLIName    string
 	CLITokens  []cliTokView
 	Threads    []threadView
 	ThreadID   string

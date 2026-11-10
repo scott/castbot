@@ -231,6 +231,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}/cli", s.exportCLI)
 	mux.HandleFunc("POST /agents/{id}/cli/{token}/revoke", s.revokeCLI)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/cli-tokens", s.machineCLITokens)
+	mux.HandleFunc("POST /api/castlet/agents/{id}/cli-used", s.machineCLIUsed)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/journal", s.machineJournal)
 	mux.HandleFunc("GET /agents/{id}/bundle", s.ownerBundle)
 	mux.HandleFunc("GET /agents/{id}/secrets", s.ownerSecrets)

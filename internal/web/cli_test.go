@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -61,6 +62,9 @@ func TestExportShowsTheTokenOnce(t *testing.T) {
 	token := blobToken(t, body)
 	if strings.Count(body, token) != 1 || !strings.Contains(body, "Add to Cast CLI") || !strings.Contains(body, "microvm") {
 		t.Fatal("token was not shown once")
+	}
+	if !strings.Contains(body, "CLI name") || !strings.Contains(body, ">atlas<") || !strings.Contains(body, "display_name") {
+		t.Fatal("cli name was not shown")
 	}
 	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
 	if code != http.StatusOK || strings.Contains(body, token) {
@@ -204,6 +208,191 @@ func TestHistoryParity(t *testing.T) {
 	}
 }
 
+func TestWebTurnsStayOnTheDMThread(t *testing.T) {
+	echo := runtime.NewEcho(runtime.EchoOptions{Name: "Atlas"})
+	up := httptest.NewServer(echo)
+	t.Cleanup(func() {
+		up.Close()
+		echo.Close()
+	})
+	h := newHarnessWith(t, runtime.NewHTTP(up.URL))
+	fake := host.NewFake()
+	h.srv.SetHost(&castHost{Fake: fake}, "example.invalid/castbot-runtime:s06", "https://castbot.example")
+	user, _ := h.account("dm-journal@example.com", "Owner", "correct-horse-1")
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, thread, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := h.st.IssueBootstrap(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentToken, err := h.st.ExchangeBootstrap(context.Background(), agent.ID, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.BeginVM(context.Background(), user.ID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s06"); err != nil {
+		t.Fatal(err)
+	}
+	app := httptest.NewServer(h.srv.Handler())
+	t.Cleanup(app.Close)
+	sup, err := castletNew(t, app.URL, up.URL, agent.ID, agentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest := httptest.NewServer(sup)
+	t.Cleanup(guest.Close)
+	if err := h.st.FinishVM(context.Background(), user.ID, agent.ID, "vm-dm", guest.URL, "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SaveVMToken(context.Background(), agent.ID, agentToken); err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.st.CreateMessage(context.Background(), user.ID, thread.ID, "user", user.ID, "yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.st.CreateMessage(context.Background(), user.ID, thread.ID, "user", user.ID, "yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := bodies(t, h.st, user.ID, thread.ID)
+	for _, id := range []string{first.ID, second.ID} {
+		payload := `{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user","messageId":"` + id + `","parts":[{"kind":"text","text":"yes"}]},"metadata":{"sessionId":"` + thread.ID + `","streamId":"run-` + id + `"}}}`
+		req, err := http.NewRequest(http.MethodPost, guest.URL+"/", strings.NewReader(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Cast-Authorization", "Bearer "+agentToken)
+		req.Header.Set("Accept", "text/event-stream")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("send %d", res.StatusCode)
+		}
+	}
+	pulled := getJournal(t, guest.URL, agentToken)
+	postJournal(t, app.URL, agent.ID, agentToken, pulled)
+	postJournal(t, app.URL, agent.ID, agentToken, pulled)
+	if strings.Join(bodies(t, h.st, user.ID, thread.ID), "\n") != strings.Join(before, "\n") {
+		t.Fatal("web turns were copied")
+	}
+	threads, err := h.st.ListThreadsByAgent(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, th := range threads {
+		if th.Kind == "cli" {
+			t.Fatal("web thread id opened a cli thread")
+		}
+	}
+}
+
+type failPush struct {
+	*host.Fake
+}
+
+func (f failPush) PushCLI(context.Context, string, string, []byte) error {
+	return errors.New("unreachable")
+}
+
+func TestRevokeReportsAPushFailure(t *testing.T) {
+	ip := "203.0.113.214:9"
+	h, fake, agent := machineUser(t, ip)
+	h.srv.SetHost(&failPush{Fake: fake}, "example.invalid/castbot-runtime:s06", "https://castbot.example")
+	if _, err := h.st.BeginVM(context.Background(), agent.UserID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s06"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.FinishVM(context.Background(), agent.UserID, agent.ID, "vm-cli", "https://demo.microvm.ondigitalocean.com", "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := h.st.IssueBootstrap(context.Background(), agent.UserID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentToken, err := h.st.ExchangeBootstrap(context.Background(), agent.ID, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SaveVMToken(context.Background(), agent.ID, agentToken); err != nil {
+		t.Fatal(err)
+	}
+	fake.Machines["vm-cli"] = host.Machine{ID: "vm-cli", State: "running", Endpoint: "https://demo.microvm.ondigitalocean.com"}
+	id, _, err := h.st.IssueCLIToken(context.Background(), agent.UserID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/cli/"+id+"/revoke", h.form(cliForm()), ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, "Revoked") || !strings.Contains(body, "did not accept the token change") {
+		t.Fatalf("revoke %d", code)
+	}
+}
+
+func TestCLIUseUpdatesLastUsed(t *testing.T) {
+	echo := runtime.NewEcho(runtime.EchoOptions{Name: "Atlas"})
+	up := httptest.NewServer(echo)
+	t.Cleanup(func() {
+		up.Close()
+		echo.Close()
+	})
+	h := newHarnessWith(t, runtime.NewHTTP(up.URL))
+	fake := host.NewFake()
+	h.srv.SetHost(&castHost{Fake: fake}, "example.invalid/castbot-runtime:s06", "https://castbot.example")
+	user, _ := h.account("used-cli@example.com", "Owner", "correct-horse-1")
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := h.st.IssueBootstrap(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentToken, err := h.st.ExchangeBootstrap(context.Background(), agent.ID, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, cliToken, err := h.st.IssueCLIToken(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.BeginVM(context.Background(), user.ID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s06"); err != nil {
+		t.Fatal(err)
+	}
+	app := httptest.NewServer(h.srv.Handler())
+	t.Cleanup(app.Close)
+	sup, err := castletNew(t, app.URL, up.URL, agent.ID, agentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest := httptest.NewServer(sup)
+	t.Cleanup(guest.Close)
+	if err := h.st.FinishVM(context.Background(), user.ID, agent.ID, "vm-used", guest.URL, "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SaveVMToken(context.Background(), agent.ID, agentToken); err != nil {
+		t.Fatal(err)
+	}
+	if code := cliSend(guest.URL, cliToken, "sess-used", "hello"); code != http.StatusOK {
+		t.Fatalf("cli %d", code)
+	}
+	listed, err := h.st.ListCLITokens(context.Background(), user.ID, agent.ID)
+	if err != nil || len(listed) != 1 || listed[0].ID != id || listed[0].LastUsedAt == "" {
+		t.Fatalf("last used %+v %v", listed, err)
+	}
+}
+
 func TestApplyPendingRechecksStatus(t *testing.T) {
 	ip := "203.0.113.213:9"
 	h, fake, agent := machineUser(t, ip)
@@ -252,7 +441,7 @@ func TestWorkaroundDocDoesNotClaimCLIChat(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	for _, needle := range []string{"cast shutdown", "cast upgrade", "does not complete CLI chat", "~/.cast"} {
+	for _, needle := range []string{"cast shutdown", "cast upgrade", "does not complete CLI chat", "~/.cast", "SHA-256", "volume_config", "unpatched Cast does not refuse", "0600"} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("missing %s", needle)
 		}

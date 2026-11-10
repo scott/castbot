@@ -146,6 +146,12 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 			}
 			p.CLITokens = append(p.CLITokens, view)
 		}
+		if slug, err := s.store.CLISlug(r.Context(), user.ID, agent.ID); err != nil {
+			http.Error(w, "Error", http.StatusInternalServerError)
+			return
+		} else {
+			p.CLIName = slug
+		}
 	}
 	if flash, ok := r.Context().Value(flashKey{}).(cliFlash); ok {
 		p.CLIBlob = flash.blob

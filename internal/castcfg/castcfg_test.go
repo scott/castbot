@@ -135,6 +135,23 @@ func TestCompoundSecretNamesAreDropped(t *testing.T) {
 	}
 }
 
+func TestCountKeysAreNotSecrets(t *testing.T) {
+	raw := "name: Atlas\nmax_tokens: 16\nsort_key: name\nprompt_tokens: 3\ngithub_token: compound-token-value\nnote: hello\n"
+	spec, err := ParseYAML(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(spec.Kept)
+	for _, needle := range []string{"max_tokens", "16", "sort_key", "prompt_tokens", "hello"} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("missing %s\n%s", needle, text)
+		}
+	}
+	if strings.Contains(text, "compound-token-value") || strings.Contains(text, "github_token") {
+		t.Fatalf("kept a secret\n%s", text)
+	}
+}
+
 func TestSummarizeKeptListsLeftovers(t *testing.T) {
 	raw := "name: Atlas\nbrain:\n  model: openrouter/x\n  model_override: fast\nrepository: github.com/acme/helper\ndeployment:\n  region: mkc1\nskills:\n  - review\n"
 	spec, err := ParseYAML(raw)

@@ -60,20 +60,25 @@ type Supervisor struct {
 	proxyClient *http.Client
 	logs        *ring
 
-	mu        sync.Mutex
-	reloadMu  sync.Mutex
-	journalMu sync.Mutex
-	cliMu     sync.Mutex
-	cliTokens []cliToken
-	cliLoaded bool
-	token     string
-	ready     bool
-	version   string
-	sha       string
-	secrets   []secret
-	proc      *exec.Cmd
-	procDone  chan struct{}
-	bootErr   string
+	mu           sync.Mutex
+	reloadMu     sync.Mutex
+	journalMu    sync.Mutex
+	cliMu        sync.Mutex
+	cliTokens    []cliToken
+	cliLoaded    bool
+	journalReady bool
+	journalNext  int
+	journalEnd   int64
+	journalOff   map[int]int64
+	permSession  map[string]string
+	token        string
+	ready        bool
+	version      string
+	sha          string
+	secrets      []secret
+	proc         *exec.Cmd
+	procDone     chan struct{}
+	bootErr      string
 }
 
 var errReloadBusy = errors.New("reload in progress")

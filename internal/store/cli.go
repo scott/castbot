@@ -35,6 +35,8 @@ type JournalEntry struct {
 	Tool       string `json:"tool"`
 	RequestID  string `json:"request_id"`
 	Decision   string `json:"decision"`
+	MessageID  string `json:"message_id"`
+	StreamID   string `json:"stream_id"`
 	Incomplete bool   `json:"incomplete"`
 }
 
@@ -57,12 +59,80 @@ func (s *Store) IssueCLIToken(ctx context.Context, userID, agentID string) (id, 
 	if len(prefix) > 12 {
 		prefix = prefix[:12]
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO cli_tokens(id, workspace_id, user_id, agent_id, kind, token_hash, prefix, scopes, created_at) VALUES (?, ?, ?, ?, 'agent_direct', ?, ?, '', ?)`,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback()
+	if err := s.bumpCLIMint(ctx, tx, agent.WorkspaceID, userID, agentID); err != nil {
+		return "", "", err
+	}
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM cli_tokens WHERE user_id = ? AND agent_id = ? AND revoked_at IS NULL`, userID, agentID).Scan(&active); err != nil {
+		return "", "", err
+	}
+	if active >= cliActiveCap {
+		return "", "", ErrCLICap
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO cli_tokens(id, workspace_id, user_id, agent_id, kind, token_hash, prefix, scopes, created_at) VALUES (?, ?, ?, ?, 'agent_direct', ?, ?, '', ?)`,
 		id, agent.WorkspaceID, userID, agentID, tokenHash(plain), prefix, s.stamp(s.Now()))
 	if err != nil {
 		return "", "", err
 	}
+	if err := tx.Commit(); err != nil {
+		return "", "", err
+	}
 	return id, plain, nil
+}
+
+// TouchCLIToken records that castlet accepted this token.
+// A revoked token is left unchanged.
+func (s *Store) TouchCLIToken(ctx context.Context, userID, agentID, tokenID string) error {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE cli_tokens SET last_used_at = ? WHERE id = ? AND user_id = ? AND agent_id = ? AND revoked_at IS NULL`,
+		s.stamp(s.Now()), tokenID, userID, agentID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) bumpCLIMint(ctx context.Context, tx *sql.Tx, workspaceID, userID, agentID string) error {
+	subject := userID + ":" + agentID
+	row, err := readLimitQ(ctx, tx, "cli_mint", subject)
+	if err != nil {
+		return err
+	}
+	now := s.Now()
+	failures := 1
+	window := now
+	if row.present && now.Sub(row.window) <= cliMintWindow {
+		if row.failures >= cliMintMax {
+			return ErrCLIRate
+		}
+		failures = row.failures + 1
+		window = row.window
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO login_limits(scope, subject, workspace_id, user_id, failures, window_start, locked_until)
+		VALUES (?, ?, ?, ?, ?, ?, NULL)
+		ON CONFLICT(scope, subject) DO UPDATE SET
+		  workspace_id = excluded.workspace_id,
+		  user_id = excluded.user_id,
+		  failures = excluded.failures,
+		  window_start = excluded.window_start,
+		  locked_until = NULL`,
+		"cli_mint", subject, workspaceID, userID, failures, s.stamp(window))
+	return err
 }
 
 // ListCLITokens returns CLI token metadata for one of the caller's agents.
@@ -179,8 +249,8 @@ func (s *Store) IngestJournal(ctx context.Context, userID, agentID string, entri
 		if e.Seq > last {
 			last = e.Seq
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO journal_entries(agent_vm_id, seq, workspace_id, user_id, agent_id, session_id, caller, kind, body, tool, request_id, decision, incomplete, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(agent_vm_id, seq) DO NOTHING`,
-			key, e.Seq, agent.WorkspaceID, userID, agentID, e.SessionID, e.Caller, e.Kind, e.Text, e.Tool, e.RequestID, e.Decision, boolInt(e.Incomplete), entryStamp(s, e.At))
+		res, err := tx.ExecContext(ctx, `INSERT INTO journal_entries(agent_vm_id, seq, workspace_id, user_id, agent_id, session_id, caller, kind, body, tool, request_id, decision, incomplete, at, message_id, stream_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(agent_vm_id, seq) DO NOTHING`,
+			key, e.Seq, agent.WorkspaceID, userID, agentID, e.SessionID, e.Caller, e.Kind, e.Text, e.Tool, e.RequestID, e.Decision, boolInt(e.Incomplete), entryStamp(s, e.At), e.MessageID, e.StreamID)
 		if err != nil {
 			return 0, err
 		}
@@ -222,44 +292,67 @@ func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmK
 	if len(body) > replyLimit {
 		body = body[:replyLimit]
 	}
-	session := e.SessionID
-	if session == "" {
-		session = "cli"
+	// Only a CLI token may open a Cast CLI thread. A control-plane turn
+	// whose session is the web thread id is already stored there.
+	if _, ok := cliCaller(e.Caller); ok {
+		session := e.SessionID
+		if session == "" {
+			session = "cli"
+		}
+		th, err := s.cliThreadTx(ctx, tx, agent, session)
+		if err != nil {
+			return err
+		}
+		return s.insertJournalMessage(ctx, tx, agent, th, e, body, "cli")
 	}
-	th, err := s.cliThreadTx(ctx, tx, agent, session)
-	if err != nil {
+	if e.Caller != "control_plane" {
+		return nil
+	}
+	th, ok, err := s.resolveSessionTx(ctx, tx, agent, e.SessionID)
+	if err != nil || !ok {
 		return err
 	}
+	if e.Kind == "request" || e.Kind == "reply" {
+		attached, err := s.attachJournalMessage(ctx, tx, agent, th.ID, e)
+		if err != nil || attached {
+			return err
+		}
+		if th.Kind != "cli" {
+			return nil
+		}
+	}
+	return s.insertJournalMessage(ctx, tx, agent, th, e, body, "web")
+}
+
+func (s *Store) attachJournalMessage(ctx context.Context, tx *sql.Tx, agent Agent, threadID string, e JournalEntry) (bool, error) {
+	if e.Kind == "request" && e.MessageID != "" {
+		res, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = ? WHERE id = ? AND user_id = ? AND thread_id = ? AND author_kind = 'user' AND journal_seq IS NULL`,
+			e.Seq, e.MessageID, agent.UserID, threadID)
+		if err != nil {
+			return false, err
+		}
+		n, err := res.RowsAffected()
+		return n == 1, err
+	}
+	if e.Kind == "reply" && e.StreamID != "" {
+		res, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = ? WHERE user_id = ? AND thread_id = ? AND author_kind = 'agent' AND run_id = ? AND journal_seq IS NULL`,
+			e.Seq, agent.UserID, threadID, e.StreamID)
+		if err != nil {
+			return false, err
+		}
+		n, err := res.RowsAffected()
+		return n >= 1, err
+	}
+	return false, nil
+}
+
+func (s *Store) insertJournalMessage(ctx context.Context, tx *sql.Tx, agent Agent, th Thread, e JournalEntry, body, origin string) error {
 	author := "system"
 	switch e.Kind {
 	case "request":
 		author = "user"
 	case "reply":
 		author = "agent"
-	}
-	if e.Caller == "control_plane" && (author == "user" || author == "agent") {
-		var id string
-		err := tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE user_id = ? AND thread_id = ? AND author_kind = ? AND body_md = ? AND journal_seq IS NULL ORDER BY created_at DESC, rowid DESC LIMIT 1`,
-			agent.UserID, th.ID, author, body).Scan(&id)
-		if err == nil && id != "" {
-			res, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = ? WHERE id = ? AND user_id = ? AND journal_seq IS NULL`, e.Seq, id, agent.UserID)
-			if err != nil {
-				return err
-			}
-			n, err := res.RowsAffected()
-			if err != nil {
-				return err
-			}
-			if n == 1 {
-				return nil
-			}
-		} else if err != nil && err != sql.ErrNoRows {
-			return err
-		}
-	}
-	origin := "cli"
-	if e.Caller == "control_plane" {
-		origin = "web"
 	}
 	id, err := newID()
 	if err != nil {
@@ -273,10 +366,38 @@ func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmK
 	return err
 }
 
-func (s *Store) cliThreadTx(ctx context.Context, tx *sql.Tx, agent Agent, session string) (Thread, error) {
+func (s *Store) resolveSessionTx(ctx context.Context, tx *sql.Tx, agent Agent, session string) (Thread, bool, error) {
+	if session == "" {
+		return Thread{}, false, nil
+	}
+	t, err := scanThread(tx.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, cast_session_id, created_at FROM threads WHERE user_id = ? AND agent_id = ? AND kind = 'cli' AND cast_session_id = ?`,
+		agent.UserID, agent.ID, session))
+	if err == nil {
+		return t, true, nil
+	}
+	if err != sql.ErrNoRows {
+		return Thread{}, false, err
+	}
+	t, err = scanThread(tx.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, cast_session_id, created_at FROM threads WHERE id = ? AND user_id = ? AND agent_id = ?`,
+		session, agent.UserID, agent.ID))
+	if err == sql.ErrNoRows {
+		return Thread{}, false, nil
+	}
+	if err != nil {
+		return Thread{}, false, err
+	}
+	return t, true, nil
+}
+
+func scanThread(row *sql.Row) (Thread, error) {
 	var t Thread
-	err := tx.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, cast_session_id, created_at FROM threads WHERE user_id = ? AND agent_id = ? AND kind = 'cli' AND cast_session_id = ?`,
-		agent.UserID, agent.ID, session).Scan(&t.ID, &t.WorkspaceID, &t.UserID, &t.Kind, &t.AgentID, &t.Title, &t.CastSessionID, &t.CreatedAt)
+	err := row.Scan(&t.ID, &t.WorkspaceID, &t.UserID, &t.Kind, &t.AgentID, &t.Title, &t.CastSessionID, &t.CreatedAt)
+	return t, err
+}
+
+func (s *Store) cliThreadTx(ctx context.Context, tx *sql.Tx, agent Agent, session string) (Thread, error) {
+	t, err := scanThread(tx.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, cast_session_id, created_at FROM threads WHERE user_id = ? AND agent_id = ? AND kind = 'cli' AND cast_session_id = ?`,
+		agent.UserID, agent.ID, session))
 	if err == nil {
 		return t, nil
 	}
@@ -294,9 +415,8 @@ func (s *Store) cliThreadTx(ctx context.Context, tx *sql.Tx, agent Agent, sessio
 		if !strings.Contains(err.Error(), "UNIQUE") {
 			return Thread{}, err
 		}
-		err = tx.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, cast_session_id, created_at FROM threads WHERE user_id = ? AND agent_id = ? AND kind = 'cli' AND cast_session_id = ?`,
-			agent.UserID, agent.ID, session).Scan(&t.ID, &t.WorkspaceID, &t.UserID, &t.Kind, &t.AgentID, &t.Title, &t.CastSessionID, &t.CreatedAt)
-		return t, err
+		return scanThread(tx.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, cast_session_id, created_at FROM threads WHERE user_id = ? AND agent_id = ? AND kind = 'cli' AND cast_session_id = ?`,
+			agent.UserID, agent.ID, session))
 	}
 	t = Thread{ID: id, WorkspaceID: agent.WorkspaceID, UserID: agent.UserID, Kind: "cli", AgentID: agent.ID, Title: "Cast CLI", CastSessionID: session, CreatedAt: stamp}
 	return t, nil
@@ -327,7 +447,7 @@ func (s *Store) SweepExpiredDrafts(ctx context.Context) (int, error) {
 }
 
 func validEntry(e JournalEntry) error {
-	if e.Seq < 1 || len(e.Text) > replyLimit || len(e.SessionID) > 128 || len(e.Caller) > 80 {
+	if e.Seq < 1 || len(e.Text) > replyLimit || len(e.SessionID) > 128 || len(e.Caller) > 80 || len(e.MessageID) > 80 || len(e.StreamID) > 80 {
 		return ErrInvalid
 	}
 	switch e.Kind {
@@ -396,4 +516,80 @@ func boolInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+// CLISlug is the name cast import accepts for this agent.
+// It is lowercase, hyphenated, and unique among the owner's agents.
+// The first agent to claim a base name keeps it. A later collision
+// gets a short suffix from the agent id.
+func (s *Store) CLISlug(ctx context.Context, userID, agentID string) (string, error) {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return "", err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name FROM agents WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at, id`, userID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	used := map[string]struct{}{}
+	mine := ""
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return "", err
+		}
+		slug := claimSlug(slugBase(name), id, used)
+		used[slug] = struct{}{}
+		if id == agentID {
+			mine = slug
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if mine == "" {
+		return "", ErrNotFound
+	}
+	return mine, nil
+}
+
+func claimSlug(base, id string, used map[string]struct{}) string {
+	if base == "" {
+		base = "agent"
+	}
+	if _, ok := used[base]; !ok {
+		return base
+	}
+	suffix := id
+	if len(suffix) > 6 {
+		suffix = suffix[:6]
+	}
+	candidate := base + "-" + suffix
+	if _, ok := used[candidate]; !ok {
+		return candidate
+	}
+	return base + "-" + id
+}
+
+func slugBase(name string) string {
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevHyphen = false
+		case r == '\'' || r == '\u2019':
+		default:
+			if b.Len() > 0 && !prevHyphen {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 48 {
+		out = strings.Trim(out[:48], "-")
+	}
+	return out
 }

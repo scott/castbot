@@ -1,6 +1,7 @@
 package castlet
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -36,6 +37,8 @@ type journalEntry struct {
 	Tool       string `json:"tool"`
 	RequestID  string `json:"request_id"`
 	Decision   string `json:"decision"`
+	MessageID  string `json:"message_id,omitempty"`
+	StreamID   string `json:"stream_id,omitempty"`
 	Incomplete bool   `json:"incomplete"`
 }
 
@@ -48,45 +51,69 @@ func (s *Supervisor) stateDir() string {
 	return filepath.Join(s.cfg.AgentDir, ".castlet")
 }
 
-func (s *Supervisor) refreshCLITokens(ctx context.Context) {
+// refreshCLITokens reports whether the control plane confirmed the token list.
+// A failed refresh does not accept a CLI token from the previous list.
+func (s *Supervisor) refreshCLITokens(ctx context.Context) bool {
 	if s.cfg.ControlURL == "" || s.cfg.AgentID == "" {
 		s.ensureTokens()
+		return true
+	}
+	s.mu.Lock()
+	token := s.token
+	s.mu.Unlock()
+	if token == "" {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.api("/cli-tokens"), nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := s.do(req)
+	if err != nil {
+		return false
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return false
+	}
+	var body struct {
+		Tokens []cliToken `json:"tokens"`
+	}
+	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&body); err != nil {
+		return false
+	}
+	if !cleanTokens(body.Tokens) {
+		return false
+	}
+	return s.replaceTokens(body.Tokens) == nil
+}
+
+func (s *Supervisor) noteCLIUse(ctx context.Context, id string) {
+	if s.cfg.ControlURL == "" || s.cfg.AgentID == "" || id == "" {
 		return
 	}
 	s.mu.Lock()
 	token := s.token
 	s.mu.Unlock()
 	if token == "" {
-		s.ensureTokens()
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.api("/cli-tokens"), nil)
+	raw, err := json.Marshal(map[string]string{"id": id})
+	if err != nil {
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.api("/cli-used"), bytes.NewReader(raw))
 	if err != nil {
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	res, err := s.do(req)
 	if err != nil {
-		s.ensureTokens()
 		return
 	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		s.ensureTokens()
-		return
-	}
-	var body struct {
-		Tokens []cliToken `json:"tokens"`
-	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&body); err != nil {
-		s.ensureTokens()
-		return
-	}
-	if !cleanTokens(body.Tokens) {
-		s.ensureTokens()
-		return
-	}
-	_ = s.replaceTokens(body.Tokens)
+	res.Body.Close()
 }
 
 func cleanTokens(list []cliToken) bool {
@@ -196,21 +223,10 @@ func (s *Supervisor) appendJournal(e journalEntry) (journalEntry, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return e, err
 	}
-	path := filepath.Join(dir, "journal.jsonl")
-	next := 1
-	if raw, err := os.ReadFile(path); err == nil {
-		for _, line := range bytes.Split(raw, []byte("\n")) {
-			line = bytes.TrimSpace(line)
-			if len(line) == 0 {
-				continue
-			}
-			var prev journalEntry
-			if json.Unmarshal(line, &prev) == nil && prev.Seq >= next {
-				next = prev.Seq + 1
-			}
-		}
+	if err := s.loadJournalLocked(); err != nil {
+		return e, err
 	}
-	e.Seq = next
+	e.Seq = s.journalNext
 	if e.At == "" {
 		e.At = time.Now().UTC().Format(time.RFC3339)
 	}
@@ -218,11 +234,13 @@ func (s *Supervisor) appendJournal(e journalEntry) (journalEntry, error) {
 	if err != nil {
 		return e, err
 	}
+	line := append(raw, '\n')
+	path := filepath.Join(dir, "journal.jsonl")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return e, err
 	}
-	_, werr := f.Write(append(raw, '\n'))
+	_, werr := f.Write(line)
 	serr := f.Sync()
 	cerr := f.Close()
 	if werr != nil {
@@ -231,28 +249,133 @@ func (s *Supervisor) appendJournal(e journalEntry) (journalEntry, error) {
 	if serr != nil {
 		return e, serr
 	}
-	return e, cerr
+	if cerr != nil {
+		return e, cerr
+	}
+	s.journalOff[e.Seq] = s.journalEnd
+	s.journalEnd += int64(len(line))
+	s.journalNext++
+	s.rememberPermLocked(e)
+	_ = os.WriteFile(filepath.Join(dir, "journal.seq"), []byte(strconv.Itoa(s.journalNext)), 0o600)
+	return e, nil
+}
+
+func (s *Supervisor) loadJournalLocked() error {
+	if s.journalReady {
+		return nil
+	}
+	s.journalOff = map[int]int64{}
+	s.journalNext = 1
+	s.journalEnd = 0
+	if s.permSession == nil {
+		s.permSession = map[string]string{}
+	}
+	path := filepath.Join(s.stateDir(), "journal.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.journalReady = true
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	r := bufio.NewReader(f)
+	for {
+		line, err := r.ReadBytes('\n')
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) > 0 {
+			var prev journalEntry
+			if json.Unmarshal(trimmed, &prev) == nil && prev.Seq > 0 {
+				s.journalOff[prev.Seq] = s.journalEnd
+				if prev.Seq+1 > s.journalNext {
+					s.journalNext = prev.Seq + 1
+				}
+				s.rememberPermLocked(prev)
+			}
+		}
+		s.journalEnd += int64(len(line))
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+	s.journalReady = true
+	return nil
+}
+
+func (s *Supervisor) rememberPermLocked(e journalEntry) {
+	if e.Kind != "permission" || e.RequestID == "" || e.SessionID == "" {
+		return
+	}
+	if s.permSession == nil {
+		s.permSession = map[string]string{}
+	}
+	s.permSession[e.RequestID] = e.SessionID
+}
+
+func (s *Supervisor) sessionForPerm(id string) string {
+	if id == "" {
+		return ""
+	}
+	s.journalMu.Lock()
+	defer s.journalMu.Unlock()
+	if err := s.loadJournalLocked(); err != nil {
+		return ""
+	}
+	return s.permSession[id]
 }
 
 func (s *Supervisor) journalAfter(after int) []journalEntry {
 	s.journalMu.Lock()
 	defer s.journalMu.Unlock()
-	raw, err := os.ReadFile(filepath.Join(s.stateDir(), "journal.jsonl"))
+	if err := s.loadJournalLocked(); err != nil {
+		return nil
+	}
+	start := int64(0)
+	if after > 0 {
+		if off, ok := s.journalOff[after+1]; ok {
+			start = off
+		} else {
+			found := false
+			var best int64
+			for seq, off := range s.journalOff {
+				if seq > after && (!found || off < best) {
+					best = off
+					found = true
+				}
+			}
+			if !found {
+				return nil
+			}
+			start = best
+		}
+	}
+	f, err := os.Open(filepath.Join(s.stateDir(), "journal.jsonl"))
 	if err != nil {
 		return nil
 	}
+	defer f.Close()
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return nil
+	}
+	r := bufio.NewReader(f)
 	var out []journalEntry
-	for _, line := range bytes.Split(raw, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
+	for len(out) < 500 {
+		line, err := r.ReadBytes('\n')
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) > 0 {
+			var e journalEntry
+			if json.Unmarshal(trimmed, &e) == nil && e.Seq > after {
+				out = append(out, e)
+			}
 		}
-		var e journalEntry
-		if json.Unmarshal(line, &e) != nil || e.Seq <= after {
-			continue
+		if err == io.EOF {
+			break
 		}
-		out = append(out, e)
-		if len(out) >= 500 {
+		if err != nil {
 			break
 		}
 	}
@@ -417,13 +540,15 @@ type rpcBody struct {
 		ID       string `json:"id"`
 		Approved *bool  `json:"approved"`
 		Message  struct {
-			Parts []struct {
+			MessageID string `json:"messageId"`
+			Parts     []struct {
 				Kind string `json:"kind"`
 				Text string `json:"text"`
 			} `json:"parts"`
 		} `json:"message"`
 		Metadata struct {
 			SessionID string `json:"sessionId"`
+			StreamID  string `json:"streamId"`
 		} `json:"metadata"`
 	} `json:"params"`
 }

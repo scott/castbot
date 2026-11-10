@@ -69,10 +69,15 @@ func (s *Supervisor) authorize(w http.ResponseWriter, r *http.Request) (string, 
 		return "control_plane", true
 	}
 	if got != "" && s.cfg.ControlURL != "" {
-		s.refreshCLITokens(r.Context())
+		if !s.refreshCLITokens(r.Context()) {
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return "", false
+		}
 	}
 	if got != "" {
 		if id, revoked := s.matchCLI(got); id != "" && !revoked {
+			s.noteCLIUse(r.Context(), id)
 			return "cli:" + id, true
 		}
 	}
@@ -151,7 +156,10 @@ func (s *Supervisor) proxy(w http.ResponseWriter, r *http.Request) {
 	session := rpc.Params.Metadata.SessionID
 	var wrote bool
 	if rpc.Method == "message/send" && strings.TrimSpace(text) != "" {
-		if _, err := s.appendJournal(journalEntry{SessionID: session, Caller: caller, Kind: "request", Text: text}); err == nil {
+		if _, err := s.appendJournal(journalEntry{
+			SessionID: session, Caller: caller, Kind: "request", Text: text,
+			MessageID: rpc.Params.Message.MessageID, StreamID: rpc.Params.Metadata.StreamID,
+		}); err == nil {
 			wrote = true
 		}
 	}
@@ -163,6 +171,9 @@ func (s *Supervisor) proxy(w http.ResponseWriter, r *http.Request) {
 			} else {
 				decision = "denied"
 			}
+		}
+		if session == "" {
+			session = s.sessionForPerm(rpc.Params.ID)
 		}
 		if _, err := s.appendJournal(journalEntry{SessionID: session, Caller: caller, Kind: "decision", RequestID: rpc.Params.ID, Decision: decision}); err == nil {
 			wrote = true
@@ -234,7 +245,10 @@ func (s *Supervisor) proxy(w http.ResponseWriter, r *http.Request) {
 		streamed := strings.Contains(res.Header.Get("Content-Type"), "event-stream")
 		incomplete := res.StatusCode >= 400 || (streamed && !cap.sawDone)
 		if strings.TrimSpace(reply) != "" || incomplete {
-			if _, err := s.appendJournal(journalEntry{SessionID: session, Caller: caller, Kind: "reply", Text: reply, Incomplete: incomplete}); err == nil {
+			if _, err := s.appendJournal(journalEntry{
+				SessionID: session, Caller: caller, Kind: "reply", Text: reply, Incomplete: incomplete,
+				MessageID: rpc.Params.Message.MessageID, StreamID: rpc.Params.Metadata.StreamID,
+			}); err == nil {
 				wrote = true
 			}
 		}

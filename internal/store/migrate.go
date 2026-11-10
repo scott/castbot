@@ -291,6 +291,8 @@ CREATE TABLE IF NOT EXISTS journal_entries (
   decision TEXT NOT NULL DEFAULT '',
   incomplete INTEGER NOT NULL DEFAULT 0,
   at TEXT NOT NULL,
+  message_id TEXT NOT NULL DEFAULT '',
+  stream_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (agent_vm_id, seq)
 );
 
@@ -364,6 +366,12 @@ func (s *Store) migrate() error {
 	if err := s.ensureColumn("messages", "journal_seq", `ALTER TABLE messages ADD COLUMN journal_seq INTEGER`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("journal_entries", "message_id", `ALTER TABLE journal_entries ADD COLUMN message_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("journal_entries", "stream_id", `ALTER TABLE journal_entries ADD COLUMN stream_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_journal ON messages(thread_id, journal_seq) WHERE journal_seq IS NOT NULL`); err != nil {
 		return err
 	}
@@ -434,6 +442,8 @@ SELECT id, workspace_id, thread_id, agent_id, user_id, routine_run_id, status, s
 
 // allowCLIThread rebuilds threads when an older file still rejects kind cli.
 // SQLite cannot alter a check. New databases already include the kind.
+// The rebuild drops threads and renames the replacement in one transaction.
+// Take a backup before opening a database that still rejects kind cli.
 func (s *Store) allowCLIThread() error {
 	var ddl string
 	err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'threads'`).Scan(&ddl)
@@ -441,7 +451,10 @@ func (s *Store) allowCLIThread() error {
 		return err
 	}
 	if strings.Contains(ddl, "'cli'") {
-		return s.ensureColumn("threads", "cast_session_id", `ALTER TABLE threads ADD COLUMN cast_session_id TEXT NOT NULL DEFAULT ''`)
+		if err := s.ensureColumn("threads", "cast_session_id", `ALTER TABLE threads ADD COLUMN cast_session_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+		return s.fixThreadsUserIndex()
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -470,10 +483,51 @@ SELECT id, workspace_id, user_id, kind, agent_id, title, '', created_at FROM thr
 	if _, err := tx.Exec(`ALTER TABLE threads_v11 RENAME TO threads`); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_threads_user ON threads(user_id, created_at)`); err != nil {
+	if _, err := tx.Exec(`CREATE INDEX idx_threads_user ON threads(user_id, agent_id)`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.fixThreadsUserIndex()
+}
+
+// fixThreadsUserIndex makes idx_threads_user match a fresh database.
+// CREATE INDEX IF NOT EXISTS leaves an older (user_id, created_at) index in place
+// because the name already exists.
+func (s *Store) fixThreadsUserIndex() error {
+	cols, err := s.indexColumns("idx_threads_user")
+	if err != nil {
+		return err
+	}
+	if len(cols) == 2 && cols[0] == "user_id" && cols[1] == "agent_id" {
+		return nil
+	}
+	if len(cols) > 0 {
+		if _, err := s.db.Exec(`DROP INDEX idx_threads_user`); err != nil {
+			return err
+		}
+	}
+	_, err = s.db.Exec(`CREATE INDEX idx_threads_user ON threads(user_id, agent_id)`)
+	return err
+}
+
+func (s *Store) indexColumns(name string) ([]string, error) {
+	rows, err := s.db.Query(`PRAGMA index_info(` + name + `)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cols []string
+	for rows.Next() {
+		var seqno, cid int
+		var col string
+		if err := rows.Scan(&seqno, &cid, &col); err != nil {
+			return nil, err
+		}
+		cols = append(cols, col)
+	}
+	return cols, rows.Err()
 }
 
 func (s *Store) ensureColumn(table, column, alter string) error {
