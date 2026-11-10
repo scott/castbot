@@ -28,7 +28,7 @@ func TestWALAndOwnerColumns(t *testing.T) {
 	if mode != "wal" {
 		t.Fatalf("journal %s", mode)
 	}
-	tables := []string{"credentials", "sessions", "sections", "agents", "threads", "messages", "login_challenges", "trusted_devices"}
+	tables := []string{"credentials", "sessions", "sections", "agents", "threads", "messages", "login_challenges", "trusted_devices", "runs"}
 	for _, table := range tables {
 		rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
 		if err != nil {
@@ -90,6 +90,22 @@ func TestScopedReads(t *testing.T) {
 	}
 	if _, err := s.GetMessage(ctx, b.ID, msg.ID); err != ErrNotFound {
 		t.Fatalf("message %v", err)
+	}
+	run, err := s.CreateRun(ctx, a.ID, thread.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendRunEvent(ctx, a.ID, run.ID, "text", `{"text":"secret"}`, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetRun(ctx, b.ID, run.ID); err != ErrNotFound {
+		t.Fatalf("run %v", err)
+	}
+	if _, err := s.ListRunEvents(ctx, b.ID, run.ID, 0); err != ErrNotFound {
+		t.Fatalf("events %v", err)
+	}
+	if _, err := s.ListThreadRuns(ctx, b.ID, thread.ID); err != ErrNotFound {
+		t.Fatalf("thread runs %v", err)
 	}
 	own, err := s.ListAgents(ctx, a.ID)
 	if err != nil || len(own) != 1 {

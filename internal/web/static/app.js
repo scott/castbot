@@ -52,32 +52,17 @@
       }
     }
 
-    function scrollChat() {
-      var box = document.querySelector(".ch-body");
-      if (box) box.scrollTop = box.scrollHeight;
-    }
-    scrollChat();
-    window.addEventListener("load", scrollChat);
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(scrollChat);
-
-    document.body.addEventListener("htmx:afterSwap", function (ev) {
-      var target = ev.detail && ev.detail.target;
-      if (target && target.id === "msgs") scrollChat();
-    });
     document.body.addEventListener("htmx:afterRequest", function (ev) {
       var elt = ev.detail && ev.detail.elt;
       if (!elt || elt.id !== "composer" || !ev.detail.successful) return;
       elt.reset();
-      scrollChat();
     });
 
     var shows = document.querySelectorAll("[data-show-password]");
     for (var s = 0; s < shows.length; s++) {
       shows[s].addEventListener("click", function () {
         var input = document.getElementById(this.getAttribute("data-show-password"));
-        if (!input) {
-          return;
-        }
+        if (!input) return;
         var show = input.type === "password";
         input.type = show ? "text" : "password";
         this.setAttribute("aria-label", show ? "Hide password" : "Show password");
@@ -104,11 +89,8 @@
           var ready = v.length === 6;
           verify.disabled = !ready;
           verify.classList.toggle("dis", !ready);
-          if (ready) {
-            verify.removeAttribute("aria-disabled");
-          } else {
-            verify.setAttribute("aria-disabled", "true");
-          }
+          if (ready) verify.removeAttribute("aria-disabled");
+          else verify.setAttribute("aria-disabled", "true");
         }
       }
       input.addEventListener("keydown", function (ev) {
@@ -138,9 +120,7 @@
         var panel = document.getElementById("recovery-panel");
         var otpWrap = document.getElementById("otp");
         var verify = document.getElementById("verify");
-        if (!panel || !otpWrap) {
-          return;
-        }
+        if (!panel || !otpWrap) return;
         otpWrap.hidden = true;
         panel.hidden = false;
         if (verify) {
@@ -149,9 +129,7 @@
           verify.removeAttribute("aria-disabled");
         }
         var field = panel.querySelector("input");
-        if (field) {
-          field.focus();
-        }
+        if (field) field.focus();
       });
     }
 
@@ -160,9 +138,7 @@
       var until = Date.parse(clocks[0].getAttribute("data-lock-until"));
       function tick() {
         var ms = until - Date.now();
-        if (ms < 0) {
-          ms = 0;
-        }
+        if (ms < 0) ms = 0;
         var total = Math.ceil(ms / 1000);
         var m = Math.floor(total / 60);
         var r = total % 60;

@@ -3,18 +3,24 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/scott/castbot/internal/auth"
 	"github.com/scott/castbot/internal/config"
 	"github.com/scott/castbot/internal/demo"
+	"github.com/scott/castbot/internal/run"
+	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
 	"github.com/scott/castbot/internal/web"
 	"golang.org/x/term"
@@ -45,13 +51,60 @@ func serve(args []string) {
 	_ = fs.Parse(args)
 	cfg, st := openStore()
 	defer st.Close()
+	if err := st.FailAbandoned(context.Background(), run.Interrupted); err != nil {
+		log.Fatal(err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	client, stopRuntime := openRuntime(cfg)
+	defer stopRuntime()
+	app := web.New(st, cfg.SessionKey, client)
+	defer app.Close()
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           web.New(st, cfg.SessionKey).Handler(),
+		Handler:           app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.ListenAndServe()
+	}()
 	log.Printf("castbot listening on %s", cfg.Addr)
-	log.Fatal(srv.ListenAndServe())
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Print(err)
+			os.Exit(1)
+		}
+	case <-ctx.Done():
+		app.Close()
+		shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shut); err != nil {
+			log.Print(err)
+		}
+	}
+}
+
+func openRuntime(cfg config.Config) (runtime.Client, func()) {
+	if cfg.RuntimeURL != "" {
+		log.Printf("agent runtime at %s", cfg.RuntimeURL)
+		return runtime.NewHTTP(cfg.RuntimeURL), func() {}
+	}
+	echo := runtime.NewEcho(runtime.EchoOptions{Name: "castbot", WordDelay: 30 * time.Millisecond})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatal(err)
+	}
+	srv := &http.Server{Handler: echo, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	log.Printf("echo runtime on %s", ln.Addr().String())
+	return runtime.NewHTTP("http://" + ln.Addr().String()), func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+		echo.Close()
+	}
 }
 
 func createUser(args []string) {

@@ -21,6 +21,7 @@ type Config struct {
 	EnvFile    string
 	Addr       string
 	DBPath     string
+	RuntimeURL string
 	SessionKey []byte
 }
 
@@ -84,6 +85,7 @@ func LoadFile(path string) (Config, error) {
 		EnvFile:    path,
 		Addr:       vals["CASTBOT_ADDR"],
 		DBPath:     vals["CASTBOT_DB"],
+		RuntimeURL: vals["CASTBOT_RUNTIME_URL"],
 		SessionKey: key,
 	}
 	if cfg.Addr == "" {
@@ -97,6 +99,9 @@ func LoadFile(path string) (Config, error) {
 	}
 	if v := os.Getenv("CASTBOT_DB"); v != "" {
 		cfg.DBPath = v
+	}
+	if v := os.Getenv("CASTBOT_RUNTIME_URL"); v != "" {
+		cfg.RuntimeURL = v
 	}
 	return cfg, nil
 }

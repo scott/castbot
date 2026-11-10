@@ -454,6 +454,12 @@ func (s *Store) DeleteThread(ctx context.Context, userID, id string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM run_events WHERE run_id IN (SELECT id FROM runs WHERE thread_id = ? AND user_id = ?)`, id, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM runs WHERE thread_id = ? AND user_id = ?`, id, userID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE thread_id = ? AND user_id = ?`, id, userID); err != nil {
 		return err
 	}

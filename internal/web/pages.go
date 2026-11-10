@@ -86,6 +86,7 @@ func (s *Server) renderChat(w http.ResponseWriter, r *http.Request, user store.U
 			return
 		}
 		p.Messages = presentMessages(msgs, p.Agent, s.store.Now(), userLocation(user.Timezone))
+		p.Lives = s.loadLives(r, user, threads[0].ID, p.Agent)
 	}
 	switch tab {
 	case "home":
@@ -129,30 +130,35 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	if _, err := s.store.CreateMessage(r.Context(), user.ID, threads[0].ID, "user", user.ID, body); s.bad(w, err) {
+	msg, err := s.store.CreateMessage(r.Context(), user.ID, threads[0].ID, "user", user.ID, body)
+	if s.bad(w, err) {
 		return
 	}
-	echo := "Echo: " + body
-	if _, err := s.store.CreateMessage(r.Context(), user.ID, threads[0].ID, "agent", agent.ID, echo); err != nil {
+	run, err := s.store.CreateRun(r.Context(), user.ID, threads[0].ID, agent.ID)
+	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
+	if err := s.store.SetMessageRun(r.Context(), user.ID, msg.ID, run.ID); err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	// Start runs before this response names the run. The row stays queued
+	// until the goroutine marks it streaming, and the event handler does
+	// not fail a queued run, so a reader in that gap cannot interrupt it.
+	s.runs.Start(runJob(user.ID, threads[0].ID, agent.ID, run.ID, msg.Body, s.priorTurns(r.Context(), user.ID, threads[0].ID, msg.ID)))
 	if r.Header.Get("HX-Request") == "true" {
 		av := presentAgent(agent, true, userLocation(user.Timezone))
 		loc := userLocation(user.Timezone)
-		msgs, err := s.store.ListMessages(r.Context(), user.ID, threads[0].ID)
-		if err != nil {
-			http.Error(w, "Error", http.StatusInternalServerError)
-			return
+		p := page{
+			CSRF:     from(r).CSRF,
+			Messages: presentMessages([]store.Message{msg}, av, s.store.Now(), loc),
+			Lives:    []liveView{{RunID: run.ID, Color: av.Color, Letter: av.Letter, CSRF: from(r).CSRF}},
 		}
-		if len(msgs) >= 2 {
-			msgs = msgs[len(msgs)-2:]
-		}
-		p := page{Messages: presentMessages(msgs, av, s.store.Now(), loc)}
 		for i := range p.Messages {
 			p.Messages[i].ShowDay = false
 		}
-		s.render(w, http.StatusOK, "messages", p)
+		s.render(w, http.StatusOK, "turn", p)
 		return
 	}
 	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID), http.StatusSeeOther)
