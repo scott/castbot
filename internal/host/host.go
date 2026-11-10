@@ -65,6 +65,9 @@ type CreateSpec struct {
 	// Tags are added after castbot and agent:<id>. The server adds
 	// castbot-inst:<id>. The live harness sets castbot-live.
 	Tags []string
+	// Accepted runs after the machine API accepts the create and before
+	// the client polls for running. It may be nil. The machine id is set.
+	Accepted func(Machine)
 }
 
 // InstanceTag is the tag that ties a machine to one database.
@@ -159,7 +162,7 @@ func LiveLeftovers(vms []Machine) []Machine {
 // minutes, which is not enough, and a timeout panic skips cleanup.
 func LiveWindow(deadline time.Time, hasDeadline bool, now time.Time) error {
 	if !hasDeadline || deadline.Sub(now) < 40*time.Minute {
-		return errors.New("live test needs go test -tags live -timeout 45m ./internal/host")
+		return errors.New("live test needs go test -tags live -timeout 45m")
 	}
 	return nil
 }

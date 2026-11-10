@@ -242,6 +242,7 @@ CREATE TABLE IF NOT EXISTS agent_vms (
   created_at TEXT NOT NULL,
   last_wake_at TEXT,
   created_running_at TEXT,
+  observe_boot INTEGER NOT NULL DEFAULT 1,
   deleted_at TEXT
 );
 
@@ -384,8 +385,23 @@ func (s *Store) migrate() error {
 	if err := s.ensureColumn("agent_vms", "created_running_at", `ALTER TABLE agent_vms ADD COLUMN created_running_at TEXT`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("agent_vms", "observe_boot", `ALTER TABLE agent_vms ADD COLUMN observe_boot INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agents", "secret_fp", `ALTER TABLE agents ADD COLUMN secret_fp TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	missingViewed, err := s.columnMissing("cli_tokens", "viewed_at")
+	if err != nil {
+		return err
+	}
 	if err := s.ensureColumn("cli_tokens", "viewed_at", `ALTER TABLE cli_tokens ADD COLUMN viewed_at TEXT`); err != nil {
 		return err
+	}
+	if missingViewed {
+		if _, err := s.db.Exec(`UPDATE cli_tokens SET viewed_at = created_at WHERE viewed_at IS NULL OR viewed_at = ''`); err != nil {
+			return err
+		}
 	}
 	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS vm_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -558,6 +574,29 @@ func (s *Store) indexColumns(name string) ([]string, error) {
 		cols = append(cols, col)
 	}
 	return cols, rows.Err()
+}
+
+func (s *Store) columnMissing(table, column string) (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return false, rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) ensureColumn(table, column, alter string) error {

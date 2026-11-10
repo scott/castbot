@@ -190,6 +190,15 @@ func TestRuntimeImageAndSmoke(t *testing.T) {
 		t.Fatalf("run %s", row.Error)
 	}
 	assertAgentBody(t, h, owner.ID, agent.ID, reply)
+	events, err := h.st.ListRunEvents(context.Background(), owner.ID, runID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range events {
+		if strings.Contains(ev.Payload, key) {
+			t.Fatal("key in run events")
+		}
+	}
 	raw := guest.Logs(context.Background())
 	if strings.Contains(raw, key) || strings.Contains(raw, token) || strings.Contains(raw, bootstrap) {
 		t.Fatal("secret remained in logs")

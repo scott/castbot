@@ -75,6 +75,13 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 			machine.LastWake = t.Format("Jan 2, 3:04 PM")
 		}
 	}
+	if machine.ShowFirst {
+		if machine.FirstRunning == "" {
+			machine.FirstRunning = "unknown"
+		} else if t, ok := inZone(machine.FirstRunning, userLocation(user.Timezone)); ok {
+			machine.FirstRunning = t.Format("Jan 2, 3:04 PM")
+		}
+	}
 	p, err := s.shell(r, user)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)

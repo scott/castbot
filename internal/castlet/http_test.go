@@ -204,6 +204,54 @@ func readySup(t *testing.T, dir string) *Supervisor {
 	return sup
 }
 
+func TestRuntimeGetsALocalToken(t *testing.T) {
+	t.Setenv("AUTH_TOKEN", "parent-value")
+	var gotAuth, gotCast string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotCast = r.Header.Get("X-Cast-Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(up.Close)
+	sup, err := New(Config{Token: "agent-token", RuntimeURL: up.URL, AgentDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup.mu.Lock()
+	sup.ready = true
+	runtimeToken := sup.runtimeToken
+	sup.mu.Unlock()
+	if runtimeToken == "" || runtimeToken == "parent-value" || runtimeToken == "agent-token" {
+		t.Fatal("runtime token was not generated")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+	req.Header.Set("X-Cast-Authorization", "Bearer agent-token")
+	rec := httptest.NewRecorder()
+	sup.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("proxy %d", rec.Code)
+	}
+	if gotAuth != "Bearer "+runtimeToken || gotCast != "" || strings.Contains(gotAuth, "agent-token") {
+		t.Fatal("runtime auth header")
+	}
+	env := sup.childEnv()
+	found := 0
+	for _, item := range env {
+		if strings.HasPrefix(item, "AUTH_TOKEN=") {
+			found++
+			if item != "AUTH_TOKEN="+runtimeToken {
+				t.Fatal("child env token")
+			}
+		}
+		if strings.Contains(item, "parent-value") {
+			t.Fatal("parent token was forwarded")
+		}
+	}
+	if found != 1 {
+		t.Fatalf("AUTH_TOKEN count %d", found)
+	}
+}
+
 func authed(t *testing.T, sup *Supervisor, method, path string, body io.Reader) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, body)

@@ -17,6 +17,7 @@ const (
 	EventWakeRunning     = "wake_running"
 	EventWakeReady       = "wake_ready"
 	EventDelete          = "delete"
+	EventEdgeResume      = "edge_resume"
 )
 
 // VMEvent is one durable machine timing row.

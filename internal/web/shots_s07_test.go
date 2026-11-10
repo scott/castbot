@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +20,11 @@ func shootS07Start(t *testing.T, browser context.Context, dir string, width, hei
 	t.Helper()
 	h := newHarness(t)
 	h.srv.SetDevEcho(false)
-	h.srv.SetHost(host.NewFake(), "example.invalid/castbot-runtime:s07", "https://castbot.example")
+	fake := host.NewFake()
+	hold := make(chan struct{})
+	fake.WaitCreate = hold
+	t.Cleanup(func() { close(hold) })
+	h.srv.SetHost(fake, "example.invalid/castbot-runtime:s07", "https://castbot.example")
 	user, _ := h.account("start-s07@example.com", "Start User", "correct-horse-1")
 	if err := h.st.UpdateTheme(context.Background(), user.ID, theme); err != nil {
 		t.Fatal(err)
@@ -32,9 +37,35 @@ func shootS07Start(t *testing.T, browser context.Context, dir string, width, hei
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := openS07(t, browser, h, user.ID, "/agents/"+agent.ID, width, height, `(function(){var t=document.body.innerText||"";return t.indexOf("No machine yet. Start it to chat.")>=0&&t.indexOf("Start")>=0;})()`)
+	ctx := openS07(t, browser, h, user.ID, "/agents/"+agent.ID, width, height, `(function(){var t=document.body.innerText||"";var s="No machine yet. Start it to chat.";var n=0,i=0;while((i=t.indexOf(s,i))>=0){n++;i+=s.length;}return n===1&&t.indexOf("Start")>=0;})()`)
 	shotPage(t, ctx, filepath.Join(dir, "s07-start-"+theme+"-"+name+".png"))
 	assertShotClean(t, ctx)
+	if err := chromedp.Run(ctx, chromedp.Click(`.start-form button`, chromedp.ByQuery)); err != nil && !strings.Contains(err.Error(), "navigated or closed") {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	calls, _ := fake.Snapshot()
+	for _, call := range calls {
+		if call == "create" {
+			t.Fatal("create finished while Start was held")
+		}
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	var ok bool
+	var last error
+	for time.Now().Before(deadline) {
+		last = chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){return location.pathname.indexOf("/machine")>=0&&document.querySelectorAll(".app").length===1&&document.querySelectorAll("header.ch-h").length===1&&(document.body.innerText||"").indexOf("Starting")>=0;})()`), &ok))
+		if last == nil && ok {
+			break
+		}
+		if last != nil && !strings.Contains(last.Error(), "navigated or closed") && !strings.Contains(last.Error(), "context") {
+			t.Fatal(last)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if last != nil || !ok {
+		t.Fatalf("start page %v ok %v", last, ok)
+	}
 }
 
 func shootS07Paused(t *testing.T, browser context.Context, dir string, width, height int, theme, name string) {

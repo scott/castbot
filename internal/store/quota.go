@@ -72,8 +72,8 @@ func (s *Store) BeginVM(ctx context.Context, userID, agentID, name, image string
 		return VM{}, err
 	}
 	stamp := s.stamp(s.Now())
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_vms(id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure, created_at)
-VALUES (?, ?, ?, ?, 'pending', ?, '', ?, 'creating', '', ?)`, id, agent.WorkspaceID, userID, agentID, name, image, stamp); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_vms(id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure, created_at, observe_boot)
+VALUES (?, ?, ?, ?, 'pending', ?, '', ?, 'creating', '', ?, 1)`, id, agent.WorkspaceID, userID, agentID, name, image, stamp); err != nil {
 		return VM{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE agents SET status = 'provisioning', activity = 'Starting' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID); err != nil {
@@ -104,6 +104,70 @@ func (s *Store) FinishVM(ctx context.Context, userID, agentID, microID, endpoint
 	return s.ApplyVMState(ctx, userID, agentID, state, endpoint, failure)
 }
 
+// MarkPausedIfUnchanged sets paused only when the row is still running and
+// its last wake stamp is the one the caller observed. A wake in between
+// changes that stamp, so a stale list does not overwrite it.
+func (s *Store) MarkPausedIfUnchanged(ctx context.Context, userID, agentID, microID, lastWake, endpoint string) (bool, error) {
+	agent, err := s.GetAgent(ctx, userID, agentID)
+	if err != nil {
+		return false, err
+	}
+	status, activity, ok := agentStatusFor("paused", agent.Status)
+	if !ok {
+		return false, ErrInvalid
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = 'paused',
+endpoint = CASE WHEN ? != '' THEN ? ELSE endpoint END
+WHERE user_id = ? AND agent_id = ? AND microvm_id = ? AND state = 'running'
+AND COALESCE(last_wake_at, '') = ? AND deleted_at IS NULL`,
+		endpoint, endpoint, userID, agentID, microID, lastWake)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 0 {
+		return false, tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE agents SET status = ?, activity = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, status, activity, agentID, userID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// SecretFP is the last secrets fingerprint sent to this agent. Empty means
+// the guest has not been reloaded for the current set.
+func (s *Store) SecretFP(ctx context.Context, userID, agentID string) (string, error) {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return "", err
+	}
+	var fp string
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(secret_fp, '') FROM agents WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID).Scan(&fp)
+	return fp, err
+}
+
+// SetSecretFP records a secrets fingerprint. The value is a hash, not a secret.
+func (s *Store) SetSecretFP(ctx context.Context, userID, agentID, fp string) error {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE agents SET secret_fp = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, fp, agentID, userID)
+	if err != nil {
+		return err
+	}
+	return rowsAffected(res)
+}
+
 // ApplyVMState copies a machine API state onto the caller's row.
 // It does not contact the guest.
 func (s *Store) ApplyVMState(ctx context.Context, userID, agentID, state, endpoint, failure string) error {
@@ -129,7 +193,7 @@ func (s *Store) ApplyVMState(ctx context.Context, userID, agentID, state, endpoi
 	res, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = ?, failure = ?,
 endpoint = CASE WHEN ? != '' THEN ? ELSE endpoint END,
 last_wake_at = CASE WHEN ? != '' THEN ? ELSE last_wake_at END,
-created_running_at = CASE WHEN ? = 'running' AND COALESCE(created_running_at, '') = '' THEN ? ELSE created_running_at END
+created_running_at = CASE WHEN ? = 'running' AND observe_boot = 1 AND COALESCE(created_running_at, '') = '' THEN ? ELSE created_running_at END
 WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`,
 		state, failure, endpoint, endpoint, wake, wake, state, runningAt, userID, agentID)
 	if err != nil {

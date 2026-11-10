@@ -2,10 +2,13 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -71,6 +74,9 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 				return nil, err
 			}
 			if state == "running" && err == nil && endpoint != "" && token != "" {
+				if rerr := s.refreshSecrets(ctx, job.UserID, agent, endpoint, token); rerr != nil {
+					return nil, rerr
+				}
 				s.pullJournal(ctx, job.UserID, job.AgentID, endpoint, token)
 				return h.Stream(ctx, endpoint, token, req)
 			}
@@ -130,7 +136,13 @@ func (s *Server) provisionMachine(w http.ResponseWriter, r *http.Request) {
 		defer s.prov.Done()
 		s.finishProvision(s.base, h, user.ID, agent, image, publicURL)
 	}()
-	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID)+"/machine", http.StatusSeeOther)
+	target := "/agents/" + url.PathEscape(agent.ID) + "/machine"
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", target)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) finishProvision(ctx context.Context, h host.AgentHost, userID string, agent store.Agent, image, publicURL string) {
@@ -160,10 +172,13 @@ func (s *Server) finishProvision(ctx context.Context, h host.AgentHost, userID s
 		Idle: idle, HTTPPort: host.DefaultHTTPPort,
 		ControlURL: publicURL, Bootstrap: boot,
 		Tags: []string{host.InstanceTag(inst)},
+		Accepted: func(m host.Machine) {
+			if m.ID == "" {
+				return
+			}
+			s.noteVM(ctx, userID, agent.ID, m.ID, store.EventCreateAccepted, time.Since(started))
+		},
 	})
-	if err == nil && created.ID != "" {
-		s.noteVM(ctx, userID, agent.ID, created.ID, store.EventCreateAccepted, time.Since(started))
-	}
 	if err != nil || created.State != "running" || created.ID == "" || created.Endpoint == "" {
 		if created.ID != "" {
 			s.deleteQuiet(h, created.ID)
@@ -483,6 +498,7 @@ func (s *Server) observedMachine(ctx context.Context, userID, agentID string, vm
 	if err != nil {
 		return state, endpoint
 	}
+	s.noteIfEdgeResume(ctx, userID, agentID, vm.MicroVMID, state, got.State)
 	_ = s.store.ApplyVMState(ctx, userID, agentID, got.State, got.Endpoint, "")
 	if got.Endpoint != "" {
 		endpoint = got.Endpoint
@@ -551,6 +567,7 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 		got, serr := h.Status(cctx, vm.MicroVMID)
 		cancel()
 		if serr == nil {
+			s.noteIfEdgeResume(ctx, userID, agent.ID, vm.MicroVMID, vm.State, got.State)
 			_ = s.store.ApplyVMState(ctx, userID, agent.ID, got.State, got.Endpoint, "")
 			if fresh, ferr := s.store.GetAgent(ctx, userID, agent.ID); ferr == nil {
 				*agent = fresh
@@ -579,6 +596,8 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 	default:
 		view.CanDelete = true
 		view.LastWake = vm.LastWake
+		view.ShowFirst = true
+		view.FirstRunning = vm.CreatedRunning
 		switch vm.State {
 		case "running":
 			_, token, credErr := s.store.VMCredentials(ctx, userID, agent.ID)
@@ -605,4 +624,59 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 		}
 	}
 	return view
+}
+
+// refreshSecrets reloads Cast when the granted secrets or the provider key
+// differ from the set the guest last started with. An empty stored value
+// reloads once. The fingerprint is a hash. Values are not logged.
+func (s *Server) refreshSecrets(ctx context.Context, userID string, agent store.Agent, endpoint, token string) error {
+	fp, err := s.secretFingerprint(ctx, userID, agent)
+	if err != nil {
+		return err
+	}
+	stored, err := s.store.SecretFP(ctx, userID, agent.ID)
+	if err != nil {
+		return err
+	}
+	if stored != "" && stored == fp {
+		return nil
+	}
+	h, _, _ := s.hostConfig()
+	if h == nil || endpoint == "" || token == "" {
+		return nil
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 35*time.Second)
+	defer cancel()
+	if err := h.Reload(rctx, endpoint, token); err != nil {
+		s.logger().Info("vm", "event", "secrets_reload_failed", "agent_id", agent.ID)
+		return &run.Notice{Text: "The machine could not reload."}
+	}
+	return s.store.SetSecretFP(ctx, userID, agent.ID, fp)
+}
+
+func (s *Server) secretFingerprint(ctx context.Context, userID string, agent store.Agent) (string, error) {
+	secrets, err := s.store.GrantedSecrets(ctx, userID, agent.ID)
+	if err != nil {
+		return "", err
+	}
+	type pair struct {
+		name  string
+		value string
+	}
+	pairs := make([]pair, 0, len(secrets)+1)
+	for _, sec := range secrets {
+		pairs = append(pairs, pair{name: sec.Name, value: sec.Value})
+	}
+	if name, value, missing := castcfg.ProviderSecret(agent.Model); missing == "" && name != "" && value != "" {
+		pairs = append(pairs, pair{name: name, value: value})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
+	sum := sha256.New()
+	for _, p := range pairs {
+		sum.Write([]byte(p.name))
+		sum.Write([]byte{0})
+		sum.Write([]byte(p.value))
+		sum.Write([]byte{0})
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }

@@ -475,6 +475,29 @@ func TestCreateBodyIncludesInstanceTag(t *testing.T) {
 	}
 }
 
+func TestCreateAcceptedBeforePoll(t *testing.T) {
+	const secret = "cbt_bootstrap_secret_value"
+	api := newScriptAPI(t, secret)
+	m := newTestClient(t, api, "machine-token-for-tests")
+	spec := testSpec(secret)
+	called := false
+	spec.Accepted = func(vm Machine) {
+		api.mu.Lock()
+		n := api.getN
+		api.mu.Unlock()
+		if n != 0 || vm.ID == "" {
+			t.Errorf("accepted late")
+		}
+		called = true
+	}
+	if _, err := m.Create(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("accepted was not called")
+	}
+}
+
 func TestLiveWindowRequiresFortyMinutes(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	if err := LiveWindow(time.Time{}, false, now); err == nil {

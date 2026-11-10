@@ -97,11 +97,12 @@ func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 		}
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, "create")
 	f.Creates = append(f.Creates, spec)
 	if f.CreateErr != nil {
-		return Machine{}, f.CreateErr
+		err := f.CreateErr
+		f.mu.Unlock()
+		return Machine{}, err
 	}
 	id := "vm-test"
 	if len(f.Creates) > 1 {
@@ -129,6 +130,11 @@ func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 		m.State = f.ForceState
 	}
 	f.Machines[id] = m
+	accepted := spec.Accepted
+	f.mu.Unlock()
+	if accepted != nil {
+		accepted(Machine{ID: m.ID, Name: m.Name, State: "new"})
+	}
 	return m, nil
 }
 

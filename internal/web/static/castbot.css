@@ -258,6 +258,8 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .comp .ph { color: var(--tx3); min-height: 24px; }
 .comp .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .start-note { margin: 0 0 8px; font-size: 13px; line-height: 1.35; color: var(--tx2); }
+.start-form { display: flex; justify-content: flex-end; }
+.start-form .btn { min-height: 36px; }
 .comp .row .hint { font-size: 12.5px; color: var(--tx3); margin-left: 4px; }
 .comp .row .btn { margin-left: auto; }
 .comp .send { margin-left: auto; width: 38px; height: 38px; border-radius: 11px; }
@@ -667,6 +669,7 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
   .comp .ph { order: 2; flex: 1; min-height: 0; }
   .comp .row > .ibtn:first-child { order: 1; }
   .comp .send, .comp .btn.stop { order: 3; margin-left: 0; }
+  .start-form .btn { min-height: 44px; }
   .cmd { white-space: pre-wrap; word-break: break-all; }
   .ch-h .tabs a, .seg label, .seg a { height: 44px; }
   .psec-h .link, .link { display: inline-flex; align-items: center; min-height: 44px; }

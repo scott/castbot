@@ -179,8 +179,9 @@
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="thread" value="{{.ThreadID}}">
 <textarea class="ph" name="body" maxlength="8000" rows="1" placeholder="Message {{.Agent.Name}}" aria-label="Message {{.Agent.Name}}"></textarea>
-<div class="row"><span class="hint">{{if .StartMachine}}No machine yet. Start it to chat.{{else}}Enter to send · Shift+Enter for a new line{{end}}</span>{{if .StartMachine}}<button class="btn pri sm" type="submit" formaction="/agents/{{.Agent.ID}}/machine">Start</button>{{else}}<button class="btn pri sm" type="submit">Send</button>{{end}}</div>
-</form></div>
+<div class="row"><span class="hint">Enter to send · Shift+Enter for a new line</span>{{if not .StartMachine}}<button class="btn pri sm" type="submit">Send</button>{{end}}</div>
+</form>
+{{if .StartMachine}}<form class="start-form" method="post" action="/agents/{{.Agent.ID}}/machine" hx-boost="false"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">Start</button></form>{{end}}</div>
 {{else if eq .Tab "machine"}}
 {{template "machinePanel" .}}
 {{else}}
@@ -319,7 +320,7 @@
 <p class="muted">{{.Machine.Lead}}</p>
 {{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
 <span class="chip {{.Agent.ChipClass}}"><span class="pip"></span>{{.Agent.ChipLabel}}</span>
-<div class="meta-grid"><div><div class="k">Size</div><div class="v">{{.Agent.SizeLabel}}</div></div><div><div class="k">Auto-pause</div><div class="v">{{.Agent.IdleLabel}}</div></div>{{if .Machine.LastWake}}<div><div class="k">Last wake</div><div class="v">{{.Machine.LastWake}}</div></div>{{end}}</div>
+<div class="meta-grid"><div><div class="k">Size</div><div class="v">{{.Agent.SizeLabel}}</div></div><div><div class="k">Auto-pause</div><div class="v">{{.Agent.IdleLabel}}</div></div>{{if .Machine.ShowFirst}}<div><div class="k">First running</div><div class="v">{{.Machine.FirstRunning}}</div></div>{{end}}{{if .Machine.LastWake}}<div><div class="k">Last wake</div><div class="v">{{.Machine.LastWake}}</div></div>{{end}}</div>
 <div class="acts">
 {{if or .Machine.CanStart .Machine.CanRetry}}<form method="post" action="/agents/{{.Agent.ID}}/machine"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">{{if .Machine.CanRetry}}Try again{{else}}Start machine{{end}}</button></form>{{end}}
 {{if .Machine.CanPause}}<form method="post" action="/agents/{{.Agent.ID}}/machine/pause"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Pause</button></form>{{end}}

@@ -106,6 +106,9 @@ func (m *MicroVM) Create(ctx context.Context, spec CreateSpec) (Machine, error) 
 	if err != nil {
 		return Machine{}, err
 	}
+	if spec.Accepted != nil && vm.ID != "" {
+		spec.Accepted(vm)
+	}
 	ready, err := m.poll(ctx, vm.ID)
 	if err != nil {
 		m.cleanup(vm.ID)
@@ -635,6 +638,30 @@ func (m *MicroVM) edgeRead(ctx context.Context, method, target, agentToken strin
 		return nil, fmt.Errorf("journal status %d", res.StatusCode)
 	}
 	return raw, nil
+}
+
+// EdgeCall is one authenticated guest request. Live tests use it for the
+// clock and for a CLI token call. It does not log the token or the body.
+func (m *MicroVM) EdgeCall(ctx context.Context, method, target, agentToken string, body []byte) (int, []byte, error) {
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, rdr)
+	if err != nil {
+		return 0, nil, err
+	}
+	m.edgeAuth(req, agentToken)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := m.edge.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	return res.StatusCode, raw, err
 }
 
 func (m *MicroVM) edgeOnce(ctx context.Context, method, target, agentToken string, body []byte) (int, error) {

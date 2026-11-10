@@ -94,6 +94,7 @@ func (s *Server) finishExport(w http.ResponseWriter, r *http.Request, user store
 	err := s.renderAgent(rec, r, user, agentID, false, "machine", http.StatusOK, "")
 	if err != nil || rec.Code != http.StatusOK || r.Context().Err() != nil {
 		_ = s.store.RevokeCLIToken(context.Background(), user.ID, agentID, tokenID)
+		s.pushCLITokens(context.Background(), user.ID, agentID)
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
@@ -105,6 +106,7 @@ func (s *Server) finishExport(w http.ResponseWriter, r *http.Request, user store
 	w.WriteHeader(rec.Code)
 	if _, werr := w.Write(rec.Body.Bytes()); werr != nil || r.Context().Err() != nil {
 		_ = s.store.RevokeCLIToken(context.Background(), user.ID, agentID, tokenID)
+		s.pushCLITokens(context.Background(), user.ID, agentID)
 		return
 	}
 	_ = s.store.MarkCLITokenViewed(r.Context(), user.ID, agentID, tokenID)

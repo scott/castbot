@@ -208,10 +208,10 @@ func (s *Supervisor) proxy(w http.ResponseWriter, r *http.Request) {
 		req.Header.Set("Accept", accept)
 	}
 	s.mu.Lock()
-	token := s.token
+	runtimeToken := s.runtimeToken
 	s.mu.Unlock()
-	if token != "" {
-		req.Header.Set("X-Cast-Authorization", "Bearer "+token)
+	if runtimeToken != "" {
+		req.Header.Set("Authorization", "Bearer "+runtimeToken)
 	}
 	res, err := s.proxyClient.Do(req)
 	if err != nil {

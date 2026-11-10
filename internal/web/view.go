@@ -15,7 +15,8 @@ type cellView struct {
 }
 
 type machineView struct {
-	Lead, LastWake                                   string
+	Lead, LastWake, FirstRunning                     string
+	ShowFirst                                        bool
 	CanStart, CanPause, CanWake, CanRetry, CanDelete bool
 }
 

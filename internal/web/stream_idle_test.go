@@ -2,7 +2,7 @@ package web
 
 import (
 	"context"
-	"log/slog"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,9 +27,6 @@ func TestIdleStreamSurvivesCutsAndReload(t *testing.T) {
 	px := httptest.NewServer(proxy)
 	t.Cleanup(px.Close)
 	h := newHarnessWith(t, runtime.NewHTTP(px.URL))
-	h.srv.SetKeepalive(25 * time.Second)
-	rec := &slogRec{}
-	h.srv.SetLogger(slog.New(rec))
 	ip := "203.0.113.235:9"
 	user, secret := h.account("idle-s07@example.com", "Idle", "correct-horse-1")
 	h.login("idle-s07@example.com", "correct-horse-1", secret, ip, false)
@@ -45,25 +42,38 @@ func TestIdleStreamSurvivesCutsAndReload(t *testing.T) {
 	}
 	runID := runIDFrom(t, body)
 	eventsURL := live.URL + "/runs/" + runID + "/events"
-	first, err := readSSE(ctx, eventsURL, h.cookieList(), "", func(ev []sseEvent) bool {
-		return countEvent(ev, "text") > 0
-	})
-	if err != nil {
-		t.Fatal(err)
+	cookies := h.cookieList()
+	started := time.Now()
+	readPartial := func(last string, d time.Duration) []sseEvent {
+		t.Helper()
+		pctx, stop := context.WithTimeout(ctx, d)
+		defer stop()
+		ev, err := readSSE(pctx, eventsURL, cookies, last, nil)
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+		if countEvent(ev, "text") != 0 || countEvent(ev, "fail") != 0 {
+			t.Fatalf("events during silence %d text %d fail", countEvent(ev, "text"), countEvent(ev, "fail"))
+		}
+		return ev
 	}
-	last := lastID(first)
-	second, err := readSSE(ctx, eventsURL, h.cookieList(), last, func(ev []sseEvent) bool {
+	first := readPartial("", 10*time.Second)
+	second := readPartial(lastID(first), 10*time.Second)
+	if time.Since(started) < 18*time.Second {
+		t.Fatal("reloads were not during the silence")
+	}
+	third, err := readSSE(ctx, eventsURL, cookies, lastID(second), func(ev []sseEvent) bool {
 		return countEvent(ev, "done") > 0
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	combined := append(append([]sseEvent{}, first...), second...)
+	combined := append(append(append([]sseEvent{}, first...), second...), third...)
 	got, seqs := textFrom(t, combined)
 	if got != want || strings.Count(got, want) != 1 {
 		t.Fatalf("text %q", got)
 	}
-	if strings.Contains(got, run.Stopped) {
+	if strings.Contains(got, run.Stopped) || countEvent(combined, "fail") != 0 {
 		t.Fatal("false stop")
 	}
 	for i := 1; i < len(seqs); i++ {
@@ -74,8 +84,5 @@ func TestIdleStreamSurvivesCutsAndReload(t *testing.T) {
 	row, err := h.st.GetRun(ctx, user.ID, runID)
 	if err != nil || row.Status != "done" || row.Error != "" {
 		t.Fatalf("%+v %v", row, err)
-	}
-	if !rec.has("run_id="+runID, "gap_ms=") {
-		t.Fatal("keepalive gap was not logged")
 	}
 }

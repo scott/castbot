@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/scott/castbot/internal/host"
@@ -30,16 +31,28 @@ func (s *Server) SetLogger(l *slog.Logger) {
 }
 
 func (s *Server) noteGuestReady(ctx context.Context, userID, agentID, microID string, d time.Duration) {
+	vm, err := s.store.LiveVM(ctx, userID, agentID)
+	if err != nil {
+		return
+	}
 	events, err := s.store.ListVMEvents(ctx, userID, agentID)
 	if err != nil {
 		return
 	}
 	for _, ev := range events {
-		if ev.Kind == store.EventGuestReady {
+		if ev.Kind == store.EventGuestReady && ev.AgentVMID == vm.ID {
 			return
 		}
 	}
 	s.noteVM(ctx, userID, agentID, microID, store.EventGuestReady, d)
+}
+
+// noteIfEdgeResume records a running observation that this process did not wake.
+// A row that is still creating is the normal boot, not a resume.
+func (s *Server) noteIfEdgeResume(ctx context.Context, userID, agentID, microID, prev, next string) {
+	if next == "running" && prev != "running" && prev != "creating" && prev != "" {
+		s.noteVM(ctx, userID, agentID, microID, store.EventEdgeResume, 0)
+	}
 }
 
 // kickProbe asks the guest for castlet health after a token is saved.
@@ -157,10 +170,21 @@ func reconcileKind(err error) string {
 		return ""
 	}
 	msg := err.Error()
-	if len(msg) > 40 {
-		msg = msg[:40]
+	const mark = "status "
+	if i := strings.Index(msg, mark); i >= 0 {
+		rest := msg[i+len(mark):]
+		j := 0
+		for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+			j++
+		}
+		if j > 0 {
+			return "http_" + rest[:j]
+		}
 	}
-	return msg
+	if strings.Contains(msg, "timeout") || strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such host") || strings.Contains(msg, "network is unreachable") {
+		return "network"
+	}
+	return "other"
 }
 
 // reconcileOnce copies a paused list result onto rows that still say running.
@@ -197,10 +221,13 @@ func (s *Server) reconcileOnce(ctx context.Context) error {
 		if !ok || got.State != "paused" {
 			continue
 		}
-		if err := s.store.ApplyVMState(ctx, row.UserID, row.AgentID, "paused", got.Endpoint, ""); err != nil {
+		changed, err := s.store.MarkPausedIfUnchanged(ctx, row.UserID, row.AgentID, row.MicroVMID, row.LastWake, got.Endpoint)
+		if err != nil {
 			return err
 		}
-		s.noteVM(ctx, row.UserID, row.AgentID, row.MicroVMID, store.EventPauseObserved, 0)
+		if changed {
+			s.noteVM(ctx, row.UserID, row.AgentID, row.MicroVMID, store.EventPauseObserved, 0)
+		}
 	}
 	return nil
 }
