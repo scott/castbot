@@ -110,6 +110,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	sentTerminal := false
 	orphaned := false
 	lastKA := time.Now()
+	lastCards := ""
 	for {
 		if err := r.Context().Err(); err != nil {
 			return
@@ -143,6 +144,13 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			_ = writeSSE(w, 0, "stop", "")
 			flush()
 			return
+		}
+		if cards, err := s.cardsHTML(r.Context(), user, runRow.ID, from(r).CSRF); err == nil && cards != "" && cards != lastCards {
+			if err := writeSSE(w, 0, "card", cards); err != nil {
+				return
+			}
+			lastCards = cards
+			flush()
 		}
 		current, err := s.store.GetRun(r.Context(), user.ID, runRow.ID)
 		if err != nil {
@@ -278,13 +286,19 @@ func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user 
 		if err := json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
 			return err
 		}
-		return s.writeDone(ctx, w, user, runRow, ev.Seq, payload.MessageID)
+		return s.writeDone(ctx, w, user, runRow, ev.Seq, payload.MessageID, csrf)
+	case "permission":
+		body, err := s.cardsHTML(ctx, user, runRow.ID, csrf)
+		if err != nil {
+			return err
+		}
+		return writeSSE(w, ev.Seq, "card", body)
 	default:
 		return writeSSE(w, ev.Seq, "note", "")
 	}
 }
 
-func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, seq int, messageID string) error {
+func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, seq int, messageID, csrf string) error {
 	msg, err := s.store.GetMessage(ctx, user.ID, messageID)
 	if err != nil {
 		return err
@@ -298,7 +312,11 @@ func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user stor
 		return writeSSE(w, seq, "done", "")
 	}
 	views[0].ShowDay = false
-	body, err := execTemplate("messages", page{Messages: views})
+	cards, err := s.cardsFor(ctx, user, runRow.ID, csrf)
+	if err != nil {
+		return err
+	}
+	body, err := execTemplate("doneTurn", page{Messages: views, Cards: cards})
 	if err != nil {
 		return err
 	}
@@ -340,6 +358,9 @@ func (s *Server) loadLives(r *http.Request, user store.User, threadID string, ag
 	var out []liveView
 	for _, row := range runs {
 		view := liveView{RunID: row.ID, Color: agent.Color, Letter: agent.Letter, CSRF: from(r).CSRF}
+		if cards, err := s.cardsFor(r.Context(), user, row.ID, from(r).CSRF); err == nil {
+			view.Cards = cards
+		}
 		switch row.Status {
 		case "queued", "streaming", "waiting_approval":
 			out = append(out, view)

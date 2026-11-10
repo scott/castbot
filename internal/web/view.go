@@ -34,8 +34,10 @@ type sectionView struct {
 }
 
 type msgView struct {
-	ID, Author, Body, Color, Letter, Stamp, Day string
-	ShowDay                                     bool
+	ID, Author, Body, Color, Letter, Stamp, Day, At string
+	ShowDay                                         bool
+	HasCard                                         bool
+	Card                                            cardView
 }
 
 type threadView struct {
@@ -51,6 +53,18 @@ type cliTokView struct {
 type liveView struct {
 	RunID, Color, Letter, Text, Error, CSRF, Status string
 	Failed                                          bool
+	Cards                                           []cardView
+}
+
+type cardView struct {
+	ID, RunID, Tool, Line, CSRF, When, At string
+	Args                                  []argView
+	Pending, ReadOnly, Approved           bool
+}
+
+type argView struct {
+	Key, Value, Short string
+	Hidden, Long      bool
 }
 
 type sessView struct {
@@ -109,6 +123,7 @@ type page struct {
 	CLITokens    []cliTokView
 	Threads      []threadView
 	ThreadID     string
+	Cards        []cardView
 	Text         string
 	RoleLine     string
 	PasswordOn   string

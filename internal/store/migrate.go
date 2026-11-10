@@ -436,6 +436,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 			return err
 		}
 	}
+	// Version 12 is the real runtime. Approvals are version 13.
+	if err := s.migrateApprovals(); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -654,9 +654,15 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 .help { font-size: 12.5px; color: var(--tx3); display: flex; align-items: center; gap: 6px; }
 .secret .full { grid-column: 1 / -1; margin-top: -2px; }
 .card > .btn.ghost { justify-self: start; }
-.appr.done { padding: 12px 14px; }
+.appr.done, .appr.settled { padding: 12px 14px; }
+.appr.settled { border-color: var(--line); background: var(--surf); }
+.appr.settled .ico { background: var(--raise); color: var(--tx2); }
 .appr.done .ico { background: var(--ok-soft); color: var(--ok); }
-.appr.done h3 { font-size: 14.5px; }
+.appr.done h3, .appr.settled h3 { font-size: 14.5px; }
+.appr { min-width: 0; max-width: 100%; }
+.appr .kv dd { overflow-wrap: anywhere; min-width: 0; }
+.appr .cmd, .appr .mono { white-space: pre-wrap; word-break: break-word; overflow-x: auto; max-width: 100%; }
+.appr details summary { cursor: pointer; }
 .rt-filter { margin-bottom: 12px; }
 .drawer-b { gap: 14px; padding-top: 16px; }
 .drawer-b textarea.ta { min-height: 72px; }

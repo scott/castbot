@@ -33,6 +33,8 @@ var (
 	ErrCancel = errors.New("the runtime cannot cancel a turn yet")
 	// ErrNotSupported is returned for a call this host cannot make.
 	ErrNotSupported = errors.New("not supported")
+	// ErrNoRequest means the agent has no matching permission prompt.
+	ErrNoRequest = errors.New("no pending permission request")
 )
 
 // Failed is a create that reached a failed state. The machine was deleted.

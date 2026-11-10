@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -202,6 +203,51 @@ func (c *HTTPClient) Open(ctx context.Context, req Send) (Stream, error) {
 	return &httpStream{body: res.Body, reader: bufio.NewReader(res.Body)}, nil
 }
 
+// Respond posts permission/respond. allow false is Deny.
+func (c *HTTPClient) Respond(ctx context.Context, requestID string, allow bool) error {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return errors.New("missing request id")
+	}
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      requestID,
+		"method":  "permission/respond",
+		"params": map[string]any{
+			"id":       requestID,
+			"approved": allow,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	if c.token != "" {
+		httpReq.Header.Set("X-Cast-Authorization", "Bearer "+c.token)
+	}
+	if c.edge != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.edge)
+	}
+	res, err := c.client.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusNoContent && res.StatusCode != http.StatusAccepted {
+		return &StatusError{Code: res.StatusCode}
+	}
+	return PermissionError(raw)
+}
+
 type httpStream struct {
 	body   io.ReadCloser
 	reader *bufio.Reader
@@ -334,4 +380,38 @@ func ParseData(data string) (Parsed, error) {
 		}
 	}
 	return out, nil
+}
+
+// ErrNoRequest means permission/respond did not match a waiting prompt.
+var ErrNoRequest = errors.New("no pending permission request")
+
+// DenialMessage is the tool result Cast returns when an ask prompt is denied.
+func DenialMessage(tool string) string {
+	tool = strings.TrimSpace(tool)
+	if tool == "" {
+		tool = "tool"
+	}
+	return "Error: Permission denied for " + tool + ". Approval is required before this tool can run, and it was not executed."
+}
+
+// PermissionError reads a permission/respond body.
+// An empty body is success. A missing prompt is ErrNoRequest.
+// Other error text is not returned, so a body cannot leak into logs.
+func PermissionError(body []byte) error {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil
+	}
+	var frame struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &frame) != nil || frame.Error == nil {
+		return nil
+	}
+	msg := strings.ToLower(strings.TrimSpace(frame.Error.Message))
+	if strings.Contains(msg, "no pending") {
+		return ErrNoRequest
+	}
+	return errors.New("permission was not accepted")
 }

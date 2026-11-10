@@ -52,6 +52,9 @@ const (
 	// the empty-resume streak for a long tool call, and this cap still
 	// fails a runtime that never finishes.
 	runLimit = 30 * time.Minute
+	// DefaultApprovalWait is how long a pending approval stays open.
+	// The server can set a different wait. The browser does not.
+	DefaultApprovalWait = 10 * time.Minute
 )
 
 var (
@@ -91,13 +94,14 @@ type Opener func(ctx context.Context, job Job, req runtime.Send) (runtime.Stream
 
 // Runner starts run goroutines.
 type Runner struct {
-	ctx    context.Context
-	store  *store.Store
-	client runtime.Client
-	open   Opener
-	Hub    *Hub
-	budget time.Duration
-	limit  time.Duration
+	ctx      context.Context
+	store    *store.Store
+	client   runtime.Client
+	open     Opener
+	Hub      *Hub
+	budget   time.Duration
+	limit    time.Duration
+	approval time.Duration
 
 	mu     sync.Mutex
 	active map[string]struct{}
@@ -110,14 +114,15 @@ func New(ctx context.Context, st *store.Store, client runtime.Client) *Runner {
 		ctx = context.Background()
 	}
 	return &Runner{
-		ctx:    ctx,
-		store:  st,
-		client: client,
-		Hub:    &Hub{},
-		budget: retryBudget,
-		limit:  runLimit,
-		active: map[string]struct{}{},
-		rng:    rand.New(rand.NewSource(time.Now().UnixNano())),
+		ctx:      ctx,
+		store:    st,
+		client:   client,
+		Hub:      &Hub{},
+		budget:   retryBudget,
+		limit:    runLimit,
+		approval: DefaultApprovalWait,
+		active:   map[string]struct{}{},
+		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -129,6 +134,25 @@ func (r *Runner) SetBudget(d time.Duration) {
 	r.mu.Lock()
 	r.budget = d
 	r.mu.Unlock()
+}
+
+// SetApprovalTimeout sets how long a pending approval stays open.
+func (r *Runner) SetApprovalTimeout(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	r.mu.Lock()
+	r.approval = d
+	r.mu.Unlock()
+}
+
+func (r *Runner) approvalTimeout() time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.approval <= 0 {
+		return DefaultApprovalWait
+	}
+	return r.approval
 }
 
 // SetRunLimit replaces the wall clock cap for one reply. Tests use a short cap.
@@ -402,11 +426,7 @@ func (r *Runner) read(stream runtime.Stream, job Job, offset *int, text *strings
 			return false, confirmed, held(), parsed.RPCErr, nil
 		}
 		if len(parsed.Perm) > 0 {
-			payload, err := json.Marshal(map[string]json.RawMessage{"permission": parsed.Perm})
-			if err != nil {
-				return false, confirmed, held(), "", err
-			}
-			if _, err := r.store.AppendRunEvent(r.ctx, job.UserID, job.RunID, "permission", string(payload), *offset); err != nil {
+			if err := r.recordPermission(job, parsed.Perm, *offset); err != nil {
 				return false, confirmed, held(), "", err
 			}
 			r.Hub.Notify(job.RunID)
@@ -455,6 +475,13 @@ func nextUntil(stream runtime.Stream, ctx context.Context, deadline time.Time) (
 	case got := <-ch:
 		return got.frame, got.err
 	}
+}
+
+func (r *Runner) recordPermission(job Job, raw json.RawMessage, offset int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := r.store.RecordPermission(ctx, job.UserID, job.RunID, raw, r.store.Now().Add(r.approvalTimeout()), offset)
+	return err
 }
 
 func (r *Runner) finish(job Job, text string, offset int) error {

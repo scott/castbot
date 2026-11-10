@@ -5,6 +5,7 @@ package web
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -149,6 +150,23 @@ func TestShots(t *testing.T) {
 			t.Run("s07-nokey-"+theme+"-"+vp.name, func(t *testing.T) {
 				shootS07NoKey(t, browserCtx, dir07, vp.w, vp.h, theme, vp.name)
 			})
+		}
+	}
+	dir07b := filepath.Join("..", "..", "docs", "evidence", "S07b")
+	if err := os.MkdirAll(dir07b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, theme := range []string{"dark", "light"} {
+		for _, vp := range []struct {
+			w, h int
+			name string
+		}{{1280, 800, "1280"}, {390, 844, "390"}} {
+			for _, kind := range []string{"pending", "approved", "denied", "expired", "cli"} {
+				kind := kind
+				t.Run("s07b-"+kind+"-"+theme+"-"+vp.name, func(t *testing.T) {
+					shootApproval(t, browserCtx, dir07b, vp.w, vp.h, theme, vp.name, kind)
+				})
+			}
 		}
 	}
 }
@@ -832,6 +850,190 @@ func shootCLIThread(t *testing.T, browser context.Context, dir string, width, he
 		t.Fatal(err)
 	}
 	shotPage(t, ctx, filepath.Join(dir, "cli-thread-"+theme+"-"+name+".png"))
+	assertShotClean(t, ctx)
+}
+
+func shootApproval(t *testing.T, browser context.Context, dir string, width, height int, theme, name, kind string) {
+	t.Helper()
+	h := newHarness(t)
+	user, secret := h.account("s07b-"+kind+"-"+theme+"-"+name+"@example.com", "Demo User", "correct-horse-1")
+	if err := h.st.UpdateTheme(context.Background(), user.ID, theme); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SetTimezone(context.Background(), user.ID, "America/New_York"); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Date(2026, 11, 10, 20, 42, 0, 0, time.UTC)
+	cur := when
+	h.st.SetNow(func() time.Time { return cur })
+	agent := seedAgent(t, h.st, user.ID, "Atlas")
+	var page string
+	var ask *runtime.Ask
+	if kind == "pending" {
+		ask = runtime.NewAsk(runtime.AskOptions{Tool: "bash", Args: map[string]any{"command": "ls demo", "api_key": "demo-secret-value"}})
+		up := httptest.NewServer(ask)
+		t.Cleanup(up.Close)
+		h.srv.SetClient(runtime.NewHTTP(up.URL))
+		ip := "203.0.113.60:9"
+		h.login("s07b-"+kind+"-"+theme+"-"+name+"@example.com", "correct-horse-1", secret, ip, false)
+		code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {"List the demo folder"}}), ip, map[string]string{"HX-Request": "true"})
+		if code != http.StatusOK {
+			t.Fatalf("post %d %s", code, body)
+		}
+		deadline := time.Now().Add(8 * time.Second)
+		for {
+			rows, err := h.st.ListPendingApprovals(context.Background(), user.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) == 1 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("no approval")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		c := h.jar["castbot_session"]
+		if c == nil {
+			t.Fatal("no session")
+		}
+		page = "/agents/" + agent.ID
+		ts := httptest.NewTLSServer(h.srv.Handler())
+		t.Cleanup(ts.Close)
+		ctx := tab(t, browser)
+		if err := chromedp.Run(ctx, cliOpen(ts.URL, c.Value, ts.URL+page, width, height)...); err != nil {
+			t.Fatal(err)
+		}
+		if err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Approve")>=0&&t.indexOf("Deny")>=0&&t.indexOf("ls demo")>=0&&t.indexOf("Hidden")>=0&&t.indexOf("demo-secret-value")<0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second))); err != nil {
+			t.Fatal(err)
+		}
+		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var n=document.querySelector(".appr");if(n)n.scrollIntoView({block:"center"});return true;})()`), new(bool))); err != nil {
+			t.Fatal(err)
+		}
+		shotPage(t, ctx, filepath.Join(dir, kind+"-"+theme+"-"+name+".png"))
+		assertShotClean(t, ctx)
+		if len(ask.Calls()) != 0 {
+			t.Fatalf("shot posted %#v", ask.Calls())
+		}
+		// Approve after the shot so the runtime stream and the page
+		// stream both finish. An open stream keeps the test server in Close.
+		rows, err := h.st.ListPendingApprovals(context.Background(), user.ID)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("pending %v %d", err, len(rows))
+		}
+		if code, body := postDecision(h, rows[0], ip, true); code != http.StatusOK {
+			t.Fatalf("release %d %s", code, body)
+		}
+		deadline = time.Now().Add(8 * time.Second)
+		for len(ask.Calls()) == 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("approval did not finish")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		_ = chromedp.Run(ctx, chromedp.Navigate("about:blank"))
+		return
+	}
+	if kind == "cli" {
+		if _, err := h.st.IngestJournal(context.Background(), user.ID, agent.ID, []store.JournalEntry{
+			{Seq: 1, At: "2026-11-10T20:40:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "request", Text: "List the demo folder"},
+			{Seq: 2, At: "2026-11-10T20:41:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "permission", Tool: "bash"},
+			{Seq: 3, At: "2026-11-10T20:42:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "decision", Tool: "bash", Decision: "approved"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		threads, err := h.st.ListThreadsByAgent(context.Background(), user.ID, agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, th := range threads {
+			if th.Kind == "cli" {
+				page = "/agents/" + agent.ID + "?thread=" + th.ID
+			}
+		}
+		if page == "" {
+			t.Fatal("missing cli thread")
+		}
+	} else {
+		cur = when.Add(-2 * time.Minute)
+		threads, err := h.st.ListThreadsByAgent(context.Background(), user.ID, agent.ID)
+		if err != nil || len(threads) == 0 {
+			t.Fatal(err)
+		}
+		if _, err := h.st.CreateMessage(context.Background(), user.ID, threads[0].ID, "user", user.ID, "List the demo folder"); err != nil {
+			t.Fatal(err)
+		}
+		runRow, err := h.st.CreateRun(context.Background(), user.ID, threads[0].ID, agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cur = when.Add(-time.Minute)
+		raw := json.RawMessage(`{"id":"req-demo","tool":"bash","arguments":{"command":"ls demo","api_key":"demo-secret-value"}}`)
+		ap, err := h.st.RecordPermission(context.Background(), user.ID, runRow.ID, raw, when, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cur = when
+		switch kind {
+		case "approved":
+			if _, claimed, err := h.st.ClaimDecision(context.Background(), user.ID, ap.ID, "approved", user.ID); err != nil || !claimed {
+				t.Fatal(err)
+			}
+			if _, _, err := h.st.FinishRun(context.Background(), user.ID, runRow.ID, "bash finished.", 2); err != nil {
+				t.Fatal(err)
+			}
+		case "denied":
+			if _, claimed, err := h.st.ClaimDecision(context.Background(), user.ID, ap.ID, "denied", user.ID); err != nil || !claimed {
+				t.Fatal(err)
+			}
+			if _, _, err := h.st.FinishRun(context.Background(), user.ID, runRow.ID, runtime.DenialMessage("bash"), 2); err != nil {
+				t.Fatal(err)
+			}
+		case "expired":
+			if _, err := h.st.ExpireDue(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := h.st.FinishRun(context.Background(), user.ID, runRow.ID, runtime.DenialMessage("bash"), 2); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatalf("kind %s", kind)
+		}
+		page = "/agents/" + agent.ID
+	}
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	ctx := tab(t, browser)
+	token := sessionToken(t, h, user.ID)
+	if err := chromedp.Run(ctx, cliOpen(ts.URL, token, ts.URL+page, width, height)...); err != nil {
+		t.Fatal(err)
+	}
+	needle := "Expired"
+	switch kind {
+	case "approved":
+		needle = "Approved by you at 3:42 PM"
+	case "denied":
+		needle = "Denied"
+	case "cli":
+		needle = "Answer it in the Cast CLI"
+	}
+	if err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("`+needle+`")>=0&&t.indexOf("demo-secret-value")<0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	if kind == "cli" {
+		var writable bool
+		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`!!document.querySelector(".appr button")`), &writable)); err != nil {
+			t.Fatal(err)
+		}
+		if writable {
+			t.Fatal("cli card has a button")
+		}
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var n=document.querySelector(".appr");if(n)n.scrollIntoView({block:"center"});return true;})()`), new(bool))); err != nil {
+		t.Fatal(err)
+	}
+	shotPage(t, ctx, filepath.Join(dir, kind+"-"+theme+"-"+name+".png"))
 	assertShotClean(t, ctx)
 }
 

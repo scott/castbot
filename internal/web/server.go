@@ -74,6 +74,9 @@ type Server struct {
 	recKind         string
 	recDelay        time.Duration
 	recEvery        time.Duration
+
+	approvalFor time.Duration
+	expireMu    sync.Mutex
 }
 
 // guest is one local castlet the control plane can proxy files through.
@@ -86,8 +89,10 @@ type guest struct {
 // client talks to the agent runtime. S03 and S04 swap that client.
 func New(st *store.Store, key []byte, client runtime.Client) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Server{store: st, key: key, client: client, runs: run.New(ctx, st, client), cancel: cancel, base: ctx}
+	s := &Server{store: st, key: key, client: client, runs: run.New(ctx, st, client), cancel: cancel, base: ctx, approvalFor: approvalWaitFromEnv()}
 	s.runs.SetOpen(s.openRun)
+	s.runs.SetApprovalTimeout(s.approvalFor)
+	go s.expireLoop()
 	return s
 }
 
@@ -274,6 +279,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /runs/{id}/events", s.runEvents)
 	mux.HandleFunc("GET /runs/{id}", s.getRun)
 	mux.HandleFunc("POST /runs/{id}/retry", s.retryRun)
+	mux.HandleFunc("POST /runs/{id}/approvals/{approval}/approve", s.approveRun)
+	mux.HandleFunc("POST /runs/{id}/approvals/{approval}/deny", s.denyRun)
+	mux.HandleFunc("GET /approvals/{id}", s.getApproval)
 	mux.HandleFunc("GET /agents", s.listAgents)
 
 	mux.HandleFunc("GET /sections", s.listSections)

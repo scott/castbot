@@ -427,6 +427,9 @@ func rejectDuplicates(n *yaml.Node, path string) error {
 	return nil
 }
 
+// SecretKey reports whether a config or argument key must not be shown.
+func SecretKey(key string) bool { return secretKey(key) }
+
 func secretKey(key string) bool {
 	k := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
 	switch k {
