@@ -42,13 +42,14 @@ type Agent struct {
 
 // Thread is a conversation owned by one user.
 type Thread struct {
-	ID          string
-	WorkspaceID string
-	UserID      string
-	Kind        string
-	AgentID     string
-	Title       string
-	CreatedAt   string
+	ID            string
+	WorkspaceID   string
+	UserID        string
+	Kind          string
+	AgentID       string
+	Title         string
+	CastSessionID string
+	CreatedAt     string
 }
 
 // Message is one turn in a thread. UserID is the owner, not the author.
@@ -60,6 +61,8 @@ type Message struct {
 	AuthorKind  string
 	AuthorID    string
 	Body        string
+	Origin      string
+	JournalSeq  int
 	CreatedAt   string
 }
 
@@ -446,7 +449,7 @@ func (s *Store) DeleteAgent(ctx context.Context, userID, id string) error {
 
 // ListThreads returns the caller's threads.
 func (s *Store) ListThreads(ctx context.Context, userID string) ([]Thread, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, created_at FROM threads WHERE user_id = ? ORDER BY created_at`, userID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, cast_session_id, created_at FROM threads WHERE user_id = ? ORDER BY created_at`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -459,7 +462,7 @@ func (s *Store) ListThreadsByAgent(ctx context.Context, userID, agentID string) 
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, created_at FROM threads WHERE user_id = ? AND agent_id = ? ORDER BY created_at`, userID, agentID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, cast_session_id, created_at FROM threads WHERE user_id = ? AND agent_id = ? ORDER BY created_at`, userID, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -470,8 +473,8 @@ func (s *Store) ListThreadsByAgent(ctx context.Context, userID, agentID string) 
 // GetThread returns one of the caller's threads.
 func (s *Store) GetThread(ctx context.Context, userID, id string) (Thread, error) {
 	var t Thread
-	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, created_at FROM threads WHERE id = ? AND user_id = ?`, id, userID).
-		Scan(&t.ID, &t.WorkspaceID, &t.UserID, &t.Kind, &t.AgentID, &t.Title, &t.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, kind, COALESCE(agent_id, ''), title, cast_session_id, created_at FROM threads WHERE id = ? AND user_id = ?`, id, userID).
+		Scan(&t.ID, &t.WorkspaceID, &t.UserID, &t.Kind, &t.AgentID, &t.Title, &t.CastSessionID, &t.CreatedAt)
 	if err != nil {
 		return Thread{}, scanErr(err)
 	}
@@ -480,7 +483,7 @@ func (s *Store) GetThread(ctx context.Context, userID, id string) (Thread, error
 
 // CreateThread adds a thread. AgentID, when set, must be the caller's agent.
 func (s *Store) CreateThread(ctx context.Context, userID, kind, agentID, title string) (Thread, error) {
-	if kind != "dm" && kind != "group" && kind != "routine" {
+	if kind != "dm" && kind != "group" && kind != "routine" && kind != "cli" {
 		return Thread{}, ErrInvalid
 	}
 	user, err := s.GetUser(ctx, userID)
@@ -556,7 +559,7 @@ func scanThreads(rows *sql.Rows) ([]Thread, error) {
 	var out []Thread
 	for rows.Next() {
 		var t Thread
-		if err := rows.Scan(&t.ID, &t.WorkspaceID, &t.UserID, &t.Kind, &t.AgentID, &t.Title, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.WorkspaceID, &t.UserID, &t.Kind, &t.AgentID, &t.Title, &t.CastSessionID, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -569,7 +572,7 @@ func (s *Store) ListMessages(ctx context.Context, userID, threadID string) ([]Me
 	if _, err := s.GetThread(ctx, userID, threadID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, created_at FROM messages WHERE user_id = ? AND thread_id = ? ORDER BY created_at, rowid`, userID, threadID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, origin, journal_seq, created_at FROM messages WHERE user_id = ? AND thread_id = ? ORDER BY created_at, COALESCE(journal_seq, 0), rowid`, userID, threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -580,8 +583,12 @@ func (s *Store) ListMessages(ctx context.Context, userID, threadID string) ([]Me
 // GetMessage returns one of the caller's messages.
 func (s *Store) GetMessage(ctx context.Context, userID, id string) (Message, error) {
 	var m Message
-	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, created_at FROM messages WHERE id = ? AND user_id = ?`, id, userID).
-		Scan(&m.ID, &m.WorkspaceID, &m.UserID, &m.ThreadID, &m.AuthorKind, &m.AuthorID, &m.Body, &m.CreatedAt)
+	var seq sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, origin, journal_seq, created_at FROM messages WHERE id = ? AND user_id = ?`, id, userID).
+		Scan(&m.ID, &m.WorkspaceID, &m.UserID, &m.ThreadID, &m.AuthorKind, &m.AuthorID, &m.Body, &m.Origin, &seq, &m.CreatedAt)
+	if seq.Valid {
+		m.JournalSeq = int(seq.Int64)
+	}
 	if err != nil {
 		return Message{}, scanErr(err)
 	}
@@ -645,8 +652,12 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 	var out []Message
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.WorkspaceID, &m.UserID, &m.ThreadID, &m.AuthorKind, &m.AuthorID, &m.Body, &m.CreatedAt); err != nil {
+		var seq sql.NullInt64
+		if err := rows.Scan(&m.ID, &m.WorkspaceID, &m.UserID, &m.ThreadID, &m.AuthorKind, &m.AuthorID, &m.Body, &m.Origin, &seq, &m.CreatedAt); err != nil {
 			return nil, err
+		}
+		if seq.Valid {
+			m.JournalSeq = int(seq.Int64)
 		}
 		out = append(out, m)
 	}

@@ -430,6 +430,19 @@ func TestRateLimitMessage(t *testing.T) {
 	}
 }
 
+func TestRefsForbiddenIsPrivate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("nope"))
+	}))
+	defer srv.Close()
+	repo := Repo{Owner: "priv403", Name: "helper", Unresolved: []string{"feature", "x"}}
+	_, err := resolveRef(context.Background(), srv.Client(), srv.URL, repo)
+	if !IsPrivate(err) {
+		t.Fatal(err)
+	}
+}
+
 func TestRefsLookupsAreCached(t *testing.T) {
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

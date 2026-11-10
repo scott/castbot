@@ -105,6 +105,26 @@ func TestShots(t *testing.T) {
 			})
 		}
 	}
+	dir06 := filepath.Join("..", "..", "docs", "evidence", "S06")
+	if err := os.MkdirAll(dir06, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, theme := range []string{"dark", "light"} {
+		for _, vp := range []struct {
+			w, h int
+			name string
+		}{{1280, 800, "1280"}, {390, 844, "390"}} {
+			t.Run("cli-export-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootCLIExport(t, browserCtx, dir06, vp.w, vp.h, theme, vp.name)
+			})
+			t.Run("cli-tokens-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootCLITokens(t, browserCtx, dir06, vp.w, vp.h, theme, vp.name)
+			})
+			t.Run("cli-thread-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootCLIThread(t, browserCtx, dir06, vp.w, vp.h, theme, vp.name)
+			})
+		}
+	}
 }
 
 func shootStream(t *testing.T, browser context.Context, dir string, width, height int, name string) {
@@ -683,6 +703,151 @@ func shootMachine(t *testing.T, browser context.Context, dir string, width, heig
 	}
 	saveShot(t, ctx, filepath.Join(dir, "waking-"+name+".png"))
 	assertNoSideScroll(t, ctx)
+}
+
+func shootCLIExport(t *testing.T, browser context.Context, dir string, width, height int, theme, name string) {
+	t.Helper()
+	h, fake, agent, token, ts := cliShot(t, theme, name)
+	if _, err := h.st.BeginVM(context.Background(), agent.UserID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s06"); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "https://demo.microvm.ondigitalocean.com"
+	if err := h.st.FinishVM(context.Background(), agent.UserID, agent.ID, "vm-shot", endpoint, "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := h.st.IssueBootstrap(context.Background(), agent.UserID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest, err := h.st.ExchangeBootstrap(context.Background(), agent.ID, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SaveVMToken(context.Background(), agent.ID, guest); err != nil {
+		t.Fatal(err)
+	}
+	fake.Machines["vm-shot"] = host.Machine{ID: "vm-shot", State: "running", Endpoint: endpoint}
+	ctx := tab(t, browser)
+	if err := chromedp.Run(ctx, cliOpen(ts.URL, token, ts.URL+"/agents/"+agent.ID+"/machine", width, height)...); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.WaitVisible(`#cast-cli button`, chromedp.ByQuery),
+		chromedp.Click(`#cast-cli button`, chromedp.ByQuery),
+		chromedp.WaitVisible(`pre.cli-blob`, chromedp.ByQuery),
+		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("microvm")>=0&&t.indexOf("Copy this now")>=0&&t.indexOf("Add to Cast CLI")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shotPage(t, ctx, filepath.Join(dir, "cli-export-"+theme+"-"+name+".png"))
+	assertShotClean(t, ctx)
+}
+
+func shootCLITokens(t *testing.T, browser context.Context, dir string, width, height int, theme, name string) {
+	t.Helper()
+	h, fake, agent, token, ts := cliShot(t, theme, name)
+	if _, err := h.st.BeginVM(context.Background(), agent.UserID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s06"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.FinishVM(context.Background(), agent.UserID, agent.ID, "vm-shot", "https://vm.example", "paused", ""); err != nil {
+		t.Fatal(err)
+	}
+	fake.Machines["vm-shot"] = host.Machine{ID: "vm-shot", State: "paused"}
+	fake.SetForce("paused")
+	if _, _, err := h.st.IssueCLIToken(context.Background(), agent.UserID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.st.IssueCLIToken(context.Background(), agent.UserID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx := tab(t, browser)
+	if err := chromedp.Run(ctx, cliOpen(ts.URL, token, ts.URL+"/agents/"+agent.ID+"/machine", width, height)...); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.WaitVisible(`#cast-cli .tok button`, chromedp.ByQuery),
+		chromedp.Click(`#cast-cli .tok button`, chromedp.ByQuery),
+		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Revoked")>=0&&t.indexOf("Not yet")>=0&&t.indexOf("Active")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shotPage(t, ctx, filepath.Join(dir, "cli-tokens-"+theme+"-"+name+".png"))
+	assertShotClean(t, ctx)
+}
+
+func shootCLIThread(t *testing.T, browser context.Context, dir string, width, height int, theme, name string) {
+	t.Helper()
+	h, _, agent, token, ts := cliShot(t, theme, name)
+	if _, err := h.st.IngestJournal(context.Background(), agent.UserID, agent.ID, []store.JournalEntry{
+		{Seq: 1, At: "2026-11-10T18:00:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "request", Text: "from the cli"},
+		{Seq: 2, At: "2026-11-10T18:00:01Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "reply", Text: "echo from the cli"},
+		{Seq: 3, At: "2026-11-10T18:00:02Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "permission", Tool: "bash"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	threads, err := h.st.ListThreadsByAgent(context.Background(), agent.UserID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	for _, th := range threads {
+		if th.Kind == "cli" {
+			id = th.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("missing cli thread")
+	}
+	ctx := tab(t, browser)
+	if err := chromedp.Run(ctx, cliOpen(ts.URL, token, ts.URL+"/agents/"+agent.ID+"?thread="+id, width, height)...); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Cast CLI")>=0&&t.indexOf("from the cli")>=0&&t.indexOf("Answer it in the Cast CLI")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	shotPage(t, ctx, filepath.Join(dir, "cli-thread-"+theme+"-"+name+".png"))
+	assertShotClean(t, ctx)
+}
+
+func cliShot(t *testing.T, theme, name string) (*harness, *host.Fake, store.Agent, string, *httptest.Server) {
+	t.Helper()
+	h := newHarness(t)
+	fake := host.NewFake()
+	h.srv.SetHost(fake, "example.invalid/castbot-runtime:s06", "https://castbot.example")
+	user, _ := h.account("s06-"+theme+"-"+name+"@example.com", "Shot User", "correct-horse-1")
+	if err := h.st.UpdateTheme(context.Background(), user.ID, theme); err != nil {
+		t.Fatal(err)
+	}
+	agent := seedAgent(t, h.st, user.ID, "Wren")
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	return h, fake, agent, sessionToken(t, h, user.ID), ts
+}
+
+func cliOpen(base, token, page string, width, height int) []chromedp.Action {
+	return []chromedp.Action{
+		network.Enable(),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_, err := cdppage.AddScriptToEvaluateOnNewDocument(`window.__errs=[];window.addEventListener('securitypolicyviolation',function(e){window.__errs.push(String(e.violatedDirective||'csp'))});window.addEventListener('error',function(e){window.__errs.push(String(e.message||'error'))});`).Do(ctx)
+			return err
+		}),
+		network.SetCookie("castbot_session", token).WithURL(base).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
+		chromedp.EmulateViewport(int64(width), int64(height)),
+		chromedp.Navigate(page),
+	}
+}
+
+func assertShotClean(t *testing.T, ctx context.Context) {
+	t.Helper()
+	var errs []string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`window.__errs||[]`), &errs)); err != nil {
+		t.Fatal(err)
+	}
+	for _, note := range errs {
+		if note != "" {
+			t.Fatalf("console %s", note)
+		}
+	}
 }
 
 func seedAgent(t *testing.T, st *store.Store, userID, name string) store.Agent {

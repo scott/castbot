@@ -51,6 +51,7 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 				return nil, err
 			}
 			if state == "running" && err == nil && endpoint != "" && token != "" {
+				s.pullJournal(ctx, job.UserID, job.AgentID, endpoint, token)
 				return h.Stream(ctx, endpoint, token, req)
 			}
 			if endpoint == "" && state != "creating" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
@@ -198,6 +199,11 @@ func (s *Server) deleteQuiet(h host.AgentHost, id string) {
 // is deleted only when its agent tag names a pending, failed, or deleted row
 // in this file. Demo names, castbot-s00, and castbot-live stay as well.
 func (s *Server) SweepMachines(ctx context.Context) {
+	if n, err := s.store.SweepExpiredDrafts(ctx); err != nil {
+		log.Printf("expired draft sweep failed")
+	} else if n > 0 {
+		log.Printf("removed %d expired import drafts", n)
+	}
 	n, err := s.store.ReleaseStalePending(ctx, stalePending)
 	if err != nil {
 		log.Printf("stale machine sweep failed")
@@ -460,11 +466,27 @@ func (s *Server) applyPending(ctx context.Context, userID, agentID string) error
 	if h == nil {
 		return nil
 	}
+	if vm.MicroVMID != "" && vm.MicroVMID != "pending" {
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		got, serr := h.Status(cctx, vm.MicroVMID)
+		cancel()
+		if serr != nil {
+			return serr
+		}
+		_ = s.store.ApplyVMState(ctx, userID, agentID, got.State, got.Endpoint, "")
+		if got.State != "running" {
+			return nil
+		}
+		if got.Endpoint != "" {
+			endpoint = got.Endpoint
+		}
+	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 35*time.Second)
 	defer cancel()
 	if err := h.Reload(rctx, endpoint, token); err != nil {
 		return err
 	}
+	s.pullJournal(rctx, userID, agentID, endpoint, token)
 	return s.store.ClearPendingBundle(ctx, userID, agentID, version)
 }
 

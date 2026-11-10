@@ -107,6 +107,10 @@ type AgentHost interface {
 	PutFile(ctx context.Context, endpoint, agentToken, name string, body io.Reader) error
 	GetFile(ctx context.Context, endpoint, agentToken, name string) (io.ReadCloser, error)
 	Reload(ctx context.Context, endpoint, agentToken string) error
+	// PushCLI sends the CLI token hash set to a running guest. It does not wake a paused machine.
+	PushCLI(ctx context.Context, endpoint, agentToken string, body []byte) error
+	// PullJournal reads journal entries after a sequence number from a running guest.
+	PullJournal(ctx context.Context, endpoint, agentToken string, after int) ([]byte, error)
 }
 
 // ConfirmName accepts a delete only when the typed text is the agent name.

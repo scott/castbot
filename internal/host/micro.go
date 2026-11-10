@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -521,6 +522,119 @@ func (m *MicroVM) apiErr(res *http.Response, secret string) error {
 		return fmt.Errorf("machine api status %d", res.StatusCode)
 	}
 	return fmt.Errorf("machine api status %d: %s", res.StatusCode, msg)
+}
+
+// WaitGone polls until the machine API returns 404.
+// terminating is still in progress. The caller bounds the wait with ctx.
+func (m *MicroVM) WaitGone(ctx context.Context, id string) error {
+	wait := m.interval
+	if wait <= 0 {
+		wait = time.Second
+	}
+	var state string
+	for {
+		m.forget(id)
+		got, err := m.Status(ctx, id)
+		if err != nil {
+			if strings.Contains(err.Error(), "status 404") {
+				return nil
+			}
+			return err
+		}
+		state = got.State
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("machine %s still %s", id, state)
+		case <-timer.C:
+		}
+	}
+}
+
+// WaitUnlisted polls List until match returns false for every row.
+// A terminating row is still in progress.
+func (m *MicroVM) WaitUnlisted(ctx context.Context, match func(Machine) bool) error {
+	wait := m.interval
+	if wait <= 0 {
+		wait = time.Second
+	}
+	var state string
+	for {
+		list, err := m.List(ctx)
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, got := range list {
+			if match != nil && match(got) {
+				found = true
+				state = got.State
+			}
+		}
+		if !found {
+			return nil
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("machine still listed %s", state)
+		case <-timer.C:
+		}
+	}
+}
+
+// PushCLI posts the CLI token hash set to a running guest.
+func (m *MicroVM) PushCLI(ctx context.Context, endpoint, agentToken string, body []byte) error {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return err
+	}
+	code, err := m.edgeOnce(ctx, http.MethodPost, strings.TrimRight(endpoint, "/")+"/castlet/cli-tokens", agentToken, body)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusOK && code != http.StatusNoContent {
+		return fmt.Errorf("cli token push status %d", code)
+	}
+	return nil
+}
+
+// PullJournal reads journal entries after a sequence number.
+func (m *MicroVM) PullJournal(ctx context.Context, endpoint, agentToken string, after int) ([]byte, error) {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return nil, err
+	}
+	target := strings.TrimRight(endpoint, "/") + "/castlet/journal?after=" + strconv.Itoa(after)
+	return m.edgeRead(ctx, http.MethodGet, target, agentToken, nil)
+}
+
+func (m *MicroVM) edgeRead(ctx context.Context, method, target, agentToken string, body []byte) ([]byte, error) {
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, rdr)
+	if err != nil {
+		return nil, err
+	}
+	m.edgeAuth(req, agentToken)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := m.edge.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("journal status %d", res.StatusCode)
+	}
+	return raw, nil
 }
 
 func (m *MicroVM) edgeOnce(ctx context.Context, method, target, agentToken string, body []byte) (int, error) {

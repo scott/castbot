@@ -114,6 +114,16 @@ func TestLiveTiming(t *testing.T) {
 	created = ""
 	mu.Unlock()
 
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer waitCancel()
+	if err := client.WaitGone(waitCtx, vm.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WaitUnlisted(waitCtx, func(got Machine) bool {
+		return got.Name == spec.Name || (hasTag(got, "castbot-live") && strings.Contains(got.Name, agentID))
+	}); err != nil {
+		t.Fatal(err)
+	}
 	after, err := client.List(ctx)
 	if err != nil {
 		t.Fatal(err)

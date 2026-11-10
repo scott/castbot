@@ -109,6 +109,50 @@ func TestRenderKeepsKeysTheFormDoesNotOwn(t *testing.T) {
 	}
 }
 
+func TestAliasToScrubbedSecretIsRejected(t *testing.T) {
+	raw := "name: Atlas\ntools:\n  mcp:\n    - name: demo\n      env: &s\n        TOKEN: nested-token-value\nruntime:\n  copied: *s\n"
+	_, err := ParseYAML(raw)
+	if !errors.Is(err, ErrAlias) {
+		t.Fatalf("%v", err)
+	}
+	if strings.Contains(err.Error(), "nested-token-value") || strings.Contains(err.Error(), "TOKEN") {
+		t.Fatal("secret leaked")
+	}
+}
+
+func TestCompoundSecretNamesAreDropped(t *testing.T) {
+	raw := "name: Atlas\ngithub_token: compound-token-value\nopenai_api_key: compound-key-value\nnote: hello\n"
+	spec, err := ParseYAML(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(spec.Kept)
+	if strings.Contains(text, "compound-token-value") || strings.Contains(text, "compound-key-value") || strings.Contains(text, "github_token") {
+		t.Fatalf("kept a secret\n%s", text)
+	}
+	if !strings.Contains(text, "hello") {
+		t.Fatalf("dropped a plain note\n%s", text)
+	}
+}
+
+func TestSummarizeKeptListsLeftovers(t *testing.T) {
+	raw := "name: Atlas\nbrain:\n  model: openrouter/x\n  model_override: fast\nrepository: github.com/acme/helper\ndeployment:\n  region: mkc1\nskills:\n  - review\n"
+	spec, err := ParseYAML(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := SummarizeKept(spec.Kept)
+	joined := ""
+	for _, line := range lines {
+		joined += line.Label + " " + line.Value + "\n"
+	}
+	for _, needle := range []string{"Skills", "review", "Brain model_override", "fast", "Repository", "github.com/acme/helper", "Deployment", "mkc1"} {
+		if !strings.Contains(joined, needle) {
+			t.Fatalf("missing %s in %s", needle, joined)
+		}
+	}
+}
+
 func TestDuplicateKeysAreRejected(t *testing.T) {
 	raw := "name: Atlas\nharness:\n  permissions:\n    bash: ask\nharness:\n  permissions:\n    bash: always-allow\n"
 	_, err := ParseYAML(raw)

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 )
 
@@ -178,14 +179,30 @@ func (s *Store) FinishRun(ctx context.Context, userID, runID, body string, offse
 		return Message{}, RunEvent{}, err
 	}
 	defer tx.Rollback()
-	msgID, err := newID()
-	if err != nil {
+	stamp := s.stamp(s.Now())
+	var msgID string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE user_id = ? AND thread_id = ? AND author_kind = 'agent' AND body_md = ? AND journal_seq IS NOT NULL AND run_id IS NULL ORDER BY journal_seq LIMIT 1`,
+		userID, run.ThreadID, body).Scan(&msgID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Message{}, RunEvent{}, err
 	}
-	stamp := s.stamp(s.Now())
-	if _, err := tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, run_id, created_at) VALUES (?, ?, ?, ?, 'agent', ?, ?, ?, ?)`,
-		msgID, run.WorkspaceID, userID, run.ThreadID, run.AgentID, body, runID, stamp); err != nil {
-		return Message{}, RunEvent{}, err
+	if msgID != "" {
+		res, err := tx.ExecContext(ctx, `UPDATE messages SET run_id = ? WHERE id = ? AND user_id = ? AND run_id IS NULL`, runID, msgID, userID)
+		if err != nil {
+			return Message{}, RunEvent{}, err
+		}
+		if err := rowsAffected(res); err != nil {
+			return Message{}, RunEvent{}, err
+		}
+	} else {
+		msgID, err = newID()
+		if err != nil {
+			return Message{}, RunEvent{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, run_id, created_at) VALUES (?, ?, ?, ?, 'agent', ?, ?, ?, ?)`,
+			msgID, run.WorkspaceID, userID, run.ThreadID, run.AgentID, body, runID, stamp); err != nil {
+			return Message{}, RunEvent{}, err
+		}
 	}
 	var seq int
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id = ?`, runID).Scan(&seq); err != nil {

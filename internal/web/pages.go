@@ -91,14 +91,65 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	if len(threads) > 0 {
-		msgs, err := s.store.ListMessages(r.Context(), user.ID, threads[0].ID)
+	current, err := s.pickThread(r, user.ID, agent.ID)
+	if err != nil && len(threads) > 0 {
+		http.Error(w, "Not found\n", http.StatusNotFound)
+		return
+	}
+	var cliThreads bool
+	for _, t := range threads {
+		if t.Kind == "cli" {
+			cliThreads = true
+		}
+	}
+	if cliThreads {
+		for _, t := range threads {
+			title := t.Title
+			if title == "" {
+				title = "Chat"
+			}
+			if t.Kind != "cli" {
+				title = "Chat"
+			}
+			p.Threads = append(p.Threads, threadView{
+				Title: title,
+				Href:  "/agents/" + url.PathEscape(agent.ID) + "?thread=" + url.QueryEscape(t.ID),
+				On:    t.ID == current.ID,
+			})
+		}
+	}
+	if current.ID != "" {
+		p.ThreadID = current.ID
+		msgs, err := s.store.ListMessages(r.Context(), user.ID, current.ID)
 		if err != nil {
 			http.Error(w, "Error", http.StatusInternalServerError)
 			return
 		}
 		p.Messages = presentMessages(msgs, p.Agent, s.store.Now(), userLocation(user.Timezone))
-		p.Lives = s.loadLives(r, user, threads[0].ID, p.Agent)
+		p.Lives = s.loadLives(r, user, current.ID, p.Agent)
+	}
+	if tab == "machine" || tab == "" {
+		tokens, err := s.store.ListCLITokens(r.Context(), user.ID, agent.ID)
+		if err != nil {
+			http.Error(w, "Error", http.StatusInternalServerError)
+			return
+		}
+		loc := userLocation(user.Timezone)
+		for _, tok := range tokens {
+			view := cliTokView{ID: tok.ID, Prefix: tok.Prefix, Created: clockStamp(tok.CreatedAt, loc), LastUsed: "Not yet", Status: "Active"}
+			if tok.LastUsedAt != "" {
+				view.LastUsed = clockStamp(tok.LastUsedAt, loc)
+			}
+			if tok.RevokedAt != "" {
+				view.Revoked = true
+				view.Status = "Revoked"
+			}
+			p.CLITokens = append(p.CLITokens, view)
+		}
+	}
+	if flash, ok := r.Context().Value(flashKey{}).(cliFlash); ok {
+		p.CLIBlob = flash.blob
+		p.CLINote = flash.note
 	}
 	switch tab {
 	case "home":
@@ -140,16 +191,15 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := strings.TrimSpace(r.FormValue("body"))
-	threads, err := s.store.ListThreadsByAgent(r.Context(), user.ID, agent.ID)
-	if err != nil || len(threads) == 0 {
-		http.Error(w, "Error", http.StatusInternalServerError)
+	thread, err := s.pickThread(r, user.ID, agent.ID)
+	if s.missing(w, err) {
 		return
 	}
-	msg, err := s.store.CreateMessage(r.Context(), user.ID, threads[0].ID, "user", user.ID, body)
+	msg, err := s.store.CreateMessage(r.Context(), user.ID, thread.ID, "user", user.ID, body)
 	if s.bad(w, err) {
 		return
 	}
-	run, err := s.store.CreateRun(r.Context(), user.ID, threads[0].ID, agent.ID)
+	run, err := s.store.CreateRun(r.Context(), user.ID, thread.ID, agent.ID)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
@@ -161,7 +211,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	// Start runs before this response names the run. The row stays queued
 	// until the goroutine marks it streaming, and the event handler does
 	// not fail a queued run, so a reader in that gap cannot interrupt it.
-	s.runs.Start(runJob(user.ID, threads[0].ID, agent.ID, run.ID, msg.ID, msg.Body, s.priorTurns(r.Context(), user.ID, threads[0].ID, msg.ID)))
+	s.runs.Start(runJob(user.ID, thread.ID, agent.ID, run.ID, msg.ID, msg.Body, thread.CastSessionID, s.priorTurns(r.Context(), user.ID, thread.ID, msg.ID)))
 	if r.Header.Get("HX-Request") == "true" {
 		av := presentAgent(agent, true, userLocation(user.Timezone))
 		loc := userLocation(user.Timezone)
@@ -176,7 +226,11 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusOK, "turn", p)
 		return
 	}
-	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID), http.StatusSeeOther)
+	target := "/agents/" + url.PathEscape(agent.ID)
+	if thread.Kind == "cli" {
+		target += "?thread=" + url.QueryEscape(thread.ID)
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {

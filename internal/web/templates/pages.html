@@ -139,7 +139,7 @@
 {{end}}
 
 {{define "messages"}}
-{{range .Messages}}{{if .ShowDay}}<div class="day">{{.Day}}</div>{{end}}{{if eq .Author "user"}}<div class="m-user" id="m-{{.ID}}">{{.Body}}</div>{{else}}<div class="m-agent" id="m-{{.ID}}"><span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span><div class="body"><p>{{.Body}}</p>{{if .Stamp}}<span class="stamp">{{.Stamp}}</span>{{end}}</div></div>{{end}}{{end}}
+{{range .Messages}}{{if .ShowDay}}<div class="day">{{.Day}}</div>{{end}}{{if eq .Author "system"}}<div class="m-note" id="m-{{.ID}}">{{.Body}}</div>{{else if eq .Author "user"}}<div class="m-user" id="m-{{.ID}}">{{.Body}}</div>{{else}}<div class="m-agent" id="m-{{.ID}}"><span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span><div class="body"><p>{{.Body}}</p>{{if .Stamp}}<span class="stamp">{{.Stamp}}</span>{{end}}</div></div>{{end}}{{end}}
 {{end}}
 
 {{define "pending"}}
@@ -171,10 +171,12 @@
 {{define "chatMain"}}
 <header class="ch-h{{if .Pane}} pane-open{{end}}"><a class="ibtn back" href="/" aria-label="Back to agents">{{template "backsvg" .}}</a><a class="who-btn" href="/agents/{{.Agent.ID}}?pane=1" aria-label="Open {{.Agent.Name}} info"><span class="av {{.Agent.Color}}" aria-hidden="true">{{.Agent.Letter}}<span class="dot {{.Agent.Dot}}"></span></span><span class="grow"><span class="nm">{{.Agent.Name}}</span><span class="sub">{{.Agent.Title}}{{if .Agent.Model}} · {{.Agent.Model}}{{end}}</span></span></a><span class="vmchip"><span class="chip {{.Agent.ChipClass}}"><span class="pip"></span>{{.Agent.ChipLabel}}{{if .Agent.ChipMeta}} <span class="meta">{{.Agent.ChipMeta}}</span>{{end}}</span></span><nav class="tabs" aria-label="{{.Agent.Name}} views"><a href="/agents/{{.Agent.ID}}"{{if eq .Tab "chat"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v10H9l-5 4z"/></svg>Chat</a><a href="/agents/{{.Agent.ID}}/machine"{{if eq .Tab "machine"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12 15h5"/></svg>Machine</a><a href="/agents/{{.Agent.ID}}/routines"{{if eq .Tab "agent-routines"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Routines</a><a href="/agents/{{.Agent.ID}}/files"{{if eq .Tab "agent-files"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.5h-17z"/></svg>Files</a></nav><a class="ibtn" href="{{if .Pane}}/agents/{{.Agent.ID}}{{else}}/agents/{{.Agent.ID}}?pane=1{{end}}" aria-label="Agent info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/></svg></a></header>
 {{if eq .Tab "chat"}}
+{{if .Threads}}<nav class="thread-switch" aria-label="Threads">{{range .Threads}}<a href="{{.Href}}"{{if .On}} class="on" aria-current="page"{{end}}>{{.Title}}</a>{{end}}</nav>{{end}}
 <div class="ch-body"><div class="msgs" id="msgs">{{template "messages" .}}{{template "lives" .}}</div></div>
 <div class="comp-wrap">{{if gt .Agent.Approvals 0}}<div class="pending-bar"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span class="grow">{{if eq .Agent.Approvals 1}}1 approval waiting{{else}}{{.Agent.Approvals}} approvals waiting{{end}}</span><a class="btn sm" href="/approvals">Review</a></div>{{end}}
 <form class="comp" id="composer" method="post" action="/agents/{{.Agent.ID}}/messages" hx-post="/agents/{{.Agent.ID}}/messages" hx-target="#msgs" hx-swap="beforeend">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
+<input type="hidden" name="thread" value="{{.ThreadID}}">
 <textarea class="ph" name="body" maxlength="8000" rows="1" placeholder="Message {{.Agent.Name}}" aria-label="Message {{.Agent.Name}}"></textarea>
 <div class="row"><span class="hint">Enter to send · Shift+Enter for a new line</span><button class="btn pri sm" type="submit">Send</button></div>
 </form></div>
@@ -322,9 +324,21 @@
 {{if .Machine.CanPause}}<form method="post" action="/agents/{{.Agent.ID}}/machine/pause"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Pause</button></form>{{end}}
 {{if .Machine.CanWake}}<form method="post" action="/agents/{{.Agent.ID}}/machine/wake"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Wake</button></form>{{end}}
 </div>
+{{template "cliBox" .}}
 {{if .Machine.CanDelete}}<form class="machine-del" method="post" action="/agents/{{.Agent.ID}}/machine/delete"><input type="hidden" name="csrf" value="{{.CSRF}}"><label class="lab" for="confirm-name">Type {{.Agent.Name}} to delete this machine</label><div class="inp"><input id="confirm-name" name="confirm" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Type the agent name"></div><button class="btn sm danger-ghost" type="submit">Delete agent</button><p class="fineprint">Deleting removes this agent and its machine. This cannot be undone. Memory export is not in this version.</p></form>{{end}}
 <p class="fineprint">Status is the machine record. Checking it does not wake the machine.</p>
 </div>
+{{end}}
+
+{{define "cliBox"}}
+<section class="cli-box" id="cast-cli">
+<h3>Cast CLI</h3>
+<p class="fineprint">A token for the Cast CLI on your computer. It is shown once. castbot does not hand out a cloud token. castbot owns this machine.</p>
+{{if .CLINote}}<p class="fineprint">{{.CLINote}}</p>{{end}}
+{{if .CLIBlob}}<pre class="cli-blob">{{.CLIBlob}}</pre>{{end}}
+<form method="post" action="/agents/{{.Agent.ID}}/cli"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Add to Cast CLI</button></form>
+{{if .CLITokens}}<div class="toks">{{range .CLITokens}}<div class="tok"><div class="mono">{{.Prefix}}</div><div class="meta">Created {{.Created}} · Last used {{.LastUsed}} · {{.Status}}</div>{{if not .Revoked}}<form method="post" action="/agents/{{$.Agent.ID}}/cli/{{.ID}}/revoke" hx-post="/agents/{{$.Agent.ID}}/cli/{{.ID}}/revoke" hx-target="#cast-cli" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="btn sm danger-ghost" type="submit">Revoke</button></form>{{end}}</div>{{end}}</div><p class="fineprint">To rotate, revoke this token and add a new one.</p>{{end}}
+</section>
 {{end}}
 
 {{define "stubMain"}}

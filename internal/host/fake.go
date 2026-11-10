@@ -35,6 +35,10 @@ type Fake struct {
 	ReloadStarted chan struct{}
 	// ReloadErr is returned after ReloadWait, when one is set.
 	ReloadErr error
+	// Pushed records CLI token hash bodies.
+	Pushed [][]byte
+	// Journal is the body PullJournal returns. An empty value is an empty entry list.
+	Journal []byte
 }
 
 // NewFake returns an empty host.
@@ -242,6 +246,29 @@ func (f *Fake) Reload(ctx context.Context, _, _ string) error {
 	f.edge()
 	f.note("reload")
 	return reloadErr
+}
+
+// PushCLI records a token-hash push. It counts as an edge call.
+func (f *Fake) PushCLI(_ context.Context, _, _ string, body []byte) error {
+	f.edge()
+	f.mu.Lock()
+	f.Pushed = append(f.Pushed, append([]byte(nil), body...))
+	f.mu.Unlock()
+	f.note("push-cli")
+	return nil
+}
+
+// PullJournal returns the scripted journal. It counts as an edge call.
+func (f *Fake) PullJournal(context.Context, string, string, int) ([]byte, error) {
+	f.edge()
+	f.mu.Lock()
+	body := append([]byte(nil), f.Journal...)
+	f.mu.Unlock()
+	f.note("pull-journal")
+	if len(body) == 0 {
+		body = []byte(`{"entries":[]}`)
+	}
+	return body, nil
 }
 
 // List returns the machines this fake currently holds.
