@@ -35,12 +35,15 @@ type Turn struct {
 // Send is one message/send, or a resume of one.
 // Offset is the count of data events already consumed. Keepalive comments
 // do not count. SessionID is the thread id and StreamID is the run id.
+// MessageID is the stored user message. A retry sends the same id so the
+// runtime session does not append that user turn again.
 // History is the earlier transcript and is sent only on the first open.
 // CapHistory keeps the last HistoryTurns entries or about 100 KB,
 // whichever is smaller.
 type Send struct {
 	SessionID string
 	StreamID  string
+	MessageID string
 	Offset    int
 	Text      string
 	History   []Turn
@@ -112,8 +115,13 @@ func CapHistory(in []Turn) []Turn {
 // HTTPClient is a Cast A2A client over HTTP.
 type HTTPClient struct {
 	base   string
+	token  string
 	client *http.Client
 }
+
+// SetToken sends X-Cast-Authorization on later opens.
+// Set it before the first open. The value is not logged.
+func (c *HTTPClient) SetToken(token string) { c.token = token }
 
 // NewHTTP returns a client for one runtime base URL.
 func NewHTTP(base string) *HTTPClient {
@@ -145,6 +153,10 @@ func (c *HTTPClient) Open(ctx context.Context, req Send) (Stream, error) {
 		}
 		meta["history"] = turns
 	}
+	messageID := req.MessageID
+	if messageID == "" {
+		messageID = req.StreamID
+	}
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      req.StreamID + ":" + strconv.Itoa(req.Offset),
@@ -152,7 +164,7 @@ func (c *HTTPClient) Open(ctx context.Context, req Send) (Stream, error) {
 		"params": map[string]any{
 			"message": map[string]any{
 				"role":      "user",
-				"messageId": req.StreamID,
+				"messageId": messageID,
 				"parts":     []map[string]string{{"kind": "text", "text": req.Text}},
 			},
 			"metadata": meta,
@@ -167,6 +179,9 @@ func (c *HTTPClient) Open(ctx context.Context, req Send) (Stream, error) {
 	}
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		httpReq.Header.Set("X-Cast-Authorization", "Bearer "+c.token)
+	}
 	res, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, err

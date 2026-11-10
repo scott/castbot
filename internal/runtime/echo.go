@@ -29,11 +29,14 @@ var streamIDRe = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 // EchoOptions configures the local echo server.
 // WordDelay zero sends the whole reply with no pause.
 // Keepalive and Retain use the Cast defaults when zero.
+// FailWith records the user turn and then returns that JSON-RPC error,
+// so a retry can be checked against the session transcript.
 type EchoOptions struct {
 	Name      string
 	WordDelay time.Duration
 	Keepalive time.Duration
 	Retain    time.Duration
+	FailWith  string
 }
 
 // Echo is a local stand-in for the Cast A2A server in echo mode.
@@ -45,12 +48,23 @@ type Echo struct {
 	wordDelay time.Duration
 	keepalive time.Duration
 	retain    time.Duration
+	failWith  string
 	base      context.Context
 	cancel    context.CancelFunc
 
-	mu     sync.Mutex
-	runs   map[string]*echoRun
-	starts int
+	mu       sync.Mutex
+	runs     map[string]*echoRun
+	sessions map[string]*echoSession
+	starts   int
+}
+
+// echoSession is the stand-in for a Cast session keyed by session id.
+// A message id is recorded once, so a retry of the same user turn does
+// not append it again.
+type echoSession struct {
+	mu    sync.Mutex
+	turns []Turn
+	seen  map[string]struct{}
 }
 
 type echoRun struct {
@@ -78,10 +92,25 @@ func NewEcho(opt EchoOptions) *Echo {
 		wordDelay: opt.WordDelay,
 		keepalive: opt.Keepalive,
 		retain:    opt.Retain,
+		failWith:  opt.FailWith,
 		base:      ctx,
 		cancel:    cancel,
 		runs:      map[string]*echoRun{},
+		sessions:  map[string]*echoSession{},
 	}
+}
+
+// Transcript returns a copy of the session turns recorded so far.
+func (e *Echo) Transcript(sessionID string) []Turn {
+	e.mu.Lock()
+	sess := e.sessions[sessionID]
+	e.mu.Unlock()
+	if sess == nil {
+		return nil
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return append([]Turn(nil), sess.turns...)
 }
 
 // Close stops background producers.
@@ -132,6 +161,7 @@ func (e *Echo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	e.noteSession(req)
 	if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
 		e.writeOnce(w, req)
 		return
@@ -197,6 +227,10 @@ func (e *Echo) writeOneShot(ctx context.Context, w http.ResponseWriter, flusher 
 func (e *Echo) writeOnce(w http.ResponseWriter, req map[string]any) {
 	method, _ := req["method"].(string)
 	text, reqID := messageText(req)
+	if e.failWith != "" && method == "message/send" {
+		writeJSON(w, http.StatusOK, rpcError(reqID, -32000, e.failWith))
+		return
+	}
 	if method != "message/send" {
 		writeJSON(w, http.StatusOK, rpcError(reqID, -32601, fmt.Sprintf("Method '%s' not found", method)))
 		return
@@ -344,6 +378,10 @@ func (e *Echo) generate(ctx context.Context, method, reqID, text string) <-chan 
 			_ = sendFrame(ctx, ch, dataFrame("[DONE]"))
 			return
 		}
+		if e.failWith != "" {
+			_ = sendFrame(ctx, ch, dataFrame(rpcErrorRaw(reqID, -32000, e.failWith)))
+			return
+		}
 		words := strings.Split(EchoText(e.name, text), " ")
 		for i, word := range words {
 			if i > 0 {
@@ -408,6 +446,55 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (e *Echo) noteSession(req map[string]any) {
+	if method, _ := req["method"].(string); method != "message/send" {
+		return
+	}
+	params, _ := req["params"].(map[string]any)
+	meta, _ := params["metadata"].(map[string]any)
+	sessionID, _ := meta["sessionId"].(string)
+	if sessionID == "" {
+		return
+	}
+	msg, _ := params["message"].(map[string]any)
+	messageID, _ := msg["messageId"].(string)
+	text, _ := messageText(req)
+	var history []Turn
+	if raw, ok := meta["history"].([]any); ok {
+		for _, item := range raw {
+			row, _ := item.(map[string]any)
+			role, _ := row["role"].(string)
+			body, _ := row["text"].(string)
+			if role == "" {
+				continue
+			}
+			history = append(history, Turn{Role: role, Text: body})
+		}
+	}
+	e.mu.Lock()
+	sess := e.sessions[sessionID]
+	if sess == nil {
+		sess = &echoSession{seen: map[string]struct{}{}}
+		e.sessions[sessionID] = sess
+	}
+	e.mu.Unlock()
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if len(sess.turns) == 0 {
+		sess.turns = append(sess.turns, history...)
+	}
+	if messageID != "" {
+		if _, ok := sess.seen[messageID]; ok {
+			return
+		}
+		sess.seen[messageID] = struct{}{}
+	}
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	sess.turns = append(sess.turns, Turn{Role: "user", Text: text})
 }
 
 func streamCursor(params any) (string, int) {

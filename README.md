@@ -4,6 +4,8 @@ castbot is a web UI for Cast agents (https://castagent.dev) running on DigitalOc
 
 The shell signs you in, lists seeded agents, and streams a chat reply from a local echo runtime. A dropped connection resumes, and the reply is stored if the browser leaves. It does not provision a machine or call a model provider.
 
+`Dockerfile` builds the shared runtime image used by local tests. The image contains castlet and a protocol stand-in, and no agent. A container boots by pulling its bundle from the control plane. The image is not pushed anywhere.
+
 ## Run
 
 ```

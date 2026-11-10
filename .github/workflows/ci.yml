@@ -20,7 +20,7 @@ jobs:
       - name: vet
         run: go vet ./...
       - name: test
-        run: go test -race ./...
+        run: go test -race -timeout 20m ./...
       - name: gitleaks
         run: |
           curl -sSfL -o /tmp/gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
@@ -36,8 +36,10 @@ jobs:
           go-version: "1.22.2"
       - name: chrome
         run: |
-          curl -fsSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          ver=156.0.8078.47
+          curl -fsSL -o /tmp/chrome.deb "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${ver}-1_amd64.deb"
           sudo apt-get update
           sudo apt-get install -y /tmp/chrome.deb
+          google-chrome --version | grep -F "$ver"
       - name: shots
-        run: go test -tags shots -count=1 -timeout 8m -run 'TestShots/(502|restart)' ./internal/web
+        run: go test -tags shots -count=1 -timeout 15m -run 'TestShots/(502|restart|error|container)' ./internal/web

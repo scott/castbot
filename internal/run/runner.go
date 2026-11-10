@@ -32,27 +32,44 @@ const (
 
 	// retryBudget is the total time spent waiting out a transient open:
 	// 502, 503, 504, connection refused, connection reset, a dial timeout,
-	// or a response-header timeout. It stays under the runtime's 120s resume TTL.
+	// a response-header timeout, or a server that accepts and closes
+	// before any response bytes. It stays under the runtime's 120s resume TTL.
 	retryBudget = 100 * time.Second
 	retryMin    = 250 * time.Millisecond
 	retryMax    = 8 * time.Second
 	// resumeLimit is how many resumes in a row may deliver no new data
-	// events. The next empty resume fails the run. A read that advances
-	// the offset clears the count, so a long healthy reply can be cut
-	// many times.
+	// events and no progress. The next empty resume fails the run.
+	// A read that advances the offset clears the count. So does a resume
+	// that saw the matching marker and stayed open, which is what a
+	// keepalive-only stretch looks like when the edge cuts the socket.
 	resumeLimit = 8
+	// progressHold is how long a connection must stay open after the
+	// matching marker before it counts as progress. A few seconds is
+	// enough to tell a held-open keepalive stream from a socket that
+	// sends the marker and closes at once. The edge cut is much longer.
+	progressHold = 3 * time.Second
+	// runLimit is the wall clock cap for one reply. Keepalives can reset
+	// the empty-resume streak for a long tool call, and this cap still
+	// fails a runtime that never finishes.
+	runLimit = 30 * time.Minute
 )
 
-var errBadResume = errors.New("resume rejected")
+var (
+	errBadResume = errors.New("resume rejected")
+	errRunLimit  = errors.New("run time limit")
+)
 
 // Job is one reply to stream.
+// MessageID is the stored user message. Retries send the same id so the
+// runtime session keeps that user turn once.
 type Job struct {
-	UserID   string
-	ThreadID string
-	AgentID  string
-	RunID    string
-	Text     string
-	History  []runtime.Turn
+	UserID    string
+	ThreadID  string
+	AgentID   string
+	RunID     string
+	MessageID string
+	Text      string
+	History   []runtime.Turn
 }
 
 // Runner starts run goroutines.
@@ -62,6 +79,7 @@ type Runner struct {
 	client runtime.Client
 	Hub    *Hub
 	budget time.Duration
+	limit  time.Duration
 
 	mu     sync.Mutex
 	active map[string]struct{}
@@ -79,6 +97,7 @@ func New(ctx context.Context, st *store.Store, client runtime.Client) *Runner {
 		client: client,
 		Hub:    &Hub{},
 		budget: retryBudget,
+		limit:  runLimit,
 		active: map[string]struct{}{},
 		rng:    rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
@@ -92,6 +111,39 @@ func (r *Runner) SetBudget(d time.Duration) {
 	r.mu.Lock()
 	r.budget = d
 	r.mu.Unlock()
+}
+
+// SetRunLimit replaces the wall clock cap for one reply. Tests use a short cap.
+func (r *Runner) SetRunLimit(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	r.mu.Lock()
+	r.limit = d
+	r.mu.Unlock()
+}
+
+// SetClient points later opens at a different runtime.
+// The call happens before a run starts.
+func (r *Runner) SetClient(c runtime.Client) {
+	r.mu.Lock()
+	r.client = c
+	r.mu.Unlock()
+}
+
+func (r *Runner) current() runtime.Client {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.client
+}
+
+func (r *Runner) runLimit() time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.limit <= 0 {
+		return runLimit
+	}
+	return r.limit
 }
 
 // Done is closed when the runner context is canceled.
@@ -149,7 +201,7 @@ func (r *Runner) execute(job Job) {
 		r.fail(job, Interrupted, 0)
 		return
 	}
-	if r.client == nil {
+	if r.current() == nil {
 		r.fail(job, Unreachable, 0)
 		return
 	}
@@ -169,20 +221,25 @@ func (r *Runner) execute(job Job) {
 	sawMarker := false
 	var spent time.Duration
 	attempt := 0
+	started := time.Now()
 	for {
-		if r.ctx.Err() != nil {
+		if r.ctx.Err() != nil || time.Since(started) >= r.runLimit() {
 			r.fail(job, Interrupted, offset)
 			return
 		}
-		stream, err := r.client.Open(r.ctx, runtime.Send{
+		remain := r.runLimit() - time.Since(started)
+		ctx, cancel := context.WithTimeout(r.ctx, remain)
+		stream, err := r.current().Open(ctx, runtime.Send{
 			SessionID: job.ThreadID,
 			StreamID:  job.RunID,
+			MessageID: job.MessageID,
 			Offset:    offset,
 			Text:      job.Text,
 			History:   job.History,
 		})
 		if err != nil {
-			if r.ctx.Err() != nil {
+			cancel()
+			if r.ctx.Err() != nil || time.Since(started) >= r.runLimit() {
 				r.fail(job, Interrupted, offset)
 				return
 			}
@@ -203,7 +260,8 @@ func (r *Runner) execute(job Job) {
 		}
 		attempt = 0
 		before := offset
-		done, marked, rpc, err := r.read(stream, job, &offset, &text, sawMarker)
+		done, marked, held, rpc, err := r.read(stream, job, &offset, &text, sawMarker, started.Add(r.runLimit()))
+		cancel()
 		if marked {
 			sawMarker = true
 		}
@@ -214,7 +272,7 @@ func (r *Runner) execute(job Job) {
 			}
 			return
 		}
-		if r.ctx.Err() != nil {
+		if r.ctx.Err() != nil || errors.Is(err, errRunLimit) {
 			r.fail(job, Interrupted, offset)
 			return
 		}
@@ -230,9 +288,10 @@ func (r *Runner) execute(job Job) {
 		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 			log.Printf("run %s: stream cut", job.RunID)
 		}
-		// A read that stored new data events clears the empty streak.
-		// Only resumes that deliver no new bytes count toward the cap.
-		if offset > before {
+		// New data clears the empty streak. So does a resume that received
+		// the matching marker and stayed open: that is a live runtime
+		// sending keepalives, not a connect that closed at once.
+		if offset > before || held {
 			resumes = 0
 		} else {
 			resumes++
@@ -248,25 +307,35 @@ func (r *Runner) execute(job Job) {
 	}
 }
 
-func (r *Runner) read(stream runtime.Stream, job Job, offset *int, text *strings.Builder, resuming bool) (bool, bool, string, error) {
+func (r *Runner) read(stream runtime.Stream, job Job, offset *int, text *strings.Builder, resuming bool, deadline time.Time) (bool, bool, bool, string, error) {
 	defer stream.Close()
 	confirmed := false
+	var markedAt time.Time
+	held := func() bool {
+		return confirmed && !markedAt.IsZero() && time.Since(markedAt) >= progressHold
+	}
 	for {
-		frame, err := stream.Next()
+		frame, err := nextUntil(stream, r.ctx, deadline)
 		if err != nil {
+			if errors.Is(err, errRunLimit) || errors.Is(err, context.DeadlineExceeded) {
+				return false, confirmed, false, "", errRunLimit
+			}
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				if resuming && !confirmed {
-					return false, false, "", errBadResume
+					return false, false, false, "", errBadResume
 				}
-				return false, confirmed, "", nil
+				return false, confirmed, held(), "", nil
 			}
-			return false, confirmed, "", err
+			return false, confirmed, held(), "", err
 		}
 		if id, ok := markerID(frame.Comment); ok {
 			if id == job.RunID {
 				confirmed = true
+				if markedAt.IsZero() {
+					markedAt = time.Now()
+				}
 			} else if resuming {
-				return false, false, "", errBadResume
+				return false, false, false, "", errBadResume
 			}
 			continue
 		}
@@ -274,26 +343,26 @@ func (r *Runner) read(stream runtime.Stream, job Job, offset *int, text *strings
 			continue
 		}
 		if resuming && !confirmed {
-			return false, false, "", errBadResume
+			return false, false, false, "", errBadResume
 		}
 		*offset++
 		parsed, err := runtime.ParseData(frame.Data)
 		if err != nil {
-			return false, confirmed, "", err
+			return false, confirmed, held(), "", err
 		}
 		if parsed.Done {
-			return true, confirmed, "", nil
+			return true, confirmed, held(), "", nil
 		}
 		if parsed.RPCErr != "" {
-			return false, confirmed, parsed.RPCErr, nil
+			return false, confirmed, held(), parsed.RPCErr, nil
 		}
 		if len(parsed.Perm) > 0 {
 			payload, err := json.Marshal(map[string]json.RawMessage{"permission": parsed.Perm})
 			if err != nil {
-				return false, confirmed, "", err
+				return false, confirmed, held(), "", err
 			}
 			if _, err := r.store.AppendRunEvent(r.ctx, job.UserID, job.RunID, "permission", string(payload), *offset); err != nil {
-				return false, confirmed, "", err
+				return false, confirmed, held(), "", err
 			}
 			r.Hub.Notify(job.RunID)
 		}
@@ -303,12 +372,43 @@ func (r *Runner) read(stream runtime.Stream, job Job, offset *int, text *strings
 		text.WriteString(parsed.Text)
 		payload, err := json.Marshal(map[string]string{"text": parsed.Text})
 		if err != nil {
-			return false, confirmed, "", err
+			return false, confirmed, held(), "", err
 		}
 		if _, err := r.store.AppendRunEvent(r.ctx, job.UserID, job.RunID, "text", string(payload), *offset); err != nil {
-			return false, confirmed, "", err
+			return false, confirmed, held(), "", err
 		}
 		r.Hub.Notify(job.RunID)
+	}
+}
+
+func nextUntil(stream runtime.Stream, ctx context.Context, deadline time.Time) (runtime.Frame, error) {
+	if err := ctx.Err(); err != nil {
+		return runtime.Frame{}, err
+	}
+	wait := time.Until(deadline)
+	if wait <= 0 {
+		return runtime.Frame{}, errRunLimit
+	}
+	type result struct {
+		frame runtime.Frame
+		err   error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		frame, err := stream.Next()
+		ch <- result{frame, err}
+	}()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		_ = stream.Close()
+		return runtime.Frame{}, ctx.Err()
+	case <-timer.C:
+		_ = stream.Close()
+		return runtime.Frame{}, errRunLimit
+	case got := <-ch:
+		return got.frame, got.err
 	}
 }
 
@@ -383,6 +483,12 @@ func transient(err error) bool {
 		return status.Code == 502 || status.Code == 503 || status.Code == 504
 	}
 	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	// A server that accepts the socket and then closes it, with no response
+	// bytes and no TCP reset, surfaces as EOF. That is the same kind of
+	// blip as a gateway 502.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 	var netErr net.Error

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/scott/castbot/internal/run"
@@ -47,6 +48,15 @@ type Server struct {
 	runs   *run.Runner
 	cancel context.CancelFunc
 	ka     time.Duration
+
+	mu     sync.Mutex
+	guests map[string]guest
+}
+
+// guest is one local castlet the control plane can proxy files through.
+type guest struct {
+	Base  string
+	Token string
 }
 
 // New builds a server. key is the 32-byte session key.
@@ -72,6 +82,38 @@ func (s *Server) SetRetryBudget(d time.Duration) {
 	if s.runs != nil {
 		s.runs.SetBudget(d)
 	}
+}
+
+// SetRunLimit caps how long one reply may run.
+func (s *Server) SetRunLimit(d time.Duration) {
+	if s.runs != nil {
+		s.runs.SetRunLimit(d)
+	}
+}
+
+// SetClient points later runs at a different runtime.
+func (s *Server) SetClient(c runtime.Client) {
+	if s.runs != nil {
+		s.runs.SetClient(c)
+	}
+}
+
+// SetGuest records the castlet address and agent token for one agent.
+// File reads for that agent are proxied there. The token is not logged.
+func (s *Server) SetGuest(agentID, base, token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.guests == nil {
+		s.guests = map[string]guest{}
+	}
+	s.guests[agentID] = guest{Base: strings.TrimRight(base, "/"), Token: token}
+}
+
+func (s *Server) lookupGuest(agentID string) (guest, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g, ok := s.guests[agentID]
+	return g, ok && g.Base != "" && g.Token != ""
 }
 
 // SetKeepalive changes how often the event stream writes a comment.
@@ -123,6 +165,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}", s.updateAgent)
 	mux.HandleFunc("POST /agents/{id}/delete", s.deleteAgent)
 	mux.HandleFunc("POST /agents/{id}/messages", s.postMessage)
+	mux.HandleFunc("GET /agents/{id}/bundle", s.ownerBundle)
+	mux.HandleFunc("GET /agents/{id}/secrets", s.ownerSecrets)
+	mux.HandleFunc("GET /agents/{id}/workspace", s.ownerFiles)
+	mux.HandleFunc("GET /agents/{id}/workspace/{path...}", s.ownerFile)
+	mux.HandleFunc("POST /api/castlet/agents/{id}/bootstrap", s.bootstrap)
+	mux.HandleFunc("GET /api/castlet/agents/{id}/bundle", s.machineBundle)
+	mux.HandleFunc("GET /api/castlet/agents/{id}/secrets", s.machineSecrets)
 	mux.HandleFunc("GET /runs/{id}/events", s.runEvents)
 	mux.HandleFunc("GET /runs/{id}", s.getRun)
 	mux.HandleFunc("POST /runs/{id}/retry", s.retryRun)
@@ -164,7 +213,8 @@ func (s *Server) wrap(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		st := s.loadState(w, r)
 		r = r.WithContext(context.WithValue(r.Context(), stateKey, st))
-		if r.Method == http.MethodPost {
+		// castlet calls these with a bearer token, not a browser form.
+		if r.Method == http.MethodPost && !strings.HasPrefix(r.URL.Path, "/api/castlet/") {
 			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 			if err := r.ParseForm(); err != nil {
 				http.Error(w, "Bad request", http.StatusBadRequest)

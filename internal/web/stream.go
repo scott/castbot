@@ -15,8 +15,8 @@ import (
 	"github.com/scott/castbot/internal/store"
 )
 
-func runJob(userID, threadID, agentID, runID, text string, history []runtime.Turn) run.Job {
-	return run.Job{UserID: userID, ThreadID: threadID, AgentID: agentID, RunID: runID, Text: text, History: history}
+func runJob(userID, threadID, agentID, runID, messageID, text string, history []runtime.Turn) run.Job {
+	return run.Job{UserID: userID, ThreadID: threadID, AgentID: agentID, RunID: runID, MessageID: messageID, Text: text, History: history}
 }
 
 // priorTurns is the transcript before this user message.
@@ -62,7 +62,7 @@ func (s *Server) retryRun(w http.ResponseWriter, r *http.Request) {
 	if mapStoreErr(w, r, err) {
 		return
 	}
-	s.runs.Start(runJob(user.ID, prev.ThreadID, prev.AgentID, next.ID, msg.Body, s.priorTurns(r.Context(), user.ID, prev.ThreadID, msg.ID)))
+	s.runs.Start(runJob(user.ID, prev.ThreadID, prev.AgentID, next.ID, msg.ID, msg.Body, s.priorTurns(r.Context(), user.ID, prev.ThreadID, msg.ID)))
 	agent, err := s.store.GetAgent(r.Context(), user.ID, prev.AgentID)
 	if mapStoreErr(w, r, err) {
 		return
