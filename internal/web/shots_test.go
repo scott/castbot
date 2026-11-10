@@ -62,6 +62,18 @@ func TestShots(t *testing.T) {
 			shootRestart(t, browserCtx, dir, vp.w, vp.h, vp.name)
 		})
 	}
+	dir03 := filepath.Join("..", "..", "docs", "evidence", "S03")
+	if err := os.MkdirAll(dir03, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, vp := range []struct {
+		w, h int
+		name string
+	}{{1280, 800, "1280"}, {390, 844, "390"}} {
+		t.Run("container-"+vp.name, func(t *testing.T) {
+			shootContainer(t, browserCtx, dir03, vp.w, vp.h, vp.name)
+		})
+	}
 }
 
 func shootStream(t *testing.T, browser context.Context, dir string, width, height int, name string) {
@@ -133,12 +145,30 @@ func shootError(t *testing.T, browser context.Context, dir string, width, height
 		chromedp.WaitVisible(`textarea[name="body"]`, chromedp.ByQuery),
 		chromedp.SendKeys(`textarea[name="body"]`, "hello", chromedp.ByQuery),
 		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("The agent is not reachable right now.")>=0&&t.indexOf("Retry")>=0;})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		chromedp.Poll(retryInside(), nil, chromedp.WithPollingTimeout(15*time.Second)),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	saveShot(t, ctx, filepath.Join(dir, "error-"+name+".png"))
 	assertNoSideScroll(t, ctx)
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.Reload(),
+		chromedp.Poll(retryInside(), nil, chromedp.WithPollingTimeout(15*time.Second)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.UpdateTheme(context.Background(), user.ID, "light"); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.Reload(),
+		chromedp.Poll(js(`(function(){return document.documentElement.classList.contains("light")&&`+retryInsideExpr()+`;})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		chromedp.SendKeys(`textarea[name="body"]`, "hello again", chromedp.ByQuery),
+		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
+		chromedp.Poll(js(`(function(){var n=document.querySelectorAll(".errbox button").length;return n>=2&&`+retryInsideExpr()+`;})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func shoot502(t *testing.T, browser context.Context, dir string, width, height int, name string) {
@@ -252,6 +282,59 @@ func shootRestart(t *testing.T, browser context.Context, dir string, width, heig
 	assertNoSideScroll(t, ctx)
 }
 
+func shootContainer(t *testing.T, browser context.Context, dir string, width, height int, name string) {
+	t.Helper()
+	h := newHarnessWith(t, runtime.NewHTTP("http://127.0.0.1:1"))
+	user, _ := h.account("box@example.com", "Box User", "correct-horse-1")
+	sec, err := h.st.CreateSection(context.Background(), user.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{
+		SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.PutBundle(context.Background(), user.ID, agent.ID, "1", "name: Atlas\n", "Reply briefly.\n"); err != nil {
+		t.Fatal(err)
+	}
+	secRow, err := h.st.PutSecret(context.Background(), user.ID, "FIXTURE_TOKEN", "fixture-value-s03")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.GrantSecret(context.Background(), user.ID, agent.ID, secRow.ID); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := h.st.IssueBootstrap(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest, token := startGuest(t, h, agent.ID, bootstrap, "800ms")
+	client := runtime.NewHTTP(guest.URL())
+	client.SetToken(token)
+	h.srv.SetClient(client)
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	page := ts.URL + "/agents/" + agent.ID
+	session := sessionToken(t, h, user.ID)
+	ctx := tab(t, browser)
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		network.Enable(),
+		network.SetCookie("castbot_session", session).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
+		chromedp.EmulateViewport(int64(width), int64(height)),
+		chromedp.Navigate(page),
+		chromedp.WaitVisible(`textarea[name="body"]`, chromedp.ByQuery),
+		chromedp.SendKeys(`textarea[name="body"]`, "hello", chromedp.ByQuery),
+		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
+		chromedp.Poll(js(`(function(){var s=document.querySelector(".stream");return !!(s&&s.textContent.indexOf("Hello")>=0&&s.textContent.indexOf("today?")<0);})()`), nil, chromedp.WithPollingTimeout(20*time.Second)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saveShot(t, ctx, filepath.Join(dir, "streaming-"+name+".png"))
+	assertNoSideScroll(t, ctx)
+}
+
 func mustEchoURL(t *testing.T, echo *runtime.Echo) string {
 	t.Helper()
 	up := httptest.NewServer(echo)
@@ -358,6 +441,14 @@ func saveShot(t *testing.T, ctx context.Context, path string) {
 	if err := os.WriteFile(path, buf, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func retryInsideExpr() string {
+	return `(function(){var box=document.querySelector(".ch-body");var btns=box&&box.querySelectorAll(".errbox button");var btn=btns&&btns.length?btns[btns.length-1]:null;if(!box||!btn)return false;var a=box.getBoundingClientRect();var b=btn.getBoundingClientRect();return b.top>=a.top-1&&b.bottom<=a.bottom+1&&b.left>=a.left-1&&b.right<=a.right+1;})()`
+}
+
+func retryInside() string {
+	return js(`(function(){var t=document.body.innerText||"";return t.indexOf("The agent is not reachable right now.")>=0&&t.indexOf("Retry")>=0&&` + retryInsideExpr() + `;})()`)
 }
 
 func assertNoSideScroll(t *testing.T, ctx context.Context) {

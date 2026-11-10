@@ -1,0 +1,11 @@
+.git
+data
+docs/evidence
+*.db
+*.db-shm
+*.db-wal
+castbot.env
+.env
+.env.*
+*.key
+*.pem

@@ -600,6 +600,222 @@ func TestNineEmptyResumesFail(t *testing.T) {
 	}
 }
 
+func TestKeepaliveCutsPast135sStayByteIdentical(t *testing.T) {
+	// The edge cuts a quiet socket about every 15s. Nine of those with no
+	// progress used to end the run at about 135s. A held-open keepalive
+	// stretch longer than that must still finish byte for byte.
+	msg := "hello there"
+	want := runtime.EchoText("echo", msg)
+	var first atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		now := time.Now().UnixNano()
+		first.CompareAndSwap(0, now)
+		start := time.Unix(0, first.Load())
+		id := requestStreamID(r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		fl, _ := w.(http.Flusher)
+		_, _ = fmt.Fprintf(w, ": cast-stream %s\n\n", id)
+		if fl != nil {
+			fl.Flush()
+		}
+		if time.Since(start) < 150*time.Second {
+			deadline := time.Now().Add(15 * time.Second)
+			for time.Now().Before(deadline) {
+				timer := time.NewTimer(time.Second)
+				select {
+				case <-timer.C:
+				case <-r.Context().Done():
+					timer.Stop()
+					return
+				}
+				if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+					return
+				}
+				if fl != nil {
+					fl.Flush()
+				}
+			}
+			return
+		}
+		if _, err := io.WriteString(w, textFrame(want)); err != nil {
+			return
+		}
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		if fl != nil {
+			fl.Flush()
+		}
+	}))
+	t.Cleanup(srv.Close)
+	h := newHarnessWith(t, runtime.NewHTTP(srv.URL))
+	ip := "203.0.113.251:9"
+	user, secret := h.account("quiet@example.com", "Quiet", "correct-horse-1")
+	h.login("quiet@example.com", "correct-horse-1", secret, ip, false)
+	agent := h.newAgent(ip, "Atlas")
+	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {msg}}), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 {
+		t.Fatal(code, body)
+	}
+	runID := runIDFrom(t, body)
+	row := waitRun(t, h, user.ID, runID, "done", 4*time.Minute)
+	if row.Error != "" {
+		t.Fatal(row.Error)
+	}
+	if time.Since(time.Unix(0, first.Load())) < 135*time.Second {
+		t.Fatalf("quiet stretch was only %s", time.Since(time.Unix(0, first.Load())))
+	}
+	if joinedText(t, h, user.ID, runID) != want {
+		t.Fatal("joined text mismatch")
+	}
+	assertAgentBody(t, h, user.ID, agent.ID, want)
+}
+
+func TestHungRuntimeHitsTheTimeLimit(t *testing.T) {
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := requestStreamID(r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl, _ := w.(http.Flusher)
+		_, _ = fmt.Fprintf(w, ": cast-stream %s\n\n", id)
+		if fl != nil {
+			fl.Flush()
+		}
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	h := newHarnessWith(t, runtime.NewHTTP(srv.URL))
+	h.srv.SetRunLimit(time.Second)
+	ip := "203.0.113.252:9"
+	user, secret := h.account("hung@example.com", "Hung", "correct-horse-1")
+	h.login("hung@example.com", "correct-horse-1", secret, ip, false)
+	agent := h.newAgent(ip, "Atlas")
+	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {"hello there"}}), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 {
+		t.Fatal(code, body)
+	}
+	runID := runIDFrom(t, body)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime was not contacted")
+	}
+	row := waitRun(t, h, user.ID, runID, "failed", 5*time.Second)
+	if row.Error != run.Interrupted {
+		t.Fatalf("error %q", row.Error)
+	}
+}
+
+func TestAcceptThenCloseIsRetried(t *testing.T) {
+	echo := runtime.NewEcho(runtime.EchoOptions{Name: "echo"})
+	t.Cleanup(echo.Close)
+	var closes atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if closes.Add(1) <= 2 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				http.Error(w, "no hijack", http.StatusInternalServerError)
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				return
+			}
+			// FIN, not RST, and no response bytes.
+			_ = conn.Close()
+			return
+		}
+		echo.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	h := newHarnessWith(t, runtime.NewHTTP(srv.URL))
+	msg := "hello there"
+	user, agent, page := postAndWait(t, h, "fin@example.com", "203.0.113.253:9", msg, "You said: hello there", 15*time.Second)
+	if closes.Load() < 3 {
+		t.Fatalf("closes %d", closes.Load())
+	}
+	assertAgentBody(t, h, user.ID, agent.ID, runtime.EchoText("echo", msg))
+	if strings.Count(page, "You said: hello there") != 1 {
+		t.Fatalf("page: %s", page)
+	}
+}
+
+func TestRetryDoesNotDuplicateTheRuntimeSession(t *testing.T) {
+	echo := runtime.NewEcho(runtime.EchoOptions{Name: "echo", FailWith: "turn failed"})
+	up := httptest.NewServer(echo)
+	t.Cleanup(func() {
+		up.Close()
+		echo.Close()
+	})
+	h := newHarnessWith(t, runtime.NewHTTP(up.URL))
+	ip := "203.0.113.254:9"
+	user, secret := h.account("session@example.com", "Session", "correct-horse-1")
+	h.login("session@example.com", "correct-horse-1", secret, ip, false)
+	agent := h.newAgent(ip, "Atlas")
+	const msg = "ping the echo"
+	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {msg}}), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 {
+		t.Fatal(code, body)
+	}
+	runID := runIDFrom(t, body)
+	row := waitRun(t, h, user.ID, runID, "failed", 5*time.Second)
+	if !strings.Contains(row.Error, "turn failed") {
+		t.Fatalf("error %q", row.Error)
+	}
+	threads, err := h.st.ListThreadsByAgent(context.Background(), user.ID, agent.ID)
+	if err != nil || len(threads) == 0 {
+		t.Fatal(err)
+	}
+	if users := countRole(echo.Transcript(threads[0].ID), "user", msg); users != 1 {
+		t.Fatalf("session user turns %d", users)
+	}
+	code, body, _ = h.do(http.MethodPost, "/runs/"+runID+"/retry", h.form(url.Values{}), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 {
+		t.Fatal(code, body)
+	}
+	nextID := runIDFrom(t, body)
+	_ = waitRun(t, h, user.ID, nextID, "failed", 5*time.Second)
+	deadline := time.Now().Add(2 * time.Second)
+	for echo.Starts() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if echo.Starts() < 2 {
+		t.Fatalf("runtime saw %d turns", echo.Starts())
+	}
+	if users := countRole(echo.Transcript(threads[0].ID), "user", msg); users != 1 {
+		t.Fatalf("session user turns after retry %d", users)
+	}
+	msgs, err := h.st.ListMessages(context.Background(), user.ID, threads[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := 0
+	for _, m := range msgs {
+		if m.AuthorKind == "user" && m.Body == msg {
+			stored++
+		}
+	}
+	if stored != 1 {
+		t.Fatalf("stored user messages %d", stored)
+	}
+}
+
+func countRole(turns []runtime.Turn, role, text string) int {
+	n := 0
+	for _, turn := range turns {
+		if turn.Role == role && turn.Text == text {
+			n++
+		}
+	}
+	return n
+}
+
 func TestResetAndTimeoutsStillDeliver(t *testing.T) {
 	echo := runtime.NewEcho(runtime.EchoOptions{Name: "echo"})
 	t.Cleanup(echo.Close)

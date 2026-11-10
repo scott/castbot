@@ -146,7 +146,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	// Start runs before this response names the run. The row stays queued
 	// until the goroutine marks it streaming, and the event handler does
 	// not fail a queued run, so a reader in that gap cannot interrupt it.
-	s.runs.Start(runJob(user.ID, threads[0].ID, agent.ID, run.ID, msg.Body, s.priorTurns(r.Context(), user.ID, threads[0].ID, msg.ID)))
+	s.runs.Start(runJob(user.ID, threads[0].ID, agent.ID, run.ID, msg.ID, msg.Body, s.priorTurns(r.Context(), user.ID, threads[0].ID, msg.ID)))
 	if r.Header.Get("HX-Request") == "true" {
 		av := presentAgent(agent, true, userLocation(user.Timezone))
 		loc := userLocation(user.Timezone)

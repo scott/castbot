@@ -170,6 +170,52 @@ CREATE TABLE IF NOT EXISTS run_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id, thread_id, started_at);
+
+-- S03 test stub. Plaintext on purpose. S08 replaces this with the vault.
+CREATE TABLE IF NOT EXISTS agent_bundles (
+  agent_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  agent_yaml TEXT NOT NULL,
+  instructions_md TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (agent_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS agent_tokens (
+  token_hash TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('bootstrap', 'agent')),
+  created_at TEXT NOT NULL,
+  used_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS secret_fixtures (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  value TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_secret_grants (
+  agent_id TEXT NOT NULL,
+  secret_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  PRIMARY KEY (agent_id, secret_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bundles_user ON agent_bundles(user_id, agent_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_tokens_agent ON agent_tokens(agent_id, kind);
+CREATE INDEX IF NOT EXISTS idx_secrets_user ON secret_fixtures(user_id, name);
+CREATE INDEX IF NOT EXISTS idx_grants_user ON agent_secret_grants(user_id, agent_id);
 `
 
 func (s *Store) migrate() error {
@@ -185,7 +231,7 @@ func (s *Store) migrate() error {
 	if err := s.allowRetried(); err != nil {
 		return err
 	}
-	for _, version := range []int{1, 2, 3, 4} {
+	for _, version := range []int{1, 2, 3, 4, 5} {
 		if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING`, version); err != nil {
 			return err
 		}
