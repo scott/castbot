@@ -240,25 +240,37 @@ func TestCLISlugIsSafeAndUnique(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	timSlug, err := s.CLISlug(ctx, owner.ID, tim.ID)
+	timSlug, err := s.AssignCLISlug(ctx, owner.ID, tim.ID)
 	if err != nil || timSlug != "tims-bot" {
 		t.Fatalf("tim %s %v", timSlug, err)
 	}
-	reviewSlug, err := s.CLISlug(ctx, owner.ID, reviewer.ID)
+	reviewSlug, err := s.AssignCLISlug(ctx, owner.ID, reviewer.ID)
 	if err != nil || reviewSlug != "code-reviewer" {
 		t.Fatalf("reviewer %s %v", reviewSlug, err)
 	}
-	againSlug, err := s.CLISlug(ctx, owner.ID, again.ID)
+	againSlug, err := s.AssignCLISlug(ctx, owner.ID, again.ID)
 	if err != nil || againSlug == timSlug || !strings.HasPrefix(againSlug, "tims-bot-") {
 		t.Fatalf("collision %s %v", againSlug, err)
 	}
-	if theirsSlug, err := s.CLISlug(ctx, other.ID, theirs.ID); err != nil || theirsSlug != "tims-bot" {
+	if theirsSlug, err := s.AssignCLISlug(ctx, other.ID, theirs.ID); err != nil || theirsSlug != "tims-bot" {
 		t.Fatalf("other owner %s %v", theirsSlug, err)
 	}
 	for _, slug := range []string{timSlug, reviewSlug, againSlug} {
 		if !cliNameOK(slug) {
 			t.Fatalf("slug %s", slug)
 		}
+	}
+	if err := s.SaveAgentFields(ctx, owner.ID, tim.ID, AgentInput{SectionID: sec.ID, Name: "Renamed bot", Title: "Helper"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAgent(ctx, owner.ID, reviewer.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.CLISlug(ctx, owner.ID, tim.ID); err != nil || got != timSlug {
+		t.Fatalf("rename changed the slug to %s %v", got, err)
+	}
+	if got, err := s.CLISlug(ctx, owner.ID, again.ID); err != nil || got != againSlug {
+		t.Fatalf("delete changed the slug to %s %v", got, err)
 	}
 }
 
@@ -367,5 +379,40 @@ func TestReplyMatchesStreamNotBody(t *testing.T) {
 	}
 	if otherRun.Valid {
 		t.Fatal("older ok was claimed")
+	}
+}
+
+func TestCLIMintRowsExpireWithLoginLimits(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	owner := makeUser(t, s, "mint-expire@example.com", "Owner")
+	sec, err := s.CreateSection(ctx, owner.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	s.SetNow(func() time.Time { return now })
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO login_limits(scope, subject, workspace_id, user_id, failures, window_start) VALUES ('cli_mint', 'stale', '', '', 1, ?)`, s.stamp(now.Add(-2*time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.IssueCLIToken(ctx, owner.ID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.clearLimits(ctx, owner.Email, "203.0.113.9"); err != nil {
+		t.Fatal(err)
+	}
+	var old, fresh int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM login_limits WHERE scope = 'cli_mint' AND window_start < ?`, s.stamp(now.Add(-time.Minute))).Scan(&old); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM login_limits WHERE scope = 'cli_mint'`).Scan(&fresh); err != nil {
+		t.Fatal(err)
+	}
+	if old != 0 || fresh != 1 {
+		t.Fatalf("expired %d remaining %d", old, fresh)
 	}
 }

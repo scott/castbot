@@ -519,38 +519,97 @@ func boolInt(v bool) int {
 }
 
 // CLISlug is the name cast import accepts for this agent.
-// It is lowercase, hyphenated, and unique among the owner's agents.
-// The first agent to claim a base name keeps it. A later collision
-// gets a short suffix from the agent id.
+// A slug saved at the first export stays put. Before that, the result is
+// the name that export would save, and it is not stored yet.
 func (s *Store) CLISlug(ctx context.Context, userID, agentID string) (string, error) {
-	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+	agent, stored, err := s.cliSlugRow(ctx, userID, agentID)
+	if err != nil {
 		return "", err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name FROM agents WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at, id`, userID)
+	if stored != "" {
+		return stored, nil
+	}
+	return s.candidateSlug(ctx, userID, agent)
+}
+
+// AssignCLISlug saves the CLI name on the first export and returns it.
+// A later rename or another agent's delete does not change it.
+func (s *Store) AssignCLISlug(ctx context.Context, userID, agentID string) (string, error) {
+	agent, stored, err := s.cliSlugRow(ctx, userID, agentID)
+	if err != nil {
+		return "", err
+	}
+	if stored != "" {
+		return stored, nil
+	}
+	slug, err := s.candidateSlug(ctx, userID, agent)
+	if err != nil {
+		return "", err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE agents SET cli_slug = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND cli_slug = ''`,
+		slug, agentID, userID)
+	if err != nil {
+		if !strings.Contains(err.Error(), "UNIQUE") {
+			return "", err
+		}
+		slug, err = s.candidateSlug(ctx, userID, agent)
+		if err != nil {
+			return "", err
+		}
+		res, err = s.db.ExecContext(ctx, `UPDATE agents SET cli_slug = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND cli_slug = ''`,
+			slug, agentID, userID)
+		if err != nil {
+			return "", err
+		}
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return "", err
+	}
+	if n == 1 {
+		return slug, nil
+	}
+	_, stored, err = s.cliSlugRow(ctx, userID, agentID)
+	if err != nil {
+		return "", err
+	}
+	if stored == "" {
+		return "", ErrConflict
+	}
+	return stored, nil
+}
+
+func (s *Store) cliSlugRow(ctx context.Context, userID, agentID string) (Agent, string, error) {
+	agent, err := s.GetAgent(ctx, userID, agentID)
+	if err != nil {
+		return Agent{}, "", err
+	}
+	var stored string
+	err = s.db.QueryRowContext(ctx, `SELECT cli_slug FROM agents WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID).Scan(&stored)
+	if err != nil {
+		return Agent{}, "", err
+	}
+	return agent, stored, nil
+}
+
+func (s *Store) candidateSlug(ctx context.Context, userID string, agent Agent) (string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT cli_slug FROM agents WHERE user_id = ? AND deleted_at IS NULL AND id <> ? AND cli_slug <> ''`, userID, agent.ID)
 	if err != nil {
 		return "", err
 	}
 	defer rows.Close()
 	used := map[string]struct{}{}
-	mine := ""
 	for rows.Next() {
-		var id, name string
-		if err := rows.Scan(&id, &name); err != nil {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
 			return "", err
 		}
-		slug := claimSlug(slugBase(name), id, used)
 		used[slug] = struct{}{}
-		if id == agentID {
-			mine = slug
-		}
 	}
 	if err := rows.Err(); err != nil {
 		return "", err
 	}
-	if mine == "" {
-		return "", ErrNotFound
-	}
-	return mine, nil
+	return claimSlug(slugBase(agent.Name), agent.ID, used), nil
 }
 
 func claimSlug(base, id string, used map[string]struct{}) string {

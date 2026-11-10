@@ -208,6 +208,9 @@ func (s *Store) acceptCode(ctx context.Context, user User, ch Challenge, code, i
 		scopeEmail, ch.Email, scopeIP, ip); err != nil {
 		return false, err
 	}
+	if err := s.expireCLIMint(ctx, tx); err != nil {
+		return false, err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM login_challenges WHERE id = ? AND user_id = ?`, ch.ID, user.ID); err != nil {
 		return false, err
 	}
@@ -566,8 +569,19 @@ func (s *Store) bumpOne(ctx context.Context, tx *sql.Tx, scope, subject, workspa
 }
 
 func (s *Store) clearLimits(ctx context.Context, email, ip string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM login_limits WHERE (scope = ? AND subject = ?) OR (scope = ? AND subject = ?)`,
-		scopeEmail, email, scopeIP, ip)
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM login_limits WHERE (scope = ? AND subject = ?) OR (scope = ? AND subject = ?)`,
+		scopeEmail, email, scopeIP, ip); err != nil {
+		return err
+	}
+	return s.expireCLIMint(ctx, s.db)
+}
+
+// expireCLIMint drops mint counters whose window has already closed.
+func (s *Store) expireCLIMint(ctx context.Context, exec interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}) error {
+	cutoff := s.stamp(s.Now().Add(-cliMintWindow))
+	_, err := exec.ExecContext(ctx, `DELETE FROM login_limits WHERE scope = 'cli_mint' AND window_start < ?`, cutoff)
 	return err
 }
 

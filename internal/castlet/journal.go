@@ -51,11 +51,17 @@ func (s *Supervisor) stateDir() string {
 	return filepath.Join(s.cfg.AgentDir, ".castlet")
 }
 
-// refreshCLITokens reports whether the control plane confirmed the token list.
-// A failed refresh does not accept a CLI token from the previous list.
+const cliCacheTTL = 30 * time.Second
+
+// refreshCLITokens reports whether a CLI token may be checked against the list.
+// A list newer than cliCacheTTL is reused. When that list is older and the
+// control plane cannot be reached, the token is rejected.
 func (s *Supervisor) refreshCLITokens(ctx context.Context) bool {
 	if s.cfg.ControlURL == "" || s.cfg.AgentID == "" {
 		s.ensureTokens()
+		return true
+	}
+	if s.tokenCacheFresh() {
 		return true
 	}
 	s.mu.Lock()
@@ -153,8 +159,15 @@ func (s *Supervisor) replaceTokens(list []cliToken) error {
 	s.cliMu.Lock()
 	s.cliTokens = append([]cliToken(nil), list...)
 	s.cliLoaded = true
+	s.cliFresh = time.Now()
 	s.cliMu.Unlock()
 	return nil
+}
+
+func (s *Supervisor) tokenCacheFresh() bool {
+	s.cliMu.Lock()
+	defer s.cliMu.Unlock()
+	return s.cliLoaded && !s.cliFresh.IsZero() && time.Since(s.cliFresh) < cliCacheTTL
 }
 
 func (s *Supervisor) ensureTokens() {
@@ -256,8 +269,19 @@ func (s *Supervisor) appendJournal(e journalEntry) (journalEntry, error) {
 	s.journalEnd += int64(len(line))
 	s.journalNext++
 	s.rememberPermLocked(e)
-	_ = os.WriteFile(filepath.Join(dir, "journal.seq"), []byte(strconv.Itoa(s.journalNext)), 0o600)
+	if err := writeSeq(dir, s.journalNext); err != nil {
+		return e, err
+	}
 	return e, nil
+}
+
+func writeSeq(dir string, next int) error {
+	path := filepath.Join(dir, "journal.seq")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.Itoa(next)), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func (s *Supervisor) loadJournalLocked() error {
@@ -274,6 +298,7 @@ func (s *Supervisor) loadJournalLocked() error {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			s.readSeqLocked()
 			s.journalReady = true
 			return nil
 		}
@@ -302,8 +327,21 @@ func (s *Supervisor) loadJournalLocked() error {
 			return err
 		}
 	}
+	s.readSeqLocked()
 	s.journalReady = true
 	return nil
+}
+
+func (s *Supervisor) readSeqLocked() {
+	raw, err := os.ReadFile(filepath.Join(s.stateDir(), "journal.seq"))
+	if err != nil {
+		return
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || n < s.journalNext {
+		return
+	}
+	s.journalNext = n
 }
 
 func (s *Supervisor) rememberPermLocked(e journalEntry) {

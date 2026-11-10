@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS agents (
   idle_timeout INTEGER NOT NULL DEFAULT 300,
   size TEXT NOT NULL DEFAULT '1:2048',
   position INTEGER NOT NULL DEFAULT 0,
+  cli_slug TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   deleted_at TEXT
 );
@@ -370,6 +371,12 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if err := s.ensureColumn("journal_entries", "stream_id", `ALTER TABLE journal_entries ADD COLUMN stream_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agents", "cli_slug", `ALTER TABLE agents ADD COLUMN cli_slug TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_cli_slug ON agents(user_id, cli_slug) WHERE cli_slug != '' AND deleted_at IS NULL`); err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_journal ON messages(thread_id, journal_seq) WHERE journal_seq IS NOT NULL`); err != nil {

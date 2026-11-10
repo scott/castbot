@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCLITokenAcceptsThenRevokes(t *testing.T) {
@@ -115,8 +116,11 @@ func TestRevokedTokenFailsClosed(t *testing.T) {
 	t.Cleanup(up.Close)
 	hash := sha256Hex("cli-token-for-tests")
 	open := true
-	var used int
+	var used, gets int
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/cli-tokens") {
+			gets++
+		}
 		if !open {
 			http.Error(w, "down", http.StatusServiceUnavailable)
 			return
@@ -142,16 +146,114 @@ func TestRevokedTokenFailsClosed(t *testing.T) {
 	send.Header.Set("X-Cast-Authorization", "Bearer cli-token-for-tests")
 	rec := httptest.NewRecorder()
 	sup.ServeHTTP(rec, send)
-	if rec.Code != http.StatusOK || used != 1 {
-		t.Fatalf("first %d used %d", rec.Code, used)
+	if rec.Code != http.StatusOK || used != 1 || gets != 1 {
+		t.Fatalf("first %d used %d gets %d", rec.Code, used, gets)
 	}
 	open = false
+	cached := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	cached.Header.Set("X-Cast-Authorization", "Bearer cli-token-for-tests")
+	rec = httptest.NewRecorder()
+	sup.ServeHTTP(rec, cached)
+	if rec.Code != http.StatusOK || gets != 1 {
+		t.Fatalf("fresh cache %d gets %d", rec.Code, gets)
+	}
+	sup.cliMu.Lock()
+	sup.cliFresh = time.Now().Add(-time.Minute)
+	sup.cliMu.Unlock()
 	again := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	again.Header.Set("X-Cast-Authorization", "Bearer cli-token-for-tests")
 	rec = httptest.NewRecorder()
 	sup.ServeHTTP(rec, again)
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("stale cache %d", rec.Code)
+		t.Fatalf("expired cache %d", rec.Code)
+	}
+}
+
+func TestPushedRevokeReplacesTheTokenCache(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(up.Close)
+	hash := sha256Hex("cli-token-for-tests")
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_, _ = io.WriteString(w, `{"tokens":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","hash":"`+hash+`","revoked":false}]}`)
+	}))
+	t.Cleanup(cp.Close)
+	sup, err := New(Config{
+		Token: "agent-token", RuntimeURL: up.URL, AgentDir: t.TempDir(),
+		ControlURL: cp.URL, AgentID: "agent", AllowHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup.MarkReady()
+	body := `{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user","parts":[{"kind":"text","text":"hi"}]},"metadata":{"sessionId":"sess-1"}}}`
+	send := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	send.Header.Set("X-Cast-Authorization", "Bearer cli-token-for-tests")
+	rec := httptest.NewRecorder()
+	sup.ServeHTTP(rec, send)
+	if rec.Code != http.StatusOK {
+		t.Fatal(rec.Code)
+	}
+	push := httptest.NewRequest(http.MethodPost, "/castlet/cli-tokens", strings.NewReader(`{"tokens":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","hash":"`+hash+`","revoked":true}]}`))
+	push.Header.Set("X-Cast-Authorization", "Bearer agent-token")
+	rec = httptest.NewRecorder()
+	sup.ServeHTTP(rec, push)
+	if rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Code)
+	}
+	again := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	again.Header.Set("X-Cast-Authorization", "Bearer cli-token-for-tests")
+	rec = httptest.NewRecorder()
+	sup.ServeHTTP(rec, again)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("pushed revoke %d", rec.Code)
+	}
+}
+
+func TestJournalSeqIsReadAndDoesNotReuseEntries(t *testing.T) {
+	dir := t.TempDir()
+	sup, err := New(Config{Token: "agent-token", AgentDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sup.stateDir()+"/journal.seq", []byte("4"), 0o600); err != nil {
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(sup.stateDir(), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(sup.stateDir()+"/journal.seq", []byte("4"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			t.Fatal(err)
+		}
+	}
+	first, err := sup.appendJournal(journalEntry{Caller: "control_plane", Kind: "request", Text: "one"})
+	if err != nil || first.Seq != 4 {
+		t.Fatalf("seq %d %v", first.Seq, err)
+	}
+	next, err := New(Config{Token: "agent-token", AgentDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(next.stateDir()+"/journal.seq", []byte("1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := next.appendJournal(journalEntry{Caller: "control_plane", Kind: "request", Text: "two"})
+	if err != nil || second.Seq != 5 {
+		t.Fatalf("kept %d %v", second.Seq, err)
+	}
+	raw := string(mustRead(t, next.stateDir()+"/journal.seq"))
+	if strings.TrimSpace(raw) != "6" {
+		t.Fatalf("seq file %s", raw)
+	}
+	if _, err := os.Stat(next.stateDir() + "/journal.seq.tmp"); err == nil {
+		t.Fatal("seq temp file remained")
 	}
 }
 

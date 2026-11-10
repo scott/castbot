@@ -66,6 +66,7 @@ type Supervisor struct {
 	cliMu        sync.Mutex
 	cliTokens    []cliToken
 	cliLoaded    bool
+	cliFresh     time.Time
 	journalReady bool
 	journalNext  int
 	journalEnd   int64

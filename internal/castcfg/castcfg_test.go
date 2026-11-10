@@ -135,6 +135,25 @@ func TestCompoundSecretNamesAreDropped(t *testing.T) {
 	}
 }
 
+func TestPluralTokenNamesStaySecret(t *testing.T) {
+	raw := "name: Atlas\nmax_tokens: 16\nmax_output_tokens: 32\nmax_input_tokens: 8\napi_tokens: api-token-value\ngithub_tokens: gh-token-value\nrefresh_tokens: refresh-token-value\nnote: hello\n"
+	spec, err := ParseYAML(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(spec.Kept)
+	for _, needle := range []string{"max_tokens", "16", "max_output_tokens", "32", "max_input_tokens", "hello"} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("missing %s\n%s", needle, text)
+		}
+	}
+	for _, needle := range []string{"api_tokens", "api-token-value", "github_tokens", "gh-token-value", "refresh_tokens", "refresh-token-value"} {
+		if strings.Contains(text, needle) {
+			t.Fatalf("kept %s\n%s", needle, text)
+		}
+	}
+}
+
 func TestCountKeysAreNotSecrets(t *testing.T) {
 	raw := "name: Atlas\nmax_tokens: 16\nsort_key: name\nprompt_tokens: 3\ngithub_token: compound-token-value\nnote: hello\n"
 	spec, err := ParseYAML(raw)

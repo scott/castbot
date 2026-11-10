@@ -58,7 +58,7 @@ func (s *Server) exportCLI(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Error", http.StatusInternalServerError)
 			return
 		} else {
-			slug, err := s.store.CLISlug(r.Context(), user.ID, agent.ID)
+			slug, err := s.store.AssignCLISlug(r.Context(), user.ID, agent.ID)
 			if err != nil {
 				http.Error(w, "Error", http.StatusInternalServerError)
 				return
