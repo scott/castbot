@@ -342,6 +342,22 @@ func (s *Store) CreateAgent(ctx context.Context, userID string, in AgentInput) (
 	return agent, thread, err
 }
 
+// SetAgentModel stores the caller's chosen model id.
+func (s *Store) SetAgentModel(ctx context.Context, userID, agentID, model string) error {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return err
+	}
+	model = strings.TrimSpace(model)
+	if model == "" || len(model) > 200 {
+		return ErrInvalid
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE agents SET model = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, model, agentID, userID)
+	if err != nil {
+		return err
+	}
+	return rowsAffected(res)
+}
+
 // UpdateAgent changes the title of one of the caller's agents.
 func (s *Store) UpdateAgent(ctx context.Context, userID, id, title string) error {
 	if len(title) > 80 {

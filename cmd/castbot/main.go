@@ -53,6 +53,9 @@ func serve(args []string) {
 	_ = fs.Parse(args)
 	cfg, st := openStore()
 	defer st.Close()
+	if err := cfg.RejectDevEcho(); err != nil {
+		log.Fatal(err)
+	}
 	if err := st.FailAbandoned(context.Background(), run.Interrupted); err != nil {
 		log.Fatal(err)
 	}
@@ -62,6 +65,11 @@ func serve(args []string) {
 	defer stopRuntime()
 	app := web.New(st, cfg.SessionKey, client)
 	defer app.Close()
+	app.SetDevEcho(cfg.DevEcho)
+	if cfg.RuntimeURL != "" {
+		app.SetExplicitRuntime(true)
+	}
+	app.RunReconciler(ctx, time.Minute)
 	attachMachine(app, cfg)
 	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	app.SweepMachines(sweepCtx)
@@ -143,6 +151,9 @@ func openRuntime(cfg config.Config) (runtime.Client, func()) {
 	if cfg.RuntimeURL != "" {
 		log.Printf("agent runtime at %s", cfg.RuntimeURL)
 		return runtime.NewHTTP(cfg.RuntimeURL), func() {}
+	}
+	if !cfg.DevEcho {
+		return nil, func() {}
 	}
 	echo := runtime.NewEcho(runtime.EchoOptions{Name: "castbot", WordDelay: 30 * time.Millisecond})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

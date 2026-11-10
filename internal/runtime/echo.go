@@ -37,6 +37,8 @@ type EchoOptions struct {
 	Keepalive time.Duration
 	Retain    time.Duration
 	FailWith  string
+	// Quiet is a silence before the first token. Keepalives still flow.
+	Quiet time.Duration
 }
 
 // Echo is a local stand-in for the Cast A2A server in echo mode.
@@ -49,6 +51,7 @@ type Echo struct {
 	keepalive time.Duration
 	retain    time.Duration
 	failWith  string
+	quiet     time.Duration
 	base      context.Context
 	cancel    context.CancelFunc
 
@@ -93,6 +96,7 @@ func NewEcho(opt EchoOptions) *Echo {
 		keepalive: opt.Keepalive,
 		retain:    opt.Retain,
 		failWith:  opt.FailWith,
+		quiet:     opt.Quiet,
 		base:      ctx,
 		cancel:    cancel,
 		runs:      map[string]*echoRun{},
@@ -381,6 +385,15 @@ func (e *Echo) generate(ctx context.Context, method, reqID, text string) <-chan 
 		if e.failWith != "" {
 			_ = sendFrame(ctx, ch, dataFrame(rpcErrorRaw(reqID, -32000, e.failWith)))
 			return
+		}
+		if e.quiet > 0 {
+			timer := time.NewTimer(e.quiet)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			}
 		}
 		words := strings.Split(EchoText(e.name, text), " ")
 		for i, word := range words {

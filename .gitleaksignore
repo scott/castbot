@@ -1,3 +1,8 @@
 # Placeholder session keys from the first S01 commit. Tests now build the key at run time.
 403ca3bbb38e808394d76b0f1bb2d6b89de1878d:internal/config/config_test.go:generic-api-key:12
 403ca3bbb38e808394d76b0f1bb2d6b89de1878d:internal/config/config_test.go:generic-api-key:26
+# Fixture provider key in the S07 tests. Not a credential.
+16f7ee3209101fbd2d567a2a84837ad8bebfdcf1:internal/web/shots_s07_test.go:generic-api-key:65
+16f7ee3209101fbd2d567a2a84837ad8bebfdcf1:internal/web/runtime_test.go:generic-api-key:57
+16f7ee3209101fbd2d567a2a84837ad8bebfdcf1:internal/web/s07_test.go:generic-api-key:345
+16f7ee3209101fbd2d567a2a84837ad8bebfdcf1:internal/web/s07_test.go:generic-api-key:347

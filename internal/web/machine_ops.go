@@ -2,13 +2,17 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
@@ -21,6 +25,8 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 	s.mu.Lock()
 	h := s.machine
 	client := s.client
+	echoOn := s.devEcho
+	explicit := s.explicitRuntime
 	s.mu.Unlock()
 	if h != nil {
 		vm, liveErr := s.store.LiveVM(ctx, job.UserID, job.AgentID)
@@ -29,8 +35,17 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 			if err != nil && !errors.Is(err, store.ErrNotFound) {
 				return nil, err
 			}
+			agent, err := s.store.GetAgent(ctx, job.UserID, job.AgentID)
+			if err != nil {
+				return nil, err
+			}
+			if _, _, missing := castcfg.ProviderSecret(agent.Model); missing != "" {
+				return nil, &run.Notice{Text: missing}
+			}
 			state, endpoint := s.observedMachine(ctx, job.UserID, job.AgentID, vm)
 			if state == "paused" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
+				s.noteVM(ctx, job.UserID, job.AgentID, vm.MicroVMID, store.EventWakeRequested, 0)
+				wakeAt := time.Now()
 				got, werr := h.Wake(ctx, vm.MicroVMID)
 				if werr != nil {
 					return nil, &run.Notice{Text: "The machine is paused."}
@@ -38,9 +53,17 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 				if err := s.store.ApplyVMState(ctx, job.UserID, job.AgentID, got.State, got.Endpoint, ""); err != nil {
 					return nil, err
 				}
+				if got.State == "running" {
+					s.noteVM(ctx, job.UserID, job.AgentID, vm.MicroVMID, store.EventWakeRunning, time.Since(wakeAt))
+				}
 				state = got.State
 				if got.Endpoint != "" {
 					endpoint = got.Endpoint
+				}
+				if token != "" && endpoint != "" {
+					if perr := h.Probe(ctx, endpoint, token); perr == nil {
+						s.noteVM(ctx, job.UserID, job.AgentID, vm.MicroVMID, store.EventWakeReady, time.Since(wakeAt))
+					}
 				}
 			}
 			if err := s.runReload(ctx, job.UserID, job.AgentID); err != nil {
@@ -51,6 +74,9 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 				return nil, err
 			}
 			if state == "running" && err == nil && endpoint != "" && token != "" {
+				if rerr := s.refreshSecrets(ctx, job.UserID, agent, endpoint, token); rerr != nil {
+					return nil, rerr
+				}
 				s.pullJournal(ctx, job.UserID, job.AgentID, endpoint, token)
 				return h.Stream(ctx, endpoint, token, req)
 			}
@@ -63,10 +89,10 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 			return nil, liveErr
 		}
 	}
-	if client == nil {
-		return nil, errors.New("no runtime")
+	if client != nil && (echoOn || explicit) {
+		return client.Open(ctx, req)
 	}
-	return client.Open(ctx, req)
+	return nil, &run.Notice{Text: "No machine yet. Start it to chat."}
 }
 
 func (s *Server) provisionMachine(w http.ResponseWriter, r *http.Request) {
@@ -104,12 +130,19 @@ func (s *Server) provisionMachine(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	s.noteVM(r.Context(), user.ID, agent.ID, "", store.EventCreateRequested, 0)
 	s.prov.Add(1)
 	go func() {
 		defer s.prov.Done()
 		s.finishProvision(s.base, h, user.ID, agent, image, publicURL)
 	}()
-	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID)+"/machine", http.StatusSeeOther)
+	target := "/agents/" + url.PathEscape(agent.ID) + "/machine"
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", target)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) finishProvision(ctx context.Context, h host.AgentHost, userID string, agent store.Agent, image, publicURL string) {
@@ -132,12 +165,19 @@ func (s *Server) finishProvision(ctx context.Context, h host.AgentHost, userID s
 		s.releaseQuiet(userID, agent.ID)
 		return
 	}
+	started := time.Now()
 	created, err := h.Create(ctx, host.CreateSpec{
 		Name: host.MachineName(agent.ID), AgentID: agent.ID, Image: image,
 		Region: host.DefaultRegion, CPU: host.DefaultCPU, MemoryMiB: host.DefaultMemoryMiB,
 		Idle: idle, HTTPPort: host.DefaultHTTPPort,
 		ControlURL: publicURL, Bootstrap: boot,
 		Tags: []string{host.InstanceTag(inst)},
+		Accepted: func(m host.Machine) {
+			if m.ID == "" {
+				return
+			}
+			s.noteVM(ctx, userID, agent.ID, m.ID, store.EventCreateAccepted, time.Since(started))
+		},
 	})
 	if err != nil || created.State != "running" || created.ID == "" || created.Endpoint == "" {
 		if created.ID != "" {
@@ -155,10 +195,15 @@ func (s *Server) finishProvision(ctx context.Context, h host.AgentHost, userID s
 		s.releaseQuiet(userID, agent.ID)
 		return
 	}
+	if created.State == "running" {
+		s.noteVM(detach(ctx), userID, agent.ID, created.ID, store.EventRunning, time.Since(started))
+	}
 	endpoint, token, err := s.store.VMCredentials(detach(ctx), userID, agent.ID)
 	if err == nil && endpoint != "" && token != "" {
 		pctx, pcancel := context.WithTimeout(detach(ctx), 90*time.Second)
-		_ = h.Probe(pctx, endpoint, token)
+		if perr := h.Probe(pctx, endpoint, token); perr == nil {
+			s.noteGuestReady(detach(ctx), userID, agent.ID, created.ID, time.Since(started))
+		}
 		pcancel()
 	}
 }
@@ -354,10 +399,13 @@ func (s *Server) machineAction(w http.ResponseWriter, r *http.Request, kind stri
 		return
 	}
 	var got host.Machine
+	actionAt := time.Now()
 	switch kind {
 	case "pause":
+		s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventPauseRequested, 0)
 		got, err = h.Pause(r.Context(), vm.MicroVMID)
 	default:
+		s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventWakeRequested, 0)
 		got, err = h.Wake(r.Context(), vm.MicroVMID)
 	}
 	if err != nil {
@@ -367,6 +415,18 @@ func (s *Server) machineAction(w http.ResponseWriter, r *http.Request, kind stri
 	if err := s.store.ApplyVMState(r.Context(), user.ID, agent.ID, got.State, got.Endpoint, ""); err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
+	}
+	if kind == "pause" {
+		s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventPauseObserved, time.Since(actionAt))
+	}
+	if kind != "pause" && got.State == "running" {
+		s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventWakeRunning, time.Since(actionAt))
+		endpoint, token, credErr := s.store.VMCredentials(r.Context(), user.ID, agent.ID)
+		if credErr == nil && endpoint != "" && token != "" {
+			if perr := h.Probe(r.Context(), endpoint, token); perr == nil {
+				s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventWakeReady, time.Since(actionAt))
+			}
+		}
 	}
 	if kind != "pause" && got.State == "running" {
 		if err := s.runReload(r.Context(), user.ID, agent.ID); err != nil {
@@ -411,6 +471,7 @@ func (s *Server) removeMachine(ctx context.Context, userID string, agent store.A
 		return err
 	}
 	h, _, _ := s.hostConfig()
+	delAt := time.Now()
 	if h != nil && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
 		if err := h.Delete(ctx, vm.MicroVMID); err != nil {
 			return err
@@ -418,6 +479,7 @@ func (s *Server) removeMachine(ctx context.Context, userID string, agent store.A
 	} else {
 		log.Printf("machine row removed without a remote delete")
 	}
+	s.noteVM(ctx, userID, agent.ID, vm.MicroVMID, store.EventDelete, time.Since(delAt))
 	return s.store.MarkVMDeleted(ctx, userID, agent.ID)
 }
 
@@ -436,6 +498,7 @@ func (s *Server) observedMachine(ctx context.Context, userID, agentID string, vm
 	if err != nil {
 		return state, endpoint
 	}
+	s.noteIfEdgeResume(ctx, userID, agentID, vm.MicroVMID, state, got.State)
 	_ = s.store.ApplyVMState(ctx, userID, agentID, got.State, got.Endpoint, "")
 	if got.Endpoint != "" {
 		endpoint = got.Endpoint
@@ -504,6 +567,7 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 		got, serr := h.Status(cctx, vm.MicroVMID)
 		cancel()
 		if serr == nil {
+			s.noteIfEdgeResume(ctx, userID, agent.ID, vm.MicroVMID, vm.State, got.State)
 			_ = s.store.ApplyVMState(ctx, userID, agent.ID, got.State, got.Endpoint, "")
 			if fresh, ferr := s.store.GetAgent(ctx, userID, agent.ID); ferr == nil {
 				*agent = fresh
@@ -532,6 +596,8 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 	default:
 		view.CanDelete = true
 		view.LastWake = vm.LastWake
+		view.ShowFirst = true
+		view.FirstRunning = vm.CreatedRunning
 		switch vm.State {
 		case "running":
 			_, token, credErr := s.store.VMCredentials(ctx, userID, agent.ID)
@@ -558,4 +624,59 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 		}
 	}
 	return view
+}
+
+// refreshSecrets reloads Cast when the granted secrets or the provider key
+// differ from the set the guest last started with. An empty stored value
+// reloads once. The fingerprint is a hash. Values are not logged.
+func (s *Server) refreshSecrets(ctx context.Context, userID string, agent store.Agent, endpoint, token string) error {
+	fp, err := s.secretFingerprint(ctx, userID, agent)
+	if err != nil {
+		return err
+	}
+	stored, err := s.store.SecretFP(ctx, userID, agent.ID)
+	if err != nil {
+		return err
+	}
+	if stored != "" && stored == fp {
+		return nil
+	}
+	h, _, _ := s.hostConfig()
+	if h == nil || endpoint == "" || token == "" {
+		return nil
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 35*time.Second)
+	defer cancel()
+	if err := h.Reload(rctx, endpoint, token); err != nil {
+		s.logger().Info("vm", "event", "secrets_reload_failed", "agent_id", agent.ID)
+		return &run.Notice{Text: "The machine could not reload."}
+	}
+	return s.store.SetSecretFP(ctx, userID, agent.ID, fp)
+}
+
+func (s *Server) secretFingerprint(ctx context.Context, userID string, agent store.Agent) (string, error) {
+	secrets, err := s.store.GrantedSecrets(ctx, userID, agent.ID)
+	if err != nil {
+		return "", err
+	}
+	type pair struct {
+		name  string
+		value string
+	}
+	pairs := make([]pair, 0, len(secrets)+1)
+	for _, sec := range secrets {
+		pairs = append(pairs, pair{name: sec.Name, value: sec.Value})
+	}
+	if name, value, missing := castcfg.ProviderSecret(agent.Model); missing == "" && name != "" && value != "" {
+		pairs = append(pairs, pair{name: name, value: value})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
+	sum := sha256.New()
+	for _, p := range pairs {
+		sum.Write([]byte(p.name))
+		sum.Write([]byte{0})
+		sum.Write([]byte(p.value))
+		sum.Write([]byte{0})
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }

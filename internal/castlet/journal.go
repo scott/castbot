@@ -399,6 +399,9 @@ func (s *Supervisor) loadJournalLocked() error {
 		s.permSession = map[string]string{}
 	}
 	path := filepath.Join(s.stateDir(), "journal.jsonl")
+	if err := truncatePartialLine(path); err != nil {
+		return err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -434,6 +437,57 @@ func (s *Supervisor) loadJournalLocked() error {
 	s.readSeqLocked()
 	s.journalReady = true
 	return nil
+}
+
+// truncatePartialLine drops an unterminated tail left by a crash mid-write.
+// A later append would otherwise be glued onto that tail and both lines
+// would be unreadable after a restart.
+func truncatePartialLine(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if fi.Size() == 0 {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	last := make([]byte, 1)
+	if _, err := f.ReadAt(last, fi.Size()-1); err != nil {
+		return err
+	}
+	if last[0] == '\n' {
+		return nil
+	}
+	const chunk = 4096
+	pos := fi.Size()
+	buf := make([]byte, chunk)
+	cut := int64(0)
+	found := false
+	for pos > 0 && !found {
+		n := int64(chunk)
+		if n > pos {
+			n = pos
+		}
+		pos -= n
+		if _, err := f.ReadAt(buf[:n], pos); err != nil {
+			return err
+		}
+		for i := n - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				cut = pos + i + 1
+				found = true
+				break
+			}
+		}
+	}
+	return f.Truncate(cut)
 }
 
 func (s *Supervisor) readSeqLocked() {

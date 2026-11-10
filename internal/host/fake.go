@@ -39,6 +39,10 @@ type Fake struct {
 	Pushed [][]byte
 	// Journal is the body PullJournal returns. An empty value is an empty entry list.
 	Journal []byte
+	// ListErr makes List fail. The reconciler backs off on it.
+	ListErr error
+	// WakeWait blocks Wake until it is closed or the context ends.
+	WakeWait <-chan struct{}
 }
 
 // NewFake returns an empty host.
@@ -93,11 +97,12 @@ func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 		}
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, "create")
 	f.Creates = append(f.Creates, spec)
 	if f.CreateErr != nil {
-		return Machine{}, f.CreateErr
+		err := f.CreateErr
+		f.mu.Unlock()
+		return Machine{}, err
 	}
 	id := "vm-test"
 	if len(f.Creates) > 1 {
@@ -125,6 +130,11 @@ func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 		m.State = f.ForceState
 	}
 	f.Machines[id] = m
+	accepted := spec.Accepted
+	f.mu.Unlock()
+	if accepted != nil {
+		accepted(Machine{ID: m.ID, Name: m.Name, State: "new"})
+	}
 	return m, nil
 }
 
@@ -144,8 +154,36 @@ func (f *Fake) Status(_ context.Context, id string) (Machine, error) {
 }
 
 // Wake marks the machine running.
-func (f *Fake) Wake(_ context.Context, id string) (Machine, error) {
+func (f *Fake) Wake(ctx context.Context, id string) (Machine, error) {
+	f.mu.Lock()
+	wait := f.WakeWait
+	f.mu.Unlock()
+	if wait != nil {
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return Machine{}, ctx.Err()
+		}
+	}
 	return f.set(id, "wake", "running")
+}
+
+// List returns the stored machines. It does not call a guest.
+func (f *Fake) List(context.Context) ([]Machine, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, "list")
+	if f.ListErr != nil {
+		return nil, f.ListErr
+	}
+	out := make([]Machine, 0, len(f.Machines))
+	for _, m := range f.Machines {
+		if f.ForceState != "" {
+			m.State = f.ForceState
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 // Pause marks the machine paused.
@@ -271,15 +309,23 @@ func (f *Fake) PullJournal(context.Context, string, string, int) ([]byte, error)
 	return body, nil
 }
 
-// List returns the machines this fake currently holds.
-func (f *Fake) List(context.Context) ([]Machine, error) {
+// SetListErr makes the next List calls fail. A nil error clears it.
+func (f *Fake) SetListErr(err error) {
+	f.mu.Lock()
+	f.ListErr = err
+	f.mu.Unlock()
+}
+
+// SetMachineState updates one stored machine and clears a forced state.
+// The reconciler reads this from List. It does not call the guest.
+func (f *Fake) SetMachineState(id, state string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]Machine, 0, len(f.Machines))
-	for _, m := range f.Machines {
-		out = append(out, m)
-	}
-	return out, nil
+	m := f.Machines[id]
+	m.ID = id
+	m.State = state
+	f.Machines[id] = m
+	f.ForceState = ""
 }
 
 // Snapshot copies the call list.

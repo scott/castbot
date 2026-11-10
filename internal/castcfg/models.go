@@ -29,6 +29,8 @@ type provider struct {
 	FallbackModels []string `json:"fallbackModels"`
 	LLMDefault     string   `json:"llmDefaultModel"`
 	Impl           string   `json:"impl"`
+	EnvVar         string   `json:"envVar"`
+	Keyless        bool     `json:"keyless"`
 }
 
 // Model is one brain.model value named by the manifest.

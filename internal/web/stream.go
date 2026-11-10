@@ -115,6 +115,10 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if time.Since(lastKA) >= s.keepaliveEvery() {
+			gap := time.Since(lastKA)
+			if gap > 20*time.Second {
+				s.logger().Debug("sse keepalive gap", "run_id", runRow.ID, "gap_ms", gap.Milliseconds())
+			}
 			if _, err := io.WriteString(w, ": ka\n\n"); err != nil {
 				return
 			}

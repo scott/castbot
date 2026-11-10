@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"time"
 
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/store"
@@ -76,10 +78,54 @@ func (s *Server) exportCLI(w http.ResponseWriter, r *http.Request) {
 			if push := s.pushCLITokens(r.Context(), user.ID, agent.ID); push != "" {
 				flash.note = flash.note + " " + push
 			}
+			r = r.WithContext(context.WithValue(r.Context(), flashKey{}, flash))
+			s.finishExport(w, r, user, agent.ID, id)
+			return
 		}
 	}
 	r = r.WithContext(context.WithValue(r.Context(), flashKey{}, flash))
 	s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusOK, "")
+}
+
+// finishExport shows a newly minted token, or revokes it when the page
+// never reaches the browser.
+func (s *Server) finishExport(w http.ResponseWriter, r *http.Request, user store.User, agentID, tokenID string) {
+	rec := httptest.NewRecorder()
+	err := s.renderAgent(rec, r, user, agentID, false, "machine", http.StatusOK, "")
+	if err != nil || rec.Code != http.StatusOK || r.Context().Err() != nil {
+		_ = s.store.RevokeCLIToken(context.Background(), user.ID, agentID, tokenID)
+		s.pushCLITokens(context.Background(), user.ID, agentID)
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	for k, vs := range rec.Header() {
+		for _, v := range vs {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(rec.Code)
+	if _, werr := w.Write(rec.Body.Bytes()); werr != nil || r.Context().Err() != nil {
+		_ = s.store.RevokeCLIToken(context.Background(), user.ID, agentID, tokenID)
+		s.pushCLITokens(context.Background(), user.ID, agentID)
+		return
+	}
+	_ = s.store.MarkCLITokenViewed(r.Context(), user.ID, agentID, tokenID)
+}
+
+func cliTokenView(tok store.CLIToken, loc *time.Location) cliTokView {
+	view := cliTokView{ID: tok.ID, Prefix: tok.Prefix, Created: clockStamp(tok.CreatedAt, loc), LastUsed: "Not yet", Status: "Active"}
+	if tok.LastUsedAt != "" {
+		view.LastUsed = clockStamp(tok.LastUsedAt, loc)
+	}
+	if tok.ViewedAt == "" {
+		view.Unseen = true
+		view.Status = "Not shown"
+	}
+	if tok.RevokedAt != "" {
+		view.Revoked = true
+		view.Status = "Revoked"
+	}
+	return view
 }
 
 func (s *Server) revokeCLI(w http.ResponseWriter, r *http.Request) {
@@ -122,15 +168,7 @@ func (s *Server) renderCLISection(w http.ResponseWriter, r *http.Request, user s
 	}
 	loc := userLocation(user.Timezone)
 	for _, tok := range tokens {
-		view := cliTokView{ID: tok.ID, Prefix: tok.Prefix, Created: clockStamp(tok.CreatedAt, loc), LastUsed: "Not yet", Status: "Active"}
-		if tok.LastUsedAt != "" {
-			view.LastUsed = clockStamp(tok.LastUsedAt, loc)
-		}
-		if tok.RevokedAt != "" {
-			view.Revoked = true
-			view.Status = "Revoked"
-		}
-		p.CLITokens = append(p.CLITokens, view)
+		p.CLITokens = append(p.CLITokens, cliTokenView(tok, loc))
 	}
 	if slug, err := s.store.CLISlug(r.Context(), user.ID, agent.ID); err == nil {
 		p.CLIName = slug

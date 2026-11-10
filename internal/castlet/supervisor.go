@@ -7,10 +7,12 @@ package castlet
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -80,6 +82,7 @@ type Supervisor struct {
 	journalOff   map[int]int64
 	permSession  map[string]string
 	token        string
+	runtimeToken string
 	ready        bool
 	version      string
 	sha          string
@@ -132,6 +135,11 @@ func New(cfg Config) (*Supervisor, error) {
 			DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 		}},
 	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return nil, err
+	}
+	s.runtimeToken = hex.EncodeToString(buf)
 	return s, nil
 }
 
@@ -478,6 +486,7 @@ func (s *Supervisor) childEnv() []string {
 	skip := map[string]bool{
 		"CASTBOT_BOOTSTRAP_TOKEN": true,
 		"CASTBOT_CA_FILE":         true,
+		"AUTH_TOKEN":              true,
 	}
 	var out []string
 	for _, env := range os.Environ() {
@@ -489,11 +498,15 @@ func (s *Supervisor) childEnv() []string {
 	}
 	s.mu.Lock()
 	secrets := append([]secret(nil), s.secrets...)
+	runtimeToken := s.runtimeToken
 	s.mu.Unlock()
 	for _, sec := range secrets {
 		out = append(out, sec.Name+"="+sec.Value)
 	}
 	out = append(out, "CASTLET_SECRET_COUNT="+strconv.Itoa(len(secrets)))
+	if runtimeToken != "" {
+		out = append(out, "AUTH_TOKEN="+runtimeToken)
+	}
 	return out
 }
 

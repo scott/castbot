@@ -15,6 +15,7 @@ type CLIToken struct {
 	CreatedAt  string
 	LastUsedAt string
 	RevokedAt  string
+	ViewedAt   string
 }
 
 // CLIHash is the hash castlet stores. It is not the raw token.
@@ -106,6 +107,34 @@ func (s *Store) TouchCLIToken(ctx context.Context, userID, agentID, tokenID stri
 	return nil
 }
 
+// MarkCLITokenViewed records that the export page showed this token.
+// A second call leaves the first time in place.
+func (s *Store) MarkCLITokenViewed(ctx context.Context, userID, agentID, tokenID string) error {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE cli_tokens SET viewed_at = ? WHERE id = ? AND user_id = ? AND agent_id = ? AND viewed_at IS NULL`,
+		s.stamp(s.Now()), tokenID, userID, agentID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	var have int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cli_tokens WHERE id = ? AND user_id = ? AND agent_id = ?`, tokenID, userID, agentID).Scan(&have); err != nil {
+		return err
+	}
+	if have == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) bumpCLIMint(ctx context.Context, tx *sql.Tx, workspaceID, userID, agentID string) error {
 	subject := userID + ":" + agentID
 	row, err := readLimitQ(ctx, tx, "cli_mint", subject)
@@ -140,7 +169,7 @@ func (s *Store) ListCLITokens(ctx context.Context, userID, agentID string) ([]CL
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, agent_id, kind, prefix, created_at, COALESCE(last_used_at, ''), COALESCE(revoked_at, '') FROM cli_tokens WHERE user_id = ? AND agent_id = ? ORDER BY created_at, id`, userID, agentID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, agent_id, kind, prefix, created_at, COALESCE(last_used_at, ''), COALESCE(revoked_at, ''), COALESCE(viewed_at, '') FROM cli_tokens WHERE user_id = ? AND agent_id = ? ORDER BY created_at, id`, userID, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +177,7 @@ func (s *Store) ListCLITokens(ctx context.Context, userID, agentID string) ([]CL
 	var out []CLIToken
 	for rows.Next() {
 		var t CLIToken
-		if err := rows.Scan(&t.ID, &t.AgentID, &t.Kind, &t.Prefix, &t.CreatedAt, &t.LastUsedAt, &t.RevokedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.AgentID, &t.Kind, &t.Prefix, &t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ViewedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
