@@ -331,7 +331,7 @@ func TestRevokeReportsAPushFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/cli/"+id+"/revoke", h.form(cliForm()), ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, "Revoked") || !strings.Contains(body, "did not accept the token change") {
+	if code != http.StatusOK || !strings.Contains(body, "Revoked") || !strings.Contains(body, "did not accept the token change") || !strings.Contains(body, "The token stops working within 30 seconds.") {
 		t.Fatalf("revoke %d", code)
 	}
 }

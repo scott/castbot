@@ -66,7 +66,14 @@ type Supervisor struct {
 	cliMu        sync.Mutex
 	cliTokens    []cliToken
 	cliLoaded    bool
-	cliFresh     time.Time
+	cliWall      time.Time
+	cliMono      time.Duration
+	cliMonoSet   bool
+	wallNow      func() time.Time
+	monoNow      func() time.Duration
+	clockWall    time.Time
+	clockMono    time.Duration
+	clockInit    bool
 	journalReady bool
 	journalNext  int
 	journalEnd   int64

@@ -1,6 +1,6 @@
 # Cast CLI access
 
-castbot can mint a token for the Cast CLI. The token is shown once, on the machine page, inside an import blob. castbot stores only a hash. It does not hand out a cloud token. The CLI uses the owner's own cloud token from the environment.
+castbot can mint a token for the Cast CLI. The token is shown once, on the machine page, inside an import blob. castbot stores only a hash. It does not hand out a cloud token. The CLI uses the owner's own cloud token from the environment. Revocation is immediate when the machine is reachable. Otherwise it takes effect within 30 seconds.
 
 The blob `name` is a CLI-safe slug (`[A-Za-z0-9][A-Za-z0-9-]*`). `display_name` is the agent name shown in castbot. The blob also has the castbot agent id, the machine URL, provider `microvm`, and the CLI token. The machine page shows the CLI name to use with `cast connect`.
 

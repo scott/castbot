@@ -158,7 +158,9 @@ func TestRevokedTokenFailsClosed(t *testing.T) {
 		t.Fatalf("fresh cache %d gets %d", rec.Code, gets)
 	}
 	sup.cliMu.Lock()
-	sup.cliFresh = time.Now().Add(-time.Minute)
+	sup.cliWall = time.Now().Add(-time.Minute).Round(0)
+	sup.cliMono = time.Since(monoEpoch) - time.Minute
+	sup.cliMonoSet = true
 	sup.cliMu.Unlock()
 	again := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	again.Header.Set("X-Cast-Authorization", "Bearer cli-token-for-tests")
@@ -166,6 +168,79 @@ func TestRevokedTokenFailsClosed(t *testing.T) {
 	sup.ServeHTTP(rec, again)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expired cache %d", rec.Code)
+	}
+}
+
+func TestTokenCacheExpiresByWallTime(t *testing.T) {
+	stored := time.Unix(1_700_000_000, 0)
+	if cliCacheFresh(stored, stored.Add(48*time.Hour), 0, time.Second, true) {
+		t.Fatal("stopped monotonic clock kept a stale wall time")
+	}
+	if !cliCacheFresh(stored, stored.Add(10*time.Second), 0, 10*time.Second, true) {
+		t.Fatal("fresh list")
+	}
+	if cliCacheFresh(stored, stored.Add(10*time.Second), 0, 31*time.Second, true) {
+		t.Fatal("monotonic age")
+	}
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"jsonrpc\":\"2.0\",\"result\":{\"parts\":[{\"kind\":\"text\",\"text\":\"pong\"}]}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(up.Close)
+	hash := sha256Hex("cli-token-for-tests")
+	wall := time.Unix(1_700_000_000, 0)
+	mono := time.Duration(0)
+	open := true
+	var gets int
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/cli-tokens") {
+			gets++
+		}
+		if !open {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_, _ = io.WriteString(w, `{"tokens":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","hash":"`+hash+`","revoked":false}]}`)
+	}))
+	t.Cleanup(cp.Close)
+	sup, err := New(Config{
+		Token: "agent-token", RuntimeURL: up.URL, AgentDir: t.TempDir(),
+		ControlURL: cp.URL, AgentID: "agent", AllowHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup.wallNow = func() time.Time { return wall }
+	sup.monoNow = func() time.Duration { return mono }
+	sup.MarkReady()
+	body := `{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user","parts":[{"kind":"text","text":"hi"}]},"metadata":{"sessionId":"sess-1"}}}`
+	send := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	send.Header.Set("X-Cast-Authorization", "Bearer cli-token-for-tests")
+	rec := httptest.NewRecorder()
+	sup.ServeHTTP(rec, send)
+	if rec.Code != http.StatusOK || gets != 1 {
+		t.Fatalf("first %d gets %d", rec.Code, gets)
+	}
+	wall = wall.Add(48 * time.Hour)
+	mono = time.Second
+	open = false
+	again := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	again.Header.Set("X-Cast-Authorization", "Bearer cli-token-for-tests")
+	rec = httptest.NewRecorder()
+	sup.ServeHTTP(rec, again)
+	if rec.Code != http.StatusUnauthorized || gets != 2 {
+		t.Fatalf("wall expiry %d gets %d", rec.Code, gets)
+	}
+	sup.cliMu.Lock()
+	dropped := !sup.cliLoaded && len(sup.cliTokens) == 0
+	sup.cliMu.Unlock()
+	if !dropped {
+		t.Fatal("wake kept the cache")
 	}
 }
 

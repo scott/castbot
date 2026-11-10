@@ -51,11 +51,18 @@ func (s *Supervisor) stateDir() string {
 	return filepath.Join(s.cfg.AgentDir, ".castlet")
 }
 
-const cliCacheTTL = 30 * time.Second
+const (
+	cliCacheTTL = 30 * time.Second
+	wakeSlack   = time.Second
+)
+
+// monoEpoch is the monotonic base. time.Since on it stops while the machine is paused.
+var monoEpoch = time.Now()
 
 // refreshCLITokens reports whether a CLI token may be checked against the list.
-// A list newer than cliCacheTTL is reused. When that list is older and the
-// control plane cannot be reached, the token is rejected.
+// A list newer than cliCacheTTL on both the wall clock and the monotonic clock
+// is reused. When either clock is older and the control plane cannot be reached,
+// the token is rejected.
 func (s *Supervisor) refreshCLITokens(ctx context.Context) bool {
 	if s.cfg.ControlURL == "" || s.cfg.AgentID == "" {
 		s.ensureTokens()
@@ -156,18 +163,79 @@ func (s *Supervisor) replaceTokens(list []cliToken) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
+	wall := s.wallClock()
+	mono := s.monoClock()
 	s.cliMu.Lock()
 	s.cliTokens = append([]cliToken(nil), list...)
 	s.cliLoaded = true
-	s.cliFresh = time.Now()
+	s.cliWall = wall
+	s.cliMono = mono
+	s.cliMonoSet = true
 	s.cliMu.Unlock()
 	return nil
 }
 
+func (s *Supervisor) wallClock() time.Time {
+	if s.wallNow != nil {
+		return s.wallNow().Round(0)
+	}
+	return time.Now().Round(0)
+}
+
+func (s *Supervisor) monoClock() time.Duration {
+	if s.monoNow != nil {
+		return s.monoNow()
+	}
+	return time.Since(monoEpoch)
+}
+
+// observeClock drops the token list when the wall clock jumps ahead of the
+// time the machine was running, which is what a wake looks like.
+func (s *Supervisor) observeClock() {
+	wall := s.wallClock()
+	mono := s.monoClock()
+	s.cliMu.Lock()
+	s.noteWakeLocked(wall, mono)
+	s.cliMu.Unlock()
+}
+
+func (s *Supervisor) noteWakeLocked(wall time.Time, mono time.Duration) {
+	if s.clockInit {
+		wallGap := wall.Sub(s.clockWall)
+		monoGap := mono - s.clockMono
+		if wallGap < 0 || wallGap > monoGap+wakeSlack {
+			s.dropCLICacheLocked()
+		}
+	}
+	s.clockWall = wall
+	s.clockMono = mono
+	s.clockInit = true
+}
+
+func (s *Supervisor) dropCLICacheLocked() {
+	s.cliTokens = nil
+	s.cliLoaded = false
+	s.cliWall = time.Time{}
+	s.cliMono = 0
+	s.cliMonoSet = false
+}
+
 func (s *Supervisor) tokenCacheFresh() bool {
+	wall := s.wallClock()
+	mono := s.monoClock()
 	s.cliMu.Lock()
 	defer s.cliMu.Unlock()
-	return s.cliLoaded && !s.cliFresh.IsZero() && time.Since(s.cliFresh) < cliCacheTTL
+	s.noteWakeLocked(wall, mono)
+	return s.cliLoaded && cliCacheFresh(s.cliWall, wall, s.cliMono, mono, s.cliMonoSet)
+}
+
+func cliCacheFresh(storedWall, nowWall time.Time, storedMono, nowMono time.Duration, monoSet bool) bool {
+	if storedWall.IsZero() || !monoSet {
+		return false
+	}
+	wallAge := nowWall.Round(0).Sub(storedWall.Round(0))
+	monoAge := nowMono - storedMono
+	return wallAge >= 0 && wallAge < cliCacheTTL && monoAge >= 0 && monoAge < cliCacheTTL
 }
 
 func (s *Supervisor) ensureTokens() {
@@ -278,10 +346,46 @@ func (s *Supervisor) appendJournal(e journalEntry) (journalEntry, error) {
 func writeSeq(dir string, next int) error {
 	path := filepath.Join(dir, "journal.seq")
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strconv.Itoa(next)), 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if _, err := f.Write([]byte(strconv.Itoa(next))); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	f, err = os.Open(path)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	cerr := f.Close()
+	if err != nil {
+		return err
+	}
+	if cerr != nil {
+		return cerr
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = d.Sync()
+	cerr = d.Close()
+	if err != nil {
+		return err
+	}
+	return cerr
 }
 
 func (s *Supervisor) loadJournalLocked() error {

@@ -20,6 +20,7 @@ import (
 )
 
 func (s *Supervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.observeClock()
 	caller, ok := s.authorize(w, r)
 	if !ok {
 		return

@@ -49,7 +49,12 @@ func (s *Server) exportCLI(w http.ResponseWriter, r *http.Request) {
 	if endpoint == "" {
 		flash.note = "This agent has no machine address yet."
 	} else {
-		_, plain, err := s.store.IssueCLIToken(r.Context(), user.ID, agent.ID)
+		slug, err := s.store.AssignCLISlug(r.Context(), user.ID, agent.ID)
+		if err != nil {
+			http.Error(w, "Error", http.StatusInternalServerError)
+			return
+		}
+		id, plain, err := s.store.IssueCLIToken(r.Context(), user.ID, agent.ID)
 		if err == store.ErrCLICap {
 			flash.note = "Revoke a token before adding another."
 		} else if err == store.ErrCLIRate {
@@ -58,15 +63,11 @@ func (s *Server) exportCLI(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Error", http.StatusInternalServerError)
 			return
 		} else {
-			slug, err := s.store.AssignCLISlug(r.Context(), user.ID, agent.ID)
-			if err != nil {
-				http.Error(w, "Error", http.StatusInternalServerError)
-				return
-			}
 			raw, err := json.MarshalIndent(importBlob{
 				Name: slug, DisplayName: agent.Name, AgentID: agent.ID, URL: endpoint, Provider: "microvm", Token: plain,
 			}, "", "  ")
 			if err != nil {
+				_ = s.store.RevokeCLIToken(r.Context(), user.ID, agent.ID, id)
 				http.Error(w, "Error", http.StatusInternalServerError)
 				return
 			}
@@ -94,7 +95,7 @@ func (s *Server) revokeCLI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if push := s.pushCLITokens(r.Context(), user.ID, agentID); push != "" {
-		r = r.WithContext(context.WithValue(r.Context(), flashKey{}, cliFlash{note: push}))
+		r = r.WithContext(context.WithValue(r.Context(), flashKey{}, cliFlash{note: push + " The token stops working within 30 seconds."}))
 	}
 	if r.Header.Get("HX-Request") == "true" {
 		s.renderCLISection(w, r, user, agentID)
