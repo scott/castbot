@@ -26,6 +26,9 @@ type Fake struct {
 	CreateStarted chan struct{}
 	// BlankEndpoint makes Create return a running machine with no address.
 	BlankEndpoint bool
+	// RejectAddress means a published hostname failed the edge check.
+	// An empty address without this flag is still unpublished.
+	RejectAddress bool
 }
 
 // NewFake returns an empty host.
@@ -84,7 +87,7 @@ func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 		id = "vm-test-" + spec.AgentID
 	}
 	endpoint := "https://vm.example"
-	if f.BlankEndpoint {
+	if f.BlankEndpoint || f.RejectAddress {
 		endpoint = ""
 	}
 	tags := []string{"castbot", "agent:" + spec.AgentID}
@@ -98,7 +101,7 @@ func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 	}
 	m := Machine{
 		ID: id, Name: spec.Name, State: "running",
-		Endpoint: endpoint, Image: spec.Image, Region: spec.Region,
+		Endpoint: endpoint, AddressRejected: f.RejectAddress, Image: spec.Image, Region: spec.Region,
 		CPU: spec.CPU, Memory: spec.MemoryMiB, Tags: tags,
 	}
 	if f.ForceState != "" {

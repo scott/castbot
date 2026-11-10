@@ -374,14 +374,24 @@ func (s *Server) newAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
+	form, err := s.blankForm(r.Context(), user)
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
 	p.Page = "new"
 	p.Title = "New agent"
+	p.AgentForm = form
 	s.render(w, http.StatusOK, "app", finish(p))
 }
 
 func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.requireUser(w, r)
 	if !ok {
+		return
+	}
+	if r.FormValue("form") == "agent" {
+		s.saveNewAgent(w, r, user)
 		return
 	}
 	sec, err := s.store.SystemSection(r.Context(), user.ID, "agents")
@@ -400,10 +410,18 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		p, _ := s.shell(r, user)
 		p.Page = "new"
 		p.Title = "New agent"
-		p.FormError = "Choose a name that is not already used."
-		if errors.Is(err, store.ErrInvalid) {
-			p.FormError = "Use a name up to 40 characters."
+		f, ferr := s.blankForm(r.Context(), user)
+		if ferr != nil {
+			http.Error(w, "Error", http.StatusInternalServerError)
+			return
 		}
+		f.Name = r.FormValue("name")
+		f.Title = r.FormValue("title")
+		f.NameErr = "Choose a name that is not already used."
+		if errors.Is(err, store.ErrInvalid) {
+			f.NameErr = "Use a name up to 40 characters."
+		}
+		p.AgentForm = f
 		s.render(w, http.StatusBadRequest, "app", finish(p))
 		return
 	}

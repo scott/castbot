@@ -130,7 +130,7 @@
 {{else if eq .Kind "custom"}}<details class="menu"><summary class="ibtn dt-only" aria-label="{{.Name}} options">{{template "dots" $}}</summary><div class="menu-pop"><form method="post" action="/sections/{{.ID}}"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="ui" value="1"><input name="name" maxlength="40" value="{{.Name}}" aria-label="Section name" required><button class="btn sm" type="submit">Rename</button></form><form method="post" action="/sections/{{.ID}}/delete"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="ui" value="1"><button class="btn sm danger-ghost" type="submit">Remove</button></form></div></details>
 {{else}}<button class="ibtn dt-only" type="button" aria-label="Pinned options">{{template "dots" $}}</button>{{end}}
 </h4>
-{{range .Agents}}<a class="ag{{if .On}} on{{end}}" href="/agents/{{.ID}}" data-name="{{.Name}}"{{if .On}} aria-current="page"{{end}}><span class="av {{.Color}}" aria-hidden="true">{{.Letter}}<span class="dot {{.Dot}}"></span></span><span class="who"><span class="nm">{{.Name}}</span><span class="sub{{if .SubClass}} {{.SubClass}}{{end}}">{{.Sub}}</span></span>{{if gt .Approvals 0}}<span class="badge apb" aria-label="{{.Approvals}} approval waiting"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>{{.Approvals}}</span>{{else if gt .Unread 0}}<span class="badge acc" aria-label="{{.Unread}} unread">{{.Unread}}</span>{{end}}</a>{{end}}
+{{range .Agents}}<a class="ag{{if .On}} on{{end}}" href="/agents/{{.ID}}" data-name="{{.Name}}"{{if .On}} aria-current="page"{{end}}><span class="av {{.Color}}" aria-hidden="true">{{if .Avatar}}<img src="/agents/{{.ID}}/avatar" alt="">{{else}}{{.Letter}}{{end}}<span class="dot {{.Dot}}"></span></span><span class="who"><span class="nm">{{.Name}}</span><span class="sub{{if .SubClass}} {{.SubClass}}{{end}}">{{.Sub}}</span></span>{{if gt .Approvals 0}}<span class="badge apb" aria-label="{{.Approvals}} approval waiting"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>{{.Approvals}}</span>{{else if gt .Unread 0}}<span class="badge acc" aria-label="{{.Unread}} unread">{{.Unread}}</span>{{end}}</a>{{end}}
 </div>
 {{end}}{{end}}
 {{if .Empty}}<div class="sb-empty"><span>No agents yet. Each agent you create gets its own machine.</span><a class="btn sm pri" href="/new-agent">{{template "plus" .}}New agent</a></div>{{end}}
@@ -189,6 +189,7 @@
 <aside class="pane" aria-label="{{.Agent.Name}} info"><div class="grabber" aria-hidden="true"></div>
 <div class="pane-h"><span class="av {{.Agent.Color}} lg" aria-hidden="true">{{.Agent.Letter}}</span><div class="grow"><div class="nm">{{.Agent.Name}}</div><div class="sub">{{.Agent.Title}}{{if .Agent.Created}} · created {{.Agent.Created}}{{end}}</div></div><a class="ibtn" href="/agents/{{.Agent.ID}}" aria-label="Close info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></a></div>
 <section class="psec"><div class="psec-h"><h4>Machine</h4><a class="link" href="/agents/{{.Agent.ID}}/machine">Open</a></div><span class="chip {{.Agent.ChipClass}}"><span class="pip"></span>{{.Agent.ChipLabel}}</span><div class="meta-grid"><div><div class="k">Size</div><div class="v">{{.Agent.SizeLabel}}</div></div><div><div class="k">Auto-pause</div><div class="v">{{.Agent.IdleLabel}}</div></div></div><p class="fineprint">Status is the machine record. Checking it does not wake the machine.</p></section>
+<section class="psec"><div class="psec-h"><h4>Agent</h4><a class="link" href="/agents/{{.Agent.ID}}/edit">Edit</a></div><p class="fineprint">Name, instructions, model, and tools.</p></section>
 <section class="psec"><div class="psec-h"><h4>Model</h4></div><div class="model"><span class="pv">{{.Agent.Letter}}</span><div class="grow"><div class="t1">{{if .Agent.Model}}{{.Agent.Model}}{{else}}No model saved{{end}}</div><div class="t2">Keys stay on your account.</div></div></div></section>
 <section class="psec"><div class="psec-h"><h4>Memory</h4></div><p class="fineprint">Memory arrives in a later update.</p></section>
 <section class="psec"><div class="psec-h"><h4>Routines</h4></div><p class="fineprint">Routines arrive in a later update.</p></section>
@@ -254,16 +255,56 @@
 </form></div>
 {{end}}
 
-{{define "newMain"}}
-<header class="ph-top ph-only"><a class="ibtn" href="/" aria-label="Back">{{template "backsvg" .}}</a><span class="t">New agent</span></header>
-<div class="page-h"><div><h1 class="dt-only">New agent</h1><p class="sub">A draft on this account. The machine tab starts it.</p></div></div>
-<div class="page-b"><form method="post" action="/new-agent">
+{{define "agentForm"}}
+<header class="ph-top ph-only"><a class="ibtn" href="/" aria-label="Back">{{template "backsvg" .}}</a><span class="t">{{.AgentForm.Heading}}</span></header>
+<div class="page-h"><div><h1 class="dt-only">{{.AgentForm.Heading}}</h1><p class="sub">{{.AgentForm.Sub}}</p></div></div>
+<form class="na" method="post" action="{{.AgentForm.Action}}" enctype="multipart/form-data">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
-{{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
-<div class="field"><span class="lab">Name</span><div class="inp"><input name="name" maxlength="80" aria-label="Name" required></div></div>
-<div class="field"><span class="lab">Title</span><div class="inp"><input name="title" maxlength="80" aria-label="Title"></div></div>
-<button class="btn pri" type="submit">Create agent</button>
-</form></div>
+<input type="hidden" name="form" value="agent">
+<input type="hidden" name="version" value="{{.AgentForm.Version}}">
+<div class="na-form">
+{{if .AgentForm.Notice}}<div class="banner ok" role="status"><span class="grow">{{.AgentForm.Notice}}</span></div>{{end}}
+{{if .AgentForm.SaveErr}}<div class="banner err" role="alert"><span class="grow">{{.AgentForm.SaveErr}}</span></div>{{end}}
+<section class="card">
+<div class="card-h"><span class="num">1</span><h3>Import</h3></div>
+<p class="fineprint">A zip or tar of a Cast agent folder, or a public https github.com URL. Private repositories are out of scope. Files such as .env are skipped and listed here before you save.</p>
+{{if .AgentForm.ImportErr}}<p class="err">{{.AgentForm.ImportErr}}</p>{{end}}
+<div class="field"><span class="lab">Archive</span><div class="file"><input type="file" name="archive" accept=".zip,.tar,.gz,.tgz,application/gzip,application/zip" aria-label="Archive"></div></div>
+<div class="field"><span class="lab">GitHub URL <span class="opt">optional</span></span><div class="inp{{if .AgentForm.ImportErr}} bad{{end}}"><input name="github" value="{{.AgentForm.GitHub}}" placeholder="https://github.com/owner/repo" aria-label="GitHub URL" autocapitalize="off" spellcheck="false"></div></div>
+<button class="btn sm" type="submit" formaction="{{.AgentForm.ImportAction}}">Review import</button>
+{{if .AgentForm.Skipped}}<div><span class="lab">Skipped files</span><ul class="skip">{{range .AgentForm.Skipped}}<li>{{.}}</li>{{end}}</ul><p class="fineprint">These files can hold secrets, so they were not added.</p></div>{{end}}
+{{if .AgentForm.LeftOut}}<p class="fineprint">Other files were left out. The saved agent keeps the instructions and the agent file only.</p>{{end}}
+{{if .AgentForm.ToolNote}}<p class="fineprint">{{.AgentForm.ToolNote}}</p>{{end}}
+</section>
+<section class="card">
+<div class="card-h"><span class="num">2</span><h3>Agent</h3></div>
+<div class="two">
+<div class="field"><span class="lab">Name</span><div class="inp{{if .AgentForm.NameErr}} bad{{end}}"><input name="name" maxlength="40" value="{{.AgentForm.Name}}" aria-label="Name"></div>{{if .AgentForm.NameErr}}<span class="err">{{.AgentForm.NameErr}}</span>{{end}}</div>
+<div class="field"><span class="lab">Title</span><div class="inp{{if .AgentForm.TitleErr}} bad{{end}}"><input name="title" maxlength="80" value="{{.AgentForm.Title}}" aria-label="Title"></div>{{if .AgentForm.TitleErr}}<span class="err">{{.AgentForm.TitleErr}}</span>{{end}}</div>
+</div>
+<div class="field"><span class="lab">Section</span><div class="selwrap"><select class="sel" name="section" aria-label="Section">{{range .AgentForm.Sections}}<option value="{{.ID}}"{{if eq .ID $.AgentForm.SectionID}} selected{{end}}>{{.Name}}</option>{{end}}</select></div>{{if .AgentForm.SectionErr}}<span class="err">{{.AgentForm.SectionErr}}</span>{{end}}</div>
+<div class="field"><span class="lab">Avatar <span class="opt">optional</span></span><div class="file"><input type="file" name="avatar" accept="image/png,image/jpeg,image/gif,image/webp" aria-label="Avatar"></div>{{if .AgentForm.HasAvatar}}<p class="fineprint">An avatar is saved. A new file replaces it.</p>{{end}}{{if .AgentForm.AvatarErr}}<span class="err">{{.AgentForm.AvatarErr}}</span>{{end}}<p class="help">PNG, JPEG, GIF, or WebP. Up to 512 KB.</p></div>
+<div class="field"><span class="lab">Instructions</span><textarea class="ta" name="instructions" maxlength="200000" aria-label="Instructions">{{.AgentForm.Instructions}}</textarea>{{if .AgentForm.InstructionsErr}}<span class="err">{{.AgentForm.InstructionsErr}}</span>{{end}}</div>
+</section>
+<section class="card">
+<div class="card-h"><span class="num">3</span><h3>Model</h3></div>
+<div class="field"><span class="lab">Model</span><div class="selwrap"><select class="sel" name="model" aria-label="Model"><option value="">Choose a model</option>{{range .AgentForm.Models}}<option value="{{.}}"{{if eq . $.AgentForm.Model}} selected{{end}}>{{.}}</option>{{end}}</select></div>{{if .AgentForm.ModelErr}}<span class="err">{{.AgentForm.ModelErr}}</span>{{end}}<p class="help">The list is the provider manifest. An unknown model is not replaced with a default.</p></div>
+</section>
+<section class="card">
+<div class="card-h"><span class="num">4</span><h3>Tools</h3></div>
+<p class="fineprint">Write and shell tools ask before they run. Read tools are allowed. You can change each one.</p>
+{{if .AgentForm.ToolErr}}<p class="err">{{.AgentForm.ToolErr}}</p>{{end}}
+{{range .AgentForm.Tools}}<div class="toolrow"><label><input type="checkbox" name="tool" value="{{.Name}}"{{if .On}} checked{{end}}> {{.Name}}</label><div class="selwrap"><select class="sel" name="perm_{{.Name}}" aria-label="{{.Name}} permission"><option value="ask"{{if eq .Level "ask"}} selected{{end}}>Ask</option><option value="always-allow"{{if eq .Level "always-allow"}} selected{{end}}>Always allow</option><option value="deny"{{if eq .Level "deny"}} selected{{end}}>Deny</option></select></div></div>{{end}}
+</section>
+<button class="btn pri" type="submit">{{.AgentForm.Submit}}</button>
+</div>
+<aside class="sum">
+<h3>Review</h3>
+{{if .AgentForm.HasAvatar}}<img class="av lg" src="/agents/{{.AgentForm.AgentID}}/avatar" alt="">{{end}}
+<div class="kv"><div class="k">Name</div><div>{{if .AgentForm.Name}}{{.AgentForm.Name}}{{else}}Not set{{end}}</div><div class="k">Title</div><div>{{if .AgentForm.Title}}{{.AgentForm.Title}}{{else}}Not set{{end}}</div><div class="k">Model</div><div>{{if .AgentForm.Model}}{{.AgentForm.Model}}{{else}}Not set{{end}}</div></div>
+<p class="fineprint">Saving updates this account only. A running machine is reloaded. A paused machine stays paused.</p>
+</aside>
+</form>
 {{end}}
 
 {{define "machinePanel"}}
@@ -315,7 +356,7 @@
 {{else if eq .Page "settings"}}{{template "settingsMain" .}}
 {{else if eq .Page "first"}}{{template "firstMain" .}}
 {{else if eq .Page "password"}}{{template "passwordMain" .}}
-{{else if eq .Page "new"}}{{template "newMain" .}}
+{{else if eq .Page "new" "edit"}}{{template "agentForm" .}}
 {{else}}{{template "stubMain" .}}{{end}}
 </main>
 {{if .Pane}}{{template "infoPane" .}}{{end}}

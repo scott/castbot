@@ -201,6 +201,27 @@ WHERE deleted_at IS NULL AND state = 'creating' AND microvm_id = 'pending' AND c
 	return int(n), nil
 }
 
+// OrphanCandidate reports whether this database has a pending, failed, or
+// deleted machine row for agentID. A live row does not count. The startup
+// sweep uses it so a copied database does not delete a machine whose agent
+// id is unknown here. It is not a user handler.
+func (s *Store) OrphanCandidate(ctx context.Context, agentID string) (bool, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return false, nil
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_vms WHERE agent_id = ? AND (
+		state IN ('failed', 'deleted')
+		OR deleted_at IS NOT NULL
+		OR (state = 'creating' AND microvm_id = 'pending')
+	)`, agentID).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // LiveMicroIDs returns machine ids that still have a live row.
 // Startup orphan cleanup uses it. It is not a user handler and it returns
 // no tokens, names, or owners.

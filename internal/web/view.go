@@ -24,7 +24,7 @@ type agentView struct {
 	Model, Status, ChipClass, ChipLabel, ChipMeta      string
 	SizeLabel, IdleLabel, Created                      string
 	Approvals, Unread                                  int
-	On                                                 bool
+	On, Avatar                                         bool
 }
 
 type sectionView struct {
@@ -89,6 +89,7 @@ type page struct {
 	StubTitle  string
 	StubBody   string
 	FormError  string
+	AgentForm  agentForm
 	Machine    machineView
 	Text       string
 	RoleLine   string
@@ -114,7 +115,7 @@ func finish(p page) page {
 		p.Tab = "chat"
 	case "machine", "agent-routines", "agent-files":
 		p.BodyClass = "p-chat"
-	case "settings", "password", "stub", "new":
+	case "settings", "password", "stub", "new", "edit":
 		p.BodyClass = "p-main no-bnav"
 	case "approvals", "routines", "files", "usage":
 		p.BodyClass = "p-main"
@@ -161,6 +162,7 @@ func presentAgent(a store.Agent, on bool, loc *time.Location) agentView {
 	v := agentView{
 		ID: a.ID, Name: a.Name, Title: a.Title, Letter: letter(a.Name), Color: a.Color,
 		Model: a.Model, Status: a.Status, Approvals: a.Approvals, Unread: a.Unread, On: on,
+		Avatar:    a.AvatarPath != "",
 		SizeLabel: sizeLabel(a.Size), IdleLabel: idleLabel(a.IdleTimeout),
 		Created: monthDay(a.CreatedAt, loc),
 	}

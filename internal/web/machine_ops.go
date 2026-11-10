@@ -121,7 +121,7 @@ func (s *Server) finishProvision(ctx context.Context, h host.AgentHost, userID s
 		if created.ID != "" {
 			s.deleteQuiet(h, created.ID)
 		}
-		if err == nil && created.ID != "" && created.Endpoint == "" {
+		if err == nil && created.AddressRejected {
 			s.releaseNoted(userID, agent.ID, "The machine address was not accepted. You can try again.")
 			return
 		}
@@ -173,7 +173,9 @@ func (s *Server) deleteQuiet(h host.AgentHost, id string) {
 // SweepMachines drops stale pending reservations and deletes machines this
 // database created that have no live row. A machine without this database's
 // castbot-inst tag is left alone, including other castbot processes that
-// share the token. Demo names, castbot-s00, and castbot-live stay as well.
+// share the token. A copied database has the same instance id, so a machine
+// is deleted only when its agent tag names a pending, failed, or deleted row
+// in this file. Demo names, castbot-s00, and castbot-live stay as well.
 func (s *Server) SweepMachines(ctx context.Context) {
 	n, err := s.store.ReleaseStalePending(ctx, stalePending)
 	if err != nil {
@@ -217,6 +219,17 @@ func (s *Server) SweepMachines(ctx context.Context) {
 			continue
 		}
 		if _, ok := known[vm.ID]; ok {
+			continue
+		}
+		// A copied database shares the instance id. Delete only when the
+		// agent tag names a pending, failed, or deleted row in this file.
+		// An agent id this database does not know is left alone.
+		agentID := agentTag(vm)
+		if agentID == "" {
+			continue
+		}
+		recorded, recErr := s.store.OrphanCandidate(ctx, agentID)
+		if recErr != nil || !recorded {
 			continue
 		}
 		if err := h.Delete(ctx, vm.ID); err != nil {
@@ -266,6 +279,16 @@ func (s *Server) paintAgent(ctx context.Context, userID string, a store.Agent, o
 	v.ChipLabel = "Starting"
 	v.Sub, v.SubClass = joinDot(a.Title, "Starting"), "start"
 	return v
+}
+
+func agentTag(vm host.Machine) string {
+	for _, tag := range vm.Tags {
+		id, ok := strings.CutPrefix(tag, "agent:")
+		if ok && id != "" && !strings.Contains(id, ":") {
+			return id
+		}
+	}
+	return ""
 }
 
 func hasTag(vm host.Machine, tag string) bool {
@@ -404,13 +427,18 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 		view.LastWake = vm.LastWake
 		switch vm.State {
 		case "running":
-			view.Lead = "The machine is running. It pauses after it is idle."
+			_, token, credErr := s.store.VMCredentials(ctx, userID, agent.ID)
+			if credErr == nil && token == "" {
+				view.Lead = "The machine is starting."
+			} else {
+				view.Lead = "The machine is running. It pauses after it is idle."
+			}
 			view.CanPause = h != nil
 		case "paused":
 			view.Lead = "The machine is paused. A chat message wakes it."
 			view.CanWake = h != nil
 		case "creating":
-			view.Lead = "The machine is waking."
+			view.Lead = "The machine is starting."
 		case "failed":
 			view.Lead = failedLead(*agent)
 			view.CanRetry = h != nil

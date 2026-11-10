@@ -29,6 +29,7 @@ type Agent struct {
 	Description string
 	Color       string
 	Model       string
+	AvatarPath  string
 	Status      string
 	Activity    string
 	Unread      int
@@ -239,10 +240,10 @@ func (s *Store) GetAgent(ctx context.Context, userID, id string) (Agent, error) 
 	return a, nil
 }
 
-const agentSelect = `SELECT a.id, a.workspace_id, a.user_id, a.section_id, a.name, a.title, a.description, a.avatar_color, a.model, a.status, a.activity, a.unread, a.approvals, a.idle_timeout, a.size, a.position, a.created_at FROM agents a JOIN sections s ON s.id = a.section_id AND s.user_id = a.user_id`
+const agentSelect = `SELECT a.id, a.workspace_id, a.user_id, a.section_id, a.name, a.title, a.description, a.avatar_color, a.model, a.avatar_path, a.status, a.activity, a.unread, a.approvals, a.idle_timeout, a.size, a.position, a.created_at FROM agents a JOIN sections s ON s.id = a.section_id AND s.user_id = a.user_id`
 
 func agentScan(a *Agent) []any {
-	return []any{&a.ID, &a.WorkspaceID, &a.UserID, &a.SectionID, &a.Name, &a.Title, &a.Description, &a.Color, &a.Model, &a.Status, &a.Activity, &a.Unread, &a.Approvals, &a.IdleTimeout, &a.Size, &a.Position, &a.CreatedAt}
+	return []any{&a.ID, &a.WorkspaceID, &a.UserID, &a.SectionID, &a.Name, &a.Title, &a.Description, &a.Color, &a.Model, &a.AvatarPath, &a.Status, &a.Activity, &a.Unread, &a.Approvals, &a.IdleTimeout, &a.Size, &a.Position, &a.CreatedAt}
 }
 
 func scanAgents(rows *sql.Rows) ([]Agent, error) {
@@ -351,6 +352,84 @@ func (s *Store) UpdateAgent(ctx context.Context, userID, id, title string) error
 		return err
 	}
 	return rowsAffected(res)
+}
+
+// SaveAgentFields updates the form fields of one of the caller's agents.
+// The bundle is saved separately. An unknown section is not found.
+func (s *Store) SaveAgentFields(ctx context.Context, userID, id string, in AgentInput) error {
+	name := strings.TrimSpace(in.Name)
+	title := strings.TrimSpace(in.Title)
+	model := strings.TrimSpace(in.Model)
+	if name == "" || len(name) > 40 || len(title) > 80 || len(model) > 200 {
+		return ErrInvalid
+	}
+	if _, err := s.GetAgent(ctx, userID, id); err != nil {
+		return err
+	}
+	if _, err := s.GetSection(ctx, userID, in.SectionID); err != nil {
+		return err
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agents WHERE user_id = ? AND deleted_at IS NULL AND id != ? AND lower(name) = lower(?)`, userID, id, name).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrConflict
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE agents SET section_id = ?, name = ?, title = ?, model = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, in.SectionID, name, title, model, id, userID)
+	if err != nil {
+		return err
+	}
+	return rowsAffected(res)
+}
+
+// PutAvatar stores an image for one of the caller's agents.
+// mime is a content type the handler already checked. bytes are the image.
+func (s *Store) PutAvatar(ctx context.Context, userID, agentID, mime string, body []byte) error {
+	if len(body) == 0 || len(body) > 512<<10 {
+		return ErrInvalid
+	}
+	switch mime {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+	default:
+		return ErrInvalid
+	}
+	agent, err := s.GetAgent(ctx, userID, agentID)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_avatars(agent_id, workspace_id, user_id, mime, bytes) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(agent_id) DO UPDATE SET mime = excluded.mime, bytes = excluded.bytes, workspace_id = excluded.workspace_id
+WHERE agent_avatars.user_id = excluded.user_id`, agentID, agent.WorkspaceID, userID, mime, body); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE agents SET avatar_path = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, mime, agentID, userID)
+	if err != nil {
+		return err
+	}
+	if err := rowsAffected(res); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// GetAvatar returns one of the caller's agent images.
+func (s *Store) GetAvatar(ctx context.Context, userID, agentID string) (string, []byte, error) {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return "", nil, err
+	}
+	var mime string
+	var body []byte
+	err := s.db.QueryRowContext(ctx, `SELECT mime, bytes FROM agent_avatars WHERE agent_id = ? AND user_id = ?`, agentID, userID).Scan(&mime, &body)
+	if err != nil {
+		return "", nil, scanErr(err)
+	}
+	return mime, body, nil
 }
 
 // DeleteAgent marks an agent deleted. The row stays so ids are not reused.

@@ -3,10 +3,12 @@
 package web
 
 import (
+	"archive/zip"
 	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +17,9 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/network"
+	cdppage "github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
@@ -86,6 +90,20 @@ func TestShots(t *testing.T) {
 		t.Run("machine-"+vp.name, func(t *testing.T) {
 			shootMachine(t, browserCtx, dir04, vp.w, vp.h, vp.name)
 		})
+	}
+	dir05 := filepath.Join("..", "..", "docs", "evidence", "S05")
+	if err := os.MkdirAll(dir05, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, theme := range []string{"dark", "light"} {
+		for _, vp := range []struct {
+			w, h int
+			name string
+		}{{1280, 800, "1280"}, {390, 844, "390"}} {
+			t.Run("agentform-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootAgentForm(t, browserCtx, dir05, vp.w, vp.h, theme, vp.name)
+			})
+		}
 	}
 }
 
@@ -407,6 +425,201 @@ func longTab(t *testing.T, browser context.Context, d time.Duration) context.Con
 	ctx, timeout := context.WithTimeout(ctx, d)
 	t.Cleanup(timeout)
 	return ctx
+}
+
+func shootAgentForm(t *testing.T, browser context.Context, dir string, width, height int, theme, name string) {
+	t.Helper()
+	h := newHarness(t)
+	fake := host.NewFake()
+	h.srv.SetHost(fake, "example.invalid/castbot-runtime:s05", "https://castbot.example")
+	user, secret := h.account("s05-"+theme+"-"+name+"@example.com", "Shot User", "correct-horse-1")
+	if err := h.st.UpdateTheme(context.Background(), user.ID, theme); err != nil {
+		t.Fatal(err)
+	}
+	models, err := castcfg.Models()
+	if err != nil || len(models) == 0 {
+		t.Fatal(err)
+	}
+	model := models[0].ID
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	token := sessionToken(t, h, user.ID)
+	ctx := longTab(t, browser, 3*time.Minute)
+	pageURL := ts.URL + "/new-agent"
+	steps := []chromedp.Action{
+		network.Enable(),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_, err := cdppage.AddScriptToEvaluateOnNewDocument(`window.__errs=[];window.addEventListener('securitypolicyviolation',function(e){window.__errs.push(String(e.violatedDirective||'csp'))});window.addEventListener('error',function(e){window.__errs.push(String(e.message||'error'))});`).Do(ctx)
+			return err
+		}),
+		network.SetCookie("castbot_session", token).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
+		chromedp.EmulateViewport(int64(width), int64(height)),
+		chromedp.Navigate(pageURL),
+		chromedp.WaitVisible(`select[name="model"]`, chromedp.ByQuery),
+	}
+	for i, step := range steps {
+		if err := chromedp.Run(ctx, step); err != nil {
+			t.Fatalf("step %d: %v", i, err)
+		}
+	}
+	scrollTop(t, ctx)
+	shotPage(t, ctx, filepath.Join(dir, "empty-"+theme+"-"+name+".png"))
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.SetValue(`form.na input[name="name"]`, "Atlas", chromedp.ByQuery),
+		chromedp.SetValue(`form.na input[name="title"]`, "Helper", chromedp.ByQuery),
+		chromedp.SetValue(`form.na textarea[name="instructions"]`, "Be concise.", chromedp.ByQuery),
+		chromedp.SetValue(`form.na select[name="model"]`, model, chromedp.ByQuery),
+		chromedp.Click(`form.na input[value="bash"]`, chromedp.ByQuery),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var filledName string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.querySelector('form.na input[name="name"]').value`), &filledName)); err != nil {
+		t.Fatal(err)
+	}
+	if filledName != "Atlas" {
+		t.Fatalf("name field %q", filledName)
+	}
+	scrollTop(t, ctx)
+	shotPage(t, ctx, filepath.Join(dir, "filled-"+theme+"-"+name+".png"))
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.SetValue(`form.na input[name="name"]`, "", chromedp.ByQuery),
+		chromedp.SetValue(`form.na select[name="model"]`, "", chromedp.ByQuery),
+		chromedp.Click(`form.na button.pri`, chromedp.ByQuery),
+		chromedp.WaitVisible(`.err`, chromedp.ByQuery),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	scrollTop(t, ctx)
+	shotPage(t, ctx, filepath.Join(dir, "validation-"+theme+"-"+name+".png"))
+	zipPath := filepath.Join(t.TempDir(), "agent.zip")
+	writeShotZip(t, zipPath, model)
+	if err := chromedp.Run(ctx, chromedp.SetUploadFiles(`input[name="archive"]`, []string{zipPath}, chromedp.ByQuery)); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Click(`button[formaction]`, chromedp.ByQuery)); err != nil && !strings.Contains(err.Error(), "navigated or closed") {
+		t.Fatal(err)
+	}
+	var imported string
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.WaitVisible(`ul.skip`, chromedp.ByQuery),
+		chromedp.Evaluate(js(`document.body.innerText`), &imported),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(imported, "Skipped files") || !strings.Contains(imported, ".env") || strings.Contains(imported, "super-secret-value") {
+		t.Fatalf("import review %s", imported)
+	}
+	scrollTop(t, ctx)
+	shotPage(t, ctx, filepath.Join(dir, "import-"+theme+"-"+name+".png"))
+
+	ip := "203.0.113.190:9"
+	h.login("s05-"+theme+"-"+name+"@example.com", "correct-horse-1", secret, ip, false)
+	agent := seedAgent(t, h.st, user.ID, "Quill")
+	if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{
+		SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Model: model,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.PutBundle(context.Background(), user.ID, agent.ID, "1", "name: Quill\nbrain:\n  model: "+model+"\n  instructions_file: instructions.md\ntools:\n  builtin: []\n", "Be concise."); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
+		t.Fatal(code)
+	}
+	waitMachine(t, h, agent, ip, "Pause")
+	plain, err := h.st.IssueBootstrap(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest, err := h.st.ExchangeBootstrap(context.Background(), agent.ID, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SaveVMToken(context.Background(), agent.ID, guest); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.Navigate(ts.URL + "/agents/" + agent.ID + "/edit"),
+		chromedp.WaitVisible(`input[name="title"]`, chromedp.ByQuery),
+		chromedp.SetValue(`form.na input[name="title"]`, "Reloaded helper", chromedp.ByQuery),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Click(`form.na button.pri`, chromedp.ByQuery)); err != nil && !strings.Contains(err.Error(), "navigated or closed") {
+		t.Fatal(err)
+	}
+	var saved string
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.WaitVisible(`.banner.ok`, chromedp.ByQuery),
+		chromedp.Evaluate(js(`document.body.innerText`), &saved),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(saved, "No new machine was created.") {
+		t.Fatalf("reload notice %s", saved)
+	}
+	scrollTop(t, ctx)
+	shotPage(t, ctx, filepath.Join(dir, "edit-"+theme+"-"+name+".png"))
+	if len(fake.Creates) != 1 {
+		t.Fatalf("creates %d", len(fake.Creates))
+	}
+	var errs []string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`window.__errs||[]`), &errs)); err != nil {
+		t.Fatal(err)
+	}
+	for _, note := range errs {
+		if note != "" {
+			t.Fatalf("console %s", note)
+		}
+	}
+}
+
+func scrollTop(t *testing.T, ctx context.Context) {
+	t.Helper()
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var m=document.querySelector('.main');if(m)m.scrollTop=0;window.scrollTo(0,0);})()`), nil)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func shotPage(t *testing.T, ctx context.Context, path string) {
+	t.Helper()
+	assertNoSideScroll(t, ctx)
+	var text string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.body.innerText`), &text)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(text, "\u2014") || strings.Contains(text, "\u2013") {
+		t.Fatal("em dash")
+	}
+	saveShot(t, ctx, path)
+}
+
+func writeShotZip(t *testing.T, path, model string) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zw := zip.NewWriter(f)
+	files := map[string]string{
+		"agent.yaml":      "name: Imported\ndescription: From a folder\nbrain:\n  model: " + model + "\n  instructions_file: instructions.md\ntools:\n  builtin: [read]\n",
+		"instructions.md": "Imported instructions.\n",
+		".env":            "API_KEY=super-secret-value\n",
+	}
+	for name, body := range files {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func tab(t *testing.T, browser context.Context) context.Context {

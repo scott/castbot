@@ -304,6 +304,33 @@ func TestClientAddr(t *testing.T) {
 	if _, err := ParseTrustedProxies("::/0"); err == nil {
 		t.Fatal("accepted every ipv6 address")
 	}
+	if _, err := ParseTrustedProxies("0.0.0.0/1"); err == nil {
+		t.Fatal("accepted a prefix broader than /8")
+	}
+	if _, err := ParseTrustedProxies("10.0.0.0/7"); err == nil {
+		t.Fatal("accepted /7")
+	}
+	if _, err := ParseTrustedProxies("::/1"); err == nil {
+		t.Fatal("accepted an ipv6 prefix broader than /32")
+	}
+	if _, err := ParseTrustedProxies("2001:db8::/31"); err == nil {
+		t.Fatal("accepted /31")
+	}
+	if _, err := ParseTrustedProxies("10.0.0.0/8"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseTrustedProxies("2001:db8::/32"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseTrustedProxiesAllowWide("0.0.0.0/1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseTrustedProxiesAllowWide("::/1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseTrustedProxiesAllowWide("0.0.0.0/0"); err == nil {
+		t.Fatal("override still matched every address")
+	}
 }
 
 func TestCancelledRequestStillFinishes(t *testing.T) {
@@ -443,7 +470,8 @@ func TestSweepReleasesStaleAndOrphans(t *testing.T) {
 	fake.Machines["live"] = host.Machine{ID: "live", Name: "castbot-harness", State: "running", Tags: []string{"castbot", "castbot-live", tag}}
 	fake.Machines["foreign"] = host.Machine{ID: "foreign", Name: "castbot-other", State: "running", Tags: []string{"castbot", "agent:someone"}}
 	fake.Machines["other"] = host.Machine{ID: "other", Name: "castbot-other-inst", State: "running", Tags: []string{"castbot", "castbot-inst:ffffffffffffffffffffffffffffffff"}}
-	fake.Machines["orphan"] = host.Machine{ID: "orphan", Name: "castbot-leftover", State: "running", Tags: []string{"castbot", tag, "agent:old"}}
+	fake.Machines["orphan"] = host.Machine{ID: "orphan", Name: "castbot-leftover", State: "running", Tags: []string{"castbot", tag, "agent:" + agent.ID}}
+	fake.Machines["copied"] = host.Machine{ID: "copied", Name: "castbot-from-the-original", State: "running", Tags: []string{"castbot", tag, "agent:not-in-this-database"}}
 	h.srv.SweepMachines(context.Background())
 	if _, err := h.st.LiveVM(context.Background(), agent.UserID, agent.ID); err != store.ErrNotFound {
 		t.Fatal(err)
@@ -458,7 +486,7 @@ func TestSweepReleasesStaleAndOrphans(t *testing.T) {
 	if _, ok := fake.Machines["orphan"]; ok {
 		t.Fatal("orphan remained")
 	}
-	for _, id := range []string{"demo", "probe", "live", "foreign", "other"} {
+	for _, id := range []string{"demo", "probe", "live", "foreign", "other", "copied"} {
 		if _, ok := fake.Machines[id]; !ok {
 			t.Fatalf("%s was deleted", id)
 		}
@@ -501,12 +529,19 @@ func TestStartingMachineIsNotReady(t *testing.T) {
 	if !strings.Contains(body, "dot start") || !strings.Contains(body, "Starting") {
 		t.Fatal("starting state was not shown")
 	}
+	_, machine, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	if !strings.Contains(machine, "The machine is starting.") {
+		t.Fatal("machine page did not say it is starting")
+	}
+	if strings.Contains(machine, "The machine is running.") {
+		t.Fatal("machine page said it is running while it is starting")
+	}
 }
 
 func TestRejectedAddressIsAnError(t *testing.T) {
 	ip := "203.0.113.165:9"
 	h, fake, agent := machineUser(t, ip)
-	fake.BlankEndpoint = true
+	fake.RejectAddress = true
 	if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
 		t.Fatal(code)
 	}

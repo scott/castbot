@@ -55,6 +55,9 @@ WHERE agent_bundles.user_id = excluded.user_id`,
 	if err != nil {
 		return AgentBundle{}, err
 	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE agents SET bundle_version = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, version, agentID, userID); err != nil {
+		return AgentBundle{}, err
+	}
 	return s.LatestBundle(ctx, userID, agentID)
 }
 
