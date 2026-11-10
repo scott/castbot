@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -65,6 +66,14 @@ type Server struct {
 	reloadMu sync.Mutex
 	reloads  map[string]*reloadGate
 	reloadWG sync.WaitGroup
+
+	devEcho         bool
+	explicitRuntime bool
+	log             *slog.Logger
+	recMu           sync.Mutex
+	recKind         string
+	recDelay        time.Duration
+	recEvery        time.Duration
 }
 
 // guest is one local castlet the control plane can proxy files through.
@@ -98,6 +107,28 @@ func (s *Server) SetHost(h host.AgentHost, image, publicURL string) {
 func (s *Server) SetTrustedProxies(nets []*net.IPNet) {
 	s.mu.Lock()
 	s.trusted = nets
+	s.mu.Unlock()
+}
+
+// SetDevEcho allows the local echo runtime. It is off unless the process
+// was started with CASTBOT_DEV_ECHO=1.
+func (s *Server) SetDevEcho(on bool) {
+	s.mu.Lock()
+	s.devEcho = on
+	s.mu.Unlock()
+}
+
+func (s *Server) devEchoOn() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.devEcho
+}
+
+// SetExplicitRuntime marks the attached client as CASTBOT_RUNTIME_URL.
+// That client is used when an agent has no machine. The echo flag is separate.
+func (s *Server) SetExplicitRuntime(on bool) {
+	s.mu.Lock()
+	s.explicitRuntime = on
 	s.mu.Unlock()
 }
 
@@ -602,13 +633,15 @@ func oneIP(ip net.IP) *net.IPNet {
 	return &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
 }
 
-func (s *Server) render(w http.ResponseWriter, status int, name string, p page) {
+func (s *Server) render(w http.ResponseWriter, status int, name string, p page) error {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	if err := views.ExecuteTemplate(w, name, p); err != nil {
-		log.Printf("render %s: %v", name, err)
+		log.Printf("render %s failed", name)
+		return err
 	}
+	return nil
 }
 
 func writeText(w http.ResponseWriter, status int, body string) {

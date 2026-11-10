@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/bundle"
+	"github.com/scott/castbot/internal/castcfg"
 )
 
 const guestBodyCap = 32 << 20
@@ -45,6 +46,9 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	// A local boot has no machine row yet. The guest still needs the token.
 	_ = s.store.SaveVMToken(r.Context(), r.PathValue("id"), token)
+	if userID, err := s.store.UserForAgentToken(r.Context(), r.PathValue("id"), token); err == nil {
+		s.kickProbe(userID, r.PathValue("id"))
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 
@@ -142,6 +146,11 @@ func (s *Server) writeSecrets(w http.ResponseWriter, r *http.Request, userID str
 	}{Secrets: []item{}}
 	for _, sec := range secrets {
 		out.Secrets = append(out.Secrets, item{Name: sec.Name, Value: sec.Value})
+	}
+	if agent, err := s.store.GetAgent(r.Context(), userID, r.PathValue("id")); err == nil {
+		if name, value, missing := castcfg.ProviderSecret(agent.Model); missing == "" && name != "" && value != "" {
+			out.Secrets = append(out.Secrets, item{Name: name, Value: value})
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

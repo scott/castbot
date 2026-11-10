@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -28,6 +29,9 @@ type Config struct {
 	PublicURL        string
 	Trusted          string
 	AllowWideProxies bool
+	// DevEcho turns on the local echo runtime. It is off unless
+	// CASTBOT_DEV_ECHO=1. A public https URL refuses it.
+	DevEcho bool
 }
 
 // Load reads CASTBOT_ENV_FILE (or castbot.env). The file must be mode 0600.
@@ -97,6 +101,7 @@ func LoadFile(path string) (Config, error) {
 		PublicURL:        vals["CASTBOT_PUBLIC_URL"],
 		Trusted:          vals["CASTBOT_TRUSTED_PROXIES"],
 		AllowWideProxies: vals["CASTBOT_ALLOW_WIDE_PROXIES"] == "1",
+		DevEcho:          vals["CASTBOT_DEV_ECHO"] == "1",
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = defaultAddr
@@ -130,7 +135,30 @@ func LoadFile(path string) (Config, error) {
 	if v, ok := os.LookupEnv("CASTBOT_ALLOW_WIDE_PROXIES"); ok {
 		cfg.AllowWideProxies = v == "1"
 	}
+	if v, ok := os.LookupEnv("CASTBOT_DEV_ECHO"); ok {
+		cfg.DevEcho = v == "1"
+	}
 	return cfg, nil
+}
+
+// RejectDevEcho reports when the echo flag is set on a public https URL.
+// Localhost and a URL that is not https are allowed, so a laptop can still
+// use the flag. The check does not print the URL.
+func (c Config) RejectDevEcho() error {
+	if !c.DevEcho {
+		return nil
+	}
+	u, err := url.Parse(strings.TrimSpace(c.PublicURL))
+	if err != nil || u.Host == "" || !strings.EqualFold(u.Scheme, "https") {
+		return nil
+	}
+	host := strings.Trim(strings.ToLower(u.Hostname()), "[]")
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return nil
+	default:
+		return errors.New("CASTBOT_DEV_ECHO is refused when CASTBOT_PUBLIC_URL is a public https URL")
+	}
 }
 
 func allZero(b []byte) bool {

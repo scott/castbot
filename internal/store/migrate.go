@@ -241,6 +241,7 @@ CREATE TABLE IF NOT EXISTS agent_vms (
   agent_token_hash TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   last_wake_at TEXT,
+  created_running_at TEXT,
   deleted_at TEXT
 );
 
@@ -271,7 +272,8 @@ CREATE TABLE IF NOT EXISTS cli_tokens (
   created_at TEXT NOT NULL,
   expires_at TEXT,
   last_used_at TEXT,
-  revoked_at TEXT
+  revoked_at TEXT,
+  viewed_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_cli_tokens_user ON cli_tokens(user_id, agent_id);
@@ -379,6 +381,27 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_cli_slug ON agents(user_id, cli_slug) WHERE cli_slug != '' AND deleted_at IS NULL`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("agent_vms", "created_running_at", `ALTER TABLE agent_vms ADD COLUMN created_running_at TEXT`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("cli_tokens", "viewed_at", `ALTER TABLE cli_tokens ADD COLUMN viewed_at TEXT`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS vm_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_vm_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  at TEXT NOT NULL,
+  duration_ms INTEGER NOT NULL
+)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_vm_events_user ON vm_events(user_id, agent_id, id)`); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_journal ON messages(thread_id, journal_seq) WHERE journal_seq IS NOT NULL`); err != nil {
 		return err
 	}
@@ -392,7 +415,7 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.ensureInstance(); err != nil {
 		return err
 	}
-	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11} {
+	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} {
 		if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING`, version); err != nil {
 			return err
 		}

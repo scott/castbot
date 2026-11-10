@@ -50,6 +50,7 @@ func newHarnessWith(t *testing.T, client runtime.Client) *harness {
 		key[i] = 0x11
 	}
 	srv := New(st, key, client)
+	srv.SetDevEcho(true)
 	t.Cleanup(srv.Close)
 	return &harness{t: t, srv: srv, st: st, jar: map[string]*http.Cookie{}}
 }

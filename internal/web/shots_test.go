@@ -125,6 +125,32 @@ func TestShots(t *testing.T) {
 			})
 		}
 	}
+	dir07 := filepath.Join("..", "..", "docs", "evidence", "S07")
+	if err := os.MkdirAll(dir07, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, theme := range []string{"dark", "light"} {
+		for _, vp := range []struct {
+			w, h int
+			name string
+		}{{1280, 800, "1280"}, {390, 844, "390"}} {
+			t.Run("s07-start-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootS07Start(t, browserCtx, dir07, vp.w, vp.h, theme, vp.name)
+			})
+			t.Run("s07-paused-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootS07Paused(t, browserCtx, dir07, vp.w, vp.h, theme, vp.name)
+			})
+			t.Run("s07-waking-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootS07Waking(t, browserCtx, dir07, vp.w, vp.h, theme, vp.name)
+			})
+			t.Run("s07-reply-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootS07Reply(t, browserCtx, dir07, vp.w, vp.h, theme, vp.name)
+			})
+			t.Run("s07-nokey-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootS07NoKey(t, browserCtx, dir07, vp.w, vp.h, theme, vp.name)
+			})
+		}
+	}
 }
 
 func shootStream(t *testing.T, browser context.Context, dir string, width, height int, name string) {

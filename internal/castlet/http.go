@@ -33,6 +33,8 @@ func (s *Supervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/castlet/health" && r.Method == http.MethodGet:
 		s.health(w, r)
+	case r.URL.Path == "/castlet/clock" && r.Method == http.MethodGet:
+		s.clock(w, r)
 	case r.URL.Path == "/castlet/reload" && r.Method == http.MethodPost:
 		s.handleReload(w, r)
 	case r.URL.Path == "/castlet/logs" && r.Method == http.MethodGet:
@@ -115,6 +117,20 @@ func (s *Supervisor) health(w http.ResponseWriter, r *http.Request) {
 		"version": version,
 		"sha256":  sum,
 		"error":   bootErr,
+	})
+}
+
+// clock reports the guest wall time and whether a CLI token list is loaded.
+// It does not include tokens, hashes, or message text.
+func (s *Supervisor) clock(w http.ResponseWriter, _ *http.Request) {
+	s.cliMu.Lock()
+	cached := s.cliLoaded && len(s.cliTokens) > 0
+	s.cliMu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"unix":       s.wallClock().Unix(),
+		"cli_cached": cached,
 	})
 }
 

@@ -14,19 +14,20 @@ const DefaultMaxAgents = 4
 // VM is one machine row. Token is the per-agent secret when one has been
 // exchanged. Callers that render pages use LiveVM, which leaves Token empty.
 type VM struct {
-	ID        string
-	UserID    string
-	AgentID   string
-	MicroVMID string
-	Name      string
-	Endpoint  string
-	Image     string
-	State     string
-	Failure   string
-	Token     string
-	LastWake  string
-	CreatedAt string
-	Workspace string
+	ID             string
+	UserID         string
+	AgentID        string
+	MicroVMID      string
+	Name           string
+	Endpoint       string
+	Image          string
+	State          string
+	Failure        string
+	Token          string
+	LastWake       string
+	CreatedAt      string
+	CreatedRunning string
+	Workspace      string
 }
 
 // BeginVM reserves a machine slot for one of the caller's agents.
@@ -120,14 +121,17 @@ func (s *Store) ApplyVMState(ctx context.Context, userID, agentID, state, endpoi
 	}
 	defer tx.Rollback()
 	wake := ""
+	runningAt := ""
 	if state == "running" {
 		wake = s.stamp(s.Now())
+		runningAt = wake
 	}
 	res, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = ?, failure = ?,
 endpoint = CASE WHEN ? != '' THEN ? ELSE endpoint END,
-last_wake_at = CASE WHEN ? != '' THEN ? ELSE last_wake_at END
+last_wake_at = CASE WHEN ? != '' THEN ? ELSE last_wake_at END,
+created_running_at = CASE WHEN ? = 'running' AND COALESCE(created_running_at, '') = '' THEN ? ELSE created_running_at END
 WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`,
-		state, failure, endpoint, endpoint, wake, wake, userID, agentID)
+		state, failure, endpoint, endpoint, wake, wake, state, runningAt, userID, agentID)
 	if err != nil {
 		return err
 	}
@@ -271,9 +275,9 @@ func (s *Store) LiveVM(ctx context.Context, userID, agentID string) (VM, error) 
 	}
 	var vm VM
 	var wake sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure, COALESCE(last_wake_at, ''), created_at
+	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure, COALESCE(last_wake_at, ''), created_at, COALESCE(created_running_at, '')
 FROM agent_vms WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, userID, agentID).
-		Scan(&vm.ID, &vm.Workspace, &vm.UserID, &vm.AgentID, &vm.MicroVMID, &vm.Name, &vm.Endpoint, &vm.Image, &vm.State, &vm.Failure, &wake, &vm.CreatedAt)
+		Scan(&vm.ID, &vm.Workspace, &vm.UserID, &vm.AgentID, &vm.MicroVMID, &vm.Name, &vm.Endpoint, &vm.Image, &vm.State, &vm.Failure, &wake, &vm.CreatedAt, &vm.CreatedRunning)
 	if err != nil {
 		return VM{}, scanErr(err)
 	}

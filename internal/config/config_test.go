@@ -82,6 +82,30 @@ func TestIgnoresAmbientDigitalOceanToken(t *testing.T) {
 	}
 }
 
+func TestRejectDevEchoOnPublicHTTPS(t *testing.T) {
+	cfg := Config{DevEcho: true, PublicURL: "https://castbot.example"}
+	if err := cfg.RejectDevEcho(); err == nil {
+		t.Fatal("expected refusal")
+	}
+	cfg.PublicURL = "https://localhost:8080"
+	if err := cfg.RejectDevEcho(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.PublicURL = "https://127.0.0.1"
+	if err := cfg.RejectDevEcho(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.PublicURL = "http://castbot.example"
+	if err := cfg.RejectDevEcho(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.DevEcho = false
+	cfg.PublicURL = "https://castbot.example"
+	if err := cfg.RejectDevEcho(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRejectsZeroKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "castbot.env")

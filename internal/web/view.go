@@ -44,12 +44,12 @@ type threadView struct {
 
 type cliTokView struct {
 	ID, Prefix, Created, LastUsed, Status string
-	Revoked                               bool
+	Revoked, Unseen                       bool
 }
 
 type liveView struct {
-	RunID, Color, Letter, Text, Error, CSRF string
-	Failed                                  bool
+	RunID, Color, Letter, Text, Error, CSRF, Status string
+	Failed                                          bool
 }
 
 type sessView struct {
@@ -60,56 +60,57 @@ type sessView struct {
 }
 
 type page struct {
-	Title      string
-	Theme      string
-	CSRF       string
-	BodyClass  string
-	Page       string
-	Nav        string
-	ShowNav    bool
-	Pane       bool
-	Empty      bool
-	User       store.User
-	HasUser    bool
-	Initials   string
-	Sections   []sectionView
-	Approvals  int
-	Usage      string
-	Agent      agentView
-	HasAgent   bool
-	Messages   []msgView
-	Lives      []liveView
-	Tab        string
-	Notice     string
-	EditName   bool
-	Sessions   sessView
-	Email      string
-	Remember   bool
-	Code       string
-	Cells      []cellView
-	OTPBad     bool
-	Banner     bool
-	BannerLead string
-	BannerRest string
-	BannerIcon string
-	Hint       string
-	Locked     bool
-	LockRFC    string
-	LockLabel  string
-	StubTitle  string
-	StubBody   string
-	FormError  string
-	AgentForm  agentForm
-	Machine    machineView
-	CLIBlob    string
-	CLINote    string
-	CLIName    string
-	CLITokens  []cliTokView
-	Threads    []threadView
-	ThreadID   string
-	Text       string
-	RoleLine   string
-	PasswordOn string
+	Title        string
+	Theme        string
+	CSRF         string
+	BodyClass    string
+	Page         string
+	Nav          string
+	ShowNav      bool
+	Pane         bool
+	Empty        bool
+	User         store.User
+	HasUser      bool
+	Initials     string
+	Sections     []sectionView
+	Approvals    int
+	Usage        string
+	Agent        agentView
+	HasAgent     bool
+	Messages     []msgView
+	Lives        []liveView
+	Tab          string
+	Notice       string
+	EditName     bool
+	Sessions     sessView
+	Email        string
+	Remember     bool
+	Code         string
+	Cells        []cellView
+	OTPBad       bool
+	Banner       bool
+	BannerLead   string
+	BannerRest   string
+	BannerIcon   string
+	Hint         string
+	Locked       bool
+	LockRFC      string
+	LockLabel    string
+	StubTitle    string
+	StubBody     string
+	FormError    string
+	AgentForm    agentForm
+	Machine      machineView
+	StartMachine bool
+	CLIBlob      string
+	CLINote      string
+	CLIName      string
+	CLITokens    []cliTokView
+	Threads      []threadView
+	ThreadID     string
+	Text         string
+	RoleLine     string
+	PasswordOn   string
 }
 
 func finish(p page) page {

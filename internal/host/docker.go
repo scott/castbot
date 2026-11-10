@@ -16,9 +16,28 @@ import (
 
 const Image = "castbot-runtime:s03"
 
-// Build builds the local image from the repository root. It does not push.
+// RuntimeImage is the default target: castlet plus the real Cast runtime.
+const RuntimeImage = "castbot-runtime:s07"
+
+// Build builds the stand-in image used by local tests. It does not push.
+// The default image target is the real runtime. This build asks for the
+// stand-in target so tests do not download Cast.
 func Build(ctx context.Context, root string) error {
-	cmd := exec.CommandContext(ctx, "docker", "build", "-t", Image, root)
+	return dockerBuild(ctx, root, "standin", Image)
+}
+
+// BuildRuntime builds the default image, which runs Cast and has no stand-in.
+func BuildRuntime(ctx context.Context, root string) error {
+	return dockerBuild(ctx, root, "", RuntimeImage)
+}
+
+func dockerBuild(ctx context.Context, root, target, tag string) error {
+	args := []string{"build", "-t", tag}
+	if target != "" {
+		args = append(args, "--target", target)
+	}
+	args = append(args, root)
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	var errBuf bytes.Buffer
 	cmd.Stdout = &errBuf
 	cmd.Stderr = &errBuf
@@ -45,6 +64,11 @@ type RunOpt struct {
 	Bootstrap  string
 	CAFile     string
 	WordDelay  string
+	// Image overrides the stand-in tag. The smoke test passes RuntimeImage.
+	Image string
+	// Env is extra KEY=value pairs. Callers must not put a token here
+	// that the test will print. The bootstrap token is passed separately.
+	Env []string
 }
 
 // Run starts a container on its own bridge network. castlet is published
@@ -72,7 +96,14 @@ func Run(ctx context.Context, opt RunOpt) (*Guest, error) {
 	if opt.WordDelay != "" {
 		args = append(args, "-e", "CAST_STANDIN_WORD_DELAY="+opt.WordDelay)
 	}
-	args = append(args, Image)
+	for _, env := range opt.Env {
+		args = append(args, "-e", env)
+	}
+	image := opt.Image
+	if image == "" {
+		image = Image
+	}
+	args = append(args, image)
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	var errBuf bytes.Buffer
 	cmd.Stdout = &errBuf

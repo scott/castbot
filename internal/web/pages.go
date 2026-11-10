@@ -64,10 +64,10 @@ func (s *Server) renderChat(w http.ResponseWriter, r *http.Request, user store.U
 	s.renderAgent(w, r, user, id, pane, tab, status, formError)
 }
 
-func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.User, id string, pane bool, tab string, status int, formError string) {
+func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.User, id string, pane bool, tab string, status int, formError string) error {
 	agent, err := s.store.GetAgent(r.Context(), user.ID, id)
 	if s.missing(w, err) {
-		return
+		return nil
 	}
 	machine := s.syncMachine(r.Context(), user.ID, &agent)
 	if machine.LastWake != "" {
@@ -78,7 +78,7 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	p, err := s.shell(r, user)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
-		return
+		return nil
 	}
 	p.Agent = s.paintAgent(r.Context(), user.ID, agent, true, userLocation(user.Timezone))
 	p.HasAgent = true
@@ -89,12 +89,12 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	threads, err := s.store.ListThreadsByAgent(r.Context(), user.ID, agent.ID)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
-		return
+		return nil
 	}
 	current, err := s.pickThread(r, user.ID, agent.ID)
 	if err != nil && len(threads) > 0 {
 		http.Error(w, "Not found\n", http.StatusNotFound)
-		return
+		return nil
 	}
 	var cliThreads bool
 	for _, t := range threads {
@@ -123,7 +123,7 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		msgs, err := s.store.ListMessages(r.Context(), user.ID, current.ID)
 		if err != nil {
 			http.Error(w, "Error", http.StatusInternalServerError)
-			return
+			return nil
 		}
 		p.Messages = presentMessages(msgs, p.Agent, s.store.Now(), userLocation(user.Timezone))
 		p.Lives = s.loadLives(r, user, current.ID, p.Agent)
@@ -132,23 +132,15 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		tokens, err := s.store.ListCLITokens(r.Context(), user.ID, agent.ID)
 		if err != nil {
 			http.Error(w, "Error", http.StatusInternalServerError)
-			return
+			return nil
 		}
 		loc := userLocation(user.Timezone)
 		for _, tok := range tokens {
-			view := cliTokView{ID: tok.ID, Prefix: tok.Prefix, Created: clockStamp(tok.CreatedAt, loc), LastUsed: "Not yet", Status: "Active"}
-			if tok.LastUsedAt != "" {
-				view.LastUsed = clockStamp(tok.LastUsedAt, loc)
-			}
-			if tok.RevokedAt != "" {
-				view.Revoked = true
-				view.Status = "Revoked"
-			}
-			p.CLITokens = append(p.CLITokens, view)
+			p.CLITokens = append(p.CLITokens, cliTokenView(tok, loc))
 		}
 		if slug, err := s.store.CLISlug(r.Context(), user.ID, agent.ID); err != nil {
 			http.Error(w, "Error", http.StatusInternalServerError)
-			return
+			return nil
 		} else {
 			p.CLIName = slug
 		}
@@ -170,10 +162,11 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		p.StubTitle, p.StubBody = tabCopy(tab)
 	}
 	p.Title = agent.Name
+	p.StartMachine = machine.CanStart && !machine.CanRetry
 	if status == 0 {
 		status = http.StatusOK
 	}
-	s.render(w, status, "app", finish(p))
+	return s.render(w, status, "app", finish(p))
 }
 
 func tabCopy(tab string) (string, string) {
@@ -221,10 +214,14 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("HX-Request") == "true" {
 		av := presentAgent(agent, true, userLocation(user.Timezone))
 		loc := userLocation(user.Timezone)
+		stamp := ""
+		if vm, err := s.store.LiveVM(r.Context(), user.ID, agent.ID); err == nil && vm.State == "paused" {
+			stamp = "Waking"
+		}
 		p := page{
 			CSRF:     from(r).CSRF,
 			Messages: presentMessages([]store.Message{msg}, av, s.store.Now(), loc),
-			Lives:    []liveView{{RunID: run.ID, Color: av.Color, Letter: av.Letter, CSRF: from(r).CSRF}},
+			Lives:    []liveView{{RunID: run.ID, Color: av.Color, Letter: av.Letter, CSRF: from(r).CSRF, Status: stamp}},
 		}
 		for i := range p.Messages {
 			p.Messages[i].ShowDay = false
