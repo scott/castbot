@@ -33,7 +33,7 @@ func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	email := strings.TrimSpace(r.FormValue("email"))
 	remember := r.FormValue("remember") == "1"
-	att, err := s.store.CheckPassword(r.Context(), email, r.FormValue("password"), clientIP(r))
+	att, err := s.store.CheckPassword(r.Context(), email, r.FormValue("password"), s.clientIP(r))
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "auth", authPage(from(r), page{Email: email, Remember: remember, Banner: true, BannerLead: "Something went wrong.", BannerRest: "Try again in a moment.", BannerIcon: "warn"}))
 		return
@@ -90,7 +90,7 @@ func (s *Server) codePost(w http.ResponseWriter, r *http.Request) {
 	}
 	code := digits(r.FormValue("code"))
 	recovery := strings.TrimSpace(r.FormValue("recovery"))
-	att, err := s.store.CheckCode(r.Context(), ch.ID, code, recovery, clientIP(r))
+	att, err := s.store.CheckCode(r.Context(), ch.ID, code, recovery, s.clientIP(r))
 	if err != nil {
 		clearCookie(w, cookiePending, "/login")
 		s.renderLogin(w, r, page{Email: ch.Email, Remember: ch.Remember, Banner: true, BannerIcon: "warn", BannerLead: "That sign-in step expired.", BannerRest: "Enter your password again."})

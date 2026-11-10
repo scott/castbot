@@ -18,11 +18,15 @@ const (
 
 // Config is the process configuration. The session key is read only from the env file.
 type Config struct {
-	EnvFile    string
-	Addr       string
-	DBPath     string
-	RuntimeURL string
-	SessionKey []byte
+	EnvFile      string
+	Addr         string
+	DBPath       string
+	RuntimeURL   string
+	SessionKey   []byte
+	MachineToken string
+	Image        string
+	PublicURL    string
+	Trusted      string
 }
 
 // Load reads CASTBOT_ENV_FILE (or castbot.env). The file must be mode 0600.
@@ -82,11 +86,15 @@ func LoadFile(path string) (Config, error) {
 		return Config{}, errors.New("CASTBOT_SESSION_KEY must not be all zeros")
 	}
 	cfg := Config{
-		EnvFile:    path,
-		Addr:       vals["CASTBOT_ADDR"],
-		DBPath:     vals["CASTBOT_DB"],
-		RuntimeURL: vals["CASTBOT_RUNTIME_URL"],
-		SessionKey: key,
+		EnvFile:      path,
+		Addr:         vals["CASTBOT_ADDR"],
+		DBPath:       vals["CASTBOT_DB"],
+		RuntimeURL:   vals["CASTBOT_RUNTIME_URL"],
+		SessionKey:   key,
+		MachineToken: vals["CASTBOT_DO_TOKEN"],
+		Image:        vals["CASTBOT_IMAGE"],
+		PublicURL:    vals["CASTBOT_PUBLIC_URL"],
+		Trusted:      vals["CASTBOT_TRUSTED_PROXIES"],
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = defaultAddr
@@ -102,6 +110,20 @@ func LoadFile(path string) (Config, error) {
 	}
 	if v := os.Getenv("CASTBOT_RUNTIME_URL"); v != "" {
 		cfg.RuntimeURL = v
+	}
+	// Only CASTBOT_DO_TOKEN starts the machine host. A general token in the
+	// environment is for other tools and must not be adopted here.
+	if v := os.Getenv("CASTBOT_DO_TOKEN"); v != "" {
+		cfg.MachineToken = v
+	}
+	if v := os.Getenv("CASTBOT_IMAGE"); v != "" {
+		cfg.Image = v
+	}
+	if v := os.Getenv("CASTBOT_PUBLIC_URL"); v != "" {
+		cfg.PublicURL = v
+	}
+	if v := os.Getenv("CASTBOT_TRUSTED_PROXIES"); v != "" {
+		cfg.Trusted = v
 	}
 	return cfg, nil
 }

@@ -29,6 +29,9 @@ func main() {
 	if cfg.ControlURL == "" || cfg.AgentID == "" || cfg.Bootstrap == "" {
 		log.Fatal("castlet needs CASTBOT_URL, CASTBOT_AGENT_ID, and CASTBOT_BOOTSTRAP_TOKEN")
 	}
+	if err := castlet.RequireHTTPS(cfg.ControlURL); err != nil {
+		log.Fatal("castlet needs an https control plane URL")
+	}
 	sup, err := castlet.New(cfg)
 	if err != nil {
 		log.Fatal("castlet did not start")

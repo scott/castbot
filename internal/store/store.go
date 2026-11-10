@@ -27,6 +27,8 @@ var (
 	ErrConflict  = errors.New("conflict")
 	ErrProtected = errors.New("protected")
 	ErrInvalid   = errors.New("invalid")
+	// ErrQuota is the per-user machine cap. It is not a billing product.
+	ErrQuota = errors.New("agent limit reached")
 )
 
 // Store scopes every owned-row query by the caller's user id.

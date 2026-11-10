@@ -16,6 +16,7 @@ import (
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
@@ -72,6 +73,18 @@ func TestShots(t *testing.T) {
 	}{{1280, 800, "1280"}, {390, 844, "390"}} {
 		t.Run("container-"+vp.name, func(t *testing.T) {
 			shootContainer(t, browserCtx, dir03, vp.w, vp.h, vp.name)
+		})
+	}
+	dir04 := filepath.Join("..", "..", "docs", "evidence", "S04")
+	if err := os.MkdirAll(dir04, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, vp := range []struct {
+		w, h int
+		name string
+	}{{1280, 800, "1280"}, {390, 844, "390"}} {
+		t.Run("machine-"+vp.name, func(t *testing.T) {
+			shootMachine(t, browserCtx, dir04, vp.w, vp.h, vp.name)
 		})
 	}
 }
@@ -412,6 +425,50 @@ func sessionToken(t *testing.T, h *harness, userID string) string {
 		t.Fatal(err)
 	}
 	return seal("session", sess.ID, h.srv.key)
+}
+
+func shootMachine(t *testing.T, browser context.Context, dir string, width, height int, name string) {
+	t.Helper()
+	h := newHarness(t)
+	fake := host.NewFake()
+	h.srv.SetHost(fake, "example.invalid/castbot-runtime:s04", "https://castbot.example")
+	user, _ := h.account("machine@example.com", "Machine User", "correct-horse-1")
+	agent := seedAgent(t, h.st, user.ID, "Wren")
+	vm, err := h.st.BeginVM(context.Background(), user.ID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.FinishVM(context.Background(), user.ID, agent.ID, "vm-shot", "https://vm.example", "paused", ""); err != nil {
+		t.Fatal(err)
+	}
+	fake.Machines["vm-shot"] = host.Machine{ID: "vm-shot", Name: vm.Name, State: "paused"}
+	fake.SetForce("paused")
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	token := sessionToken(t, h, user.ID)
+	ctx := tab(t, browser)
+	page := ts.URL + "/agents/" + agent.ID + "/machine"
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		network.Enable(),
+		network.SetCookie("castbot_session", token).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
+		chromedp.EmulateViewport(int64(width), int64(height)),
+		chromedp.Navigate(page),
+		chromedp.WaitVisible(`#confirm-name`, chromedp.ByQuery),
+		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Paused")>=0&&t.indexOf("Wake")>=0&&t.indexOf("Type Wren")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saveShot(t, ctx, filepath.Join(dir, "paused-"+name+".png"))
+	assertNoSideScroll(t, ctx)
+	fake.SetForce("creating")
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.Reload(),
+		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Waking")>=0&&t.indexOf("The machine is waking.")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saveShot(t, ctx, filepath.Join(dir, "waking-"+name+".png"))
+	assertNoSideScroll(t, ctx)
 }
 
 func seedAgent(t *testing.T, st *store.Store, userID, name string) store.Agent {

@@ -53,6 +53,35 @@ func TestLoadKey(t *testing.T) {
 	}
 }
 
+func TestIgnoresAmbientDigitalOceanToken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "castbot.env")
+	body := "CASTBOT_SESSION_KEY=" + fakeSessionKey() + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DIGITALOCEAN_ACCESS_TOKEN", "ambient-access-token")
+	t.Setenv("DIGITALOCEAN_TOKEN", "ambient-token")
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MachineToken != "" || cfg.Image != "" || cfg.PublicURL != "" {
+		t.Fatalf("ambient token was adopted: %#v", cfg.MachineToken)
+	}
+	t.Setenv("CASTBOT_DO_TOKEN", "castbot-file-token")
+	cfg, err = LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MachineToken != "castbot-file-token" {
+		t.Fatalf("env token %q", cfg.MachineToken)
+	}
+	if strings.Contains(cfg.MachineToken, "ambient") {
+		t.Fatal("ambient token leaked into the machine token")
+	}
+}
+
 func TestRejectsZeroKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "castbot.env")

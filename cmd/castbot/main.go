@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/scott/castbot/internal/auth"
 	"github.com/scott/castbot/internal/config"
 	"github.com/scott/castbot/internal/demo"
+	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
@@ -60,6 +62,10 @@ func serve(args []string) {
 	defer stopRuntime()
 	app := web.New(st, cfg.SessionKey, client)
 	defer app.Close()
+	attachMachine(app, cfg)
+	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	app.SweepMachines(sweepCtx)
+	sweepCancel()
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           app.Handler(),
@@ -84,6 +90,33 @@ func serve(args []string) {
 			log.Print(err)
 		}
 	}
+}
+
+func attachMachine(app *web.Server, cfg config.Config) {
+	if cfg.Trusted != "" {
+		nets, err := web.ParseTrustedProxies(cfg.Trusted)
+		if err != nil {
+			log.Fatal("trusted proxies")
+		}
+		app.SetTrustedProxies(nets)
+		log.Printf("trusted proxies: %d", len(nets))
+	}
+	if cfg.MachineToken == "" && cfg.Image == "" && cfg.PublicURL == "" {
+		return
+	}
+	if cfg.MachineToken == "" || cfg.Image == "" || cfg.PublicURL == "" {
+		log.Fatal("machine host needs a token, an image, and a public https URL")
+	}
+	u, err := url.Parse(cfg.PublicURL)
+	if err != nil || u.Host == "" || u.Scheme != "https" {
+		log.Fatal("machine host needs an https control plane URL")
+	}
+	m, err := host.New(host.Options{Token: cfg.MachineToken})
+	if err != nil {
+		log.Fatal("machine host did not start")
+	}
+	app.SetHost(m, cfg.Image, cfg.PublicURL)
+	log.Printf("machine host enabled")
 }
 
 func openRuntime(cfg config.Config) (runtime.Client, func()) {

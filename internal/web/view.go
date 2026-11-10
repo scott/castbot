@@ -14,6 +14,11 @@ type cellView struct {
 	Class string
 }
 
+type machineView struct {
+	Lead, LastWake                                   string
+	CanStart, CanPause, CanWake, CanRetry, CanDelete bool
+}
+
 type agentView struct {
 	ID, Name, Title, Letter, Color, Dot, Sub, SubClass string
 	Model, Status, ChipClass, ChipLabel, ChipMeta      string
@@ -84,6 +89,7 @@ type page struct {
 	StubTitle  string
 	StubBody   string
 	FormError  string
+	Machine    machineView
 	Text       string
 	RoleLine   string
 	PasswordOn string
@@ -199,7 +205,11 @@ func statusBits(a store.Agent) (dot, class, label, meta string) {
 	case "ready":
 		return "run", "run", "Running", meta
 	case "provisioning":
-		return "start", "start", "Resuming", "mkc1"
+		label := a.Activity
+		if label == "" {
+			label = "Waking"
+		}
+		return "start", "start", label, "mkc1"
 	case "paused":
 		return "pause", "pause", "Paused", meta
 	case "failed":

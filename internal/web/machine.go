@@ -43,6 +43,8 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusUnauthorized, "unauthorized\n")
 		return
 	}
+	// A local boot has no machine row yet. The guest still needs the token.
+	_ = s.store.SaveVMToken(r.Context(), r.PathValue("id"), token)
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 

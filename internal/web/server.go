@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
@@ -45,12 +46,19 @@ type requestState struct {
 type Server struct {
 	store  *store.Store
 	key    []byte
+	client runtime.Client
 	runs   *run.Runner
 	cancel context.CancelFunc
 	ka     time.Duration
 
-	mu     sync.Mutex
-	guests map[string]guest
+	mu        sync.Mutex
+	guests    map[string]guest
+	machine   host.AgentHost
+	image     string
+	publicURL string
+	trusted   []*net.IPNet
+	base      context.Context
+	prov      sync.WaitGroup
 }
 
 // guest is one local castlet the control plane can proxy files through.
@@ -63,7 +71,34 @@ type guest struct {
 // client talks to the agent runtime. S03 and S04 swap that client.
 func New(st *store.Store, key []byte, client runtime.Client) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{store: st, key: key, runs: run.New(ctx, st, client), cancel: cancel}
+	s := &Server{store: st, key: key, client: client, runs: run.New(ctx, st, client), cancel: cancel, base: ctx}
+	s.runs.SetOpen(s.openRun)
+	return s
+}
+
+// SetHost attaches a machine host. image is the one shared runtime image.
+// publicURL is the https control plane address written into the machine.
+// Call this before serving.
+func (s *Server) SetHost(h host.AgentHost, image, publicURL string) {
+	s.mu.Lock()
+	s.machine = h
+	s.image = strings.TrimSpace(image)
+	s.publicURL = strings.TrimRight(strings.TrimSpace(publicURL), "/")
+	s.mu.Unlock()
+}
+
+// SetTrustedProxies uses X-Forwarded-For only when the connection comes from one of these networks.
+// An empty list keeps the connection address, which is the default.
+func (s *Server) SetTrustedProxies(nets []*net.IPNet) {
+	s.mu.Lock()
+	s.trusted = nets
+	s.mu.Unlock()
+}
+
+func (s *Server) hostConfig() (host.AgentHost, string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.machine, s.image, s.publicURL
 }
 
 // Close cancels run goroutines and waits until they record an outcome.
@@ -74,6 +109,15 @@ func (s *Server) Close() {
 	}
 	if s.runs != nil {
 		s.runs.Wait(3 * time.Second)
+	}
+	done := make(chan struct{})
+	go func() {
+		s.prov.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
 	}
 }
 
@@ -93,6 +137,9 @@ func (s *Server) SetRunLimit(d time.Duration) {
 
 // SetClient points later runs at a different runtime.
 func (s *Server) SetClient(c runtime.Client) {
+	s.mu.Lock()
+	s.client = c
+	s.mu.Unlock()
 	if s.runs != nil {
 		s.runs.SetClient(c)
 	}
@@ -163,6 +210,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /agents/{id}/routines", s.agentTab)
 	mux.HandleFunc("GET /agents/{id}/files", s.agentTab)
 	mux.HandleFunc("POST /agents/{id}", s.updateAgent)
+	mux.HandleFunc("POST /agents/{id}/machine", s.provisionMachine)
+	mux.HandleFunc("POST /agents/{id}/machine/pause", s.pauseMachine)
+	mux.HandleFunc("POST /agents/{id}/machine/wake", s.wakeMachine)
+	mux.HandleFunc("POST /agents/{id}/machine/delete", s.deleteMachine)
 	mux.HandleFunc("POST /agents/{id}/delete", s.deleteAgent)
 	mux.HandleFunc("POST /agents/{id}/messages", s.postMessage)
 	mux.HandleFunc("GET /agents/{id}/bundle", s.ownerBundle)
@@ -385,15 +436,101 @@ func randomToken() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+func (s *Server) clientIP(r *http.Request) string {
+	s.mu.Lock()
+	trusted := s.trusted
+	s.mu.Unlock()
+	return clientAddr(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), trusted)
+}
+
+func remoteHost(remote string) string {
+	host, _, err := net.SplitHostPort(remote)
 	if err != nil || host == "" {
-		if r.RemoteAddr == "" {
+		if remote == "" {
 			return "unknown"
 		}
-		return r.RemoteAddr
+		return remote
 	}
 	return host
+}
+
+// clientAddr returns the connection address unless that hop is trusted.
+// A trusted hop walks X-Forwarded-For from the right and skips other trusted hops.
+// An entry that is not an IP, including a blank, "unknown", or host:port, stops
+// the walk. The address is then the last trusted hop, not a value further left
+// that the client chose.
+func clientAddr(remote, forwarded string, trusted []*net.IPNet) string {
+	host := remoteHost(remote)
+	if len(trusted) == 0 || !trustedIP(host, trusted) {
+		return host
+	}
+	last := host
+	parts := strings.Split(forwarded, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		item := strings.TrimSpace(parts[i])
+		if net.ParseIP(item) == nil {
+			return last
+		}
+		if trustedIP(item, trusted) {
+			last = item
+			continue
+		}
+		return item
+	}
+	return last
+}
+
+func trustedIP(raw string, nets []*net.IPNet) bool {
+	ip := net.ParseIP(raw)
+	if ip == nil {
+		return false
+	}
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseTrustedProxies parses a comma-separated list of IPs and CIDRs.
+func ParseTrustedProxies(raw string) ([]*net.IPNet, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var out []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, "/") {
+			_, n, err := net.ParseCIDR(part)
+			if err != nil {
+				return nil, err
+			}
+			ones, _ := n.Mask.Size()
+			if ones == 0 {
+				return nil, errors.New("trusted proxy must not match every address")
+			}
+			out = append(out, n)
+			continue
+		}
+		ip := net.ParseIP(part)
+		if ip == nil {
+			return nil, errors.New("trusted proxy is not an address")
+		}
+		out = append(out, oneIP(ip))
+	}
+	return out, nil
+}
+
+func oneIP(ip net.IP) *net.IPNet {
+	if v4 := ip.To4(); v4 != nil {
+		return &net.IPNet{IP: v4, Mask: net.CIDRMask(32, 32)}
+	}
+	return &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
 }
 
 func (s *Server) render(w http.ResponseWriter, status int, name string, p page) {
@@ -427,6 +564,8 @@ func mapStoreErr(w http.ResponseWriter, r *http.Request, err error) bool {
 		writeText(w, http.StatusBadRequest, "Bad request\n")
 	case errors.Is(err, store.ErrConflict):
 		writeText(w, http.StatusConflict, "Conflict\n")
+	case errors.Is(err, store.ErrQuota):
+		writeText(w, http.StatusConflict, "Agent limit reached\n")
 	default:
 		log.Printf("store error on %s", r.URL.Path)
 		writeText(w, http.StatusInternalServerError, "Error\n")
