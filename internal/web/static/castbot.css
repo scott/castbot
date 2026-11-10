@@ -817,3 +817,10 @@ textarea.ph::placeholder { color: var(--tx3); }
   .comp .hint { display: none; }
   .comp .btn { order: 3; flex: none; }
 }
+.machine { display: grid; gap: 14px; max-width: 560px; }
+.machine h2 { margin: 0; font: 650 22px/1.2 var(--hd); }
+.machine-del { display: grid; gap: 8px; }
+.machine .chip { justify-self: start; }
+@media (max-width: 760px) {
+  .machine { padding-bottom: 88px; }
+}

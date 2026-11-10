@@ -293,7 +293,7 @@ func (s *Store) CreateAgent(ctx context.Context, userID string, in AgentInput) (
 	}
 	idle := in.IdleTimeout
 	if idle == 0 {
-		idle = 900
+		idle = 300
 	}
 	var pos int
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(position), 0) + 1 FROM agents WHERE user_id = ? AND section_id = ?`, userID, sec.ID).Scan(&pos); err != nil {

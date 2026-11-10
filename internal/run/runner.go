@@ -72,11 +72,16 @@ type Job struct {
 	History   []runtime.Turn
 }
 
+// Opener opens one runtime stream for a job.
+// When it is set, the runner uses it instead of the single client.
+type Opener func(ctx context.Context, job Job, req runtime.Send) (runtime.Stream, error)
+
 // Runner starts run goroutines.
 type Runner struct {
 	ctx    context.Context
 	store  *store.Store
 	client runtime.Client
+	open   Opener
 	Hub    *Hub
 	budget time.Duration
 	limit  time.Duration
@@ -131,10 +136,17 @@ func (r *Runner) SetClient(c runtime.Client) {
 	r.mu.Unlock()
 }
 
-func (r *Runner) current() runtime.Client {
+// SetOpen routes each job. A nil opener keeps the single client.
+func (r *Runner) SetOpen(fn Opener) {
+	r.mu.Lock()
+	r.open = fn
+	r.mu.Unlock()
+}
+
+func (r *Runner) current() (runtime.Client, Opener) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.client
+	return r.client, r.open
 }
 
 func (r *Runner) runLimit() time.Duration {
@@ -201,7 +213,8 @@ func (r *Runner) execute(job Job) {
 		r.fail(job, Interrupted, 0)
 		return
 	}
-	if r.current() == nil {
+	client, opener := r.current()
+	if client == nil && opener == nil {
 		r.fail(job, Unreachable, 0)
 		return
 	}
@@ -229,14 +242,24 @@ func (r *Runner) execute(job Job) {
 		}
 		remain := r.runLimit() - time.Since(started)
 		ctx, cancel := context.WithTimeout(r.ctx, remain)
-		stream, err := r.current().Open(ctx, runtime.Send{
+		send := runtime.Send{
 			SessionID: job.ThreadID,
 			StreamID:  job.RunID,
 			MessageID: job.MessageID,
 			Offset:    offset,
 			Text:      job.Text,
 			History:   job.History,
-		})
+		}
+		var stream runtime.Stream
+		var err error
+		client, opener = r.current()
+		if opener != nil {
+			stream, err = opener(ctx, job, send)
+		} else if client != nil {
+			stream, err = client.Open(ctx, send)
+		} else {
+			err = errors.New("no runtime")
+		}
 		if err != nil {
 			cancel()
 			if r.ctx.Err() != nil || time.Since(started) >= r.runLimit() {

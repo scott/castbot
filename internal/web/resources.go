@@ -1,9 +1,11 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/store"
 )
 
@@ -106,7 +108,24 @@ func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := s.store.DeleteAgent(r.Context(), user.ID, r.PathValue("id"))
+	agent, err := s.store.GetAgent(r.Context(), user.ID, r.PathValue("id"))
+	if mapStoreErr(w, r, err) {
+		return
+	}
+	if _, err := s.store.LiveVM(r.Context(), user.ID, agent.ID); err == nil {
+		if err := host.ConfirmName(r.FormValue("confirm"), agent.Name); err != nil {
+			writeText(w, http.StatusBadRequest, "Type the agent name to delete this machine.\n")
+			return
+		}
+		if err := s.removeMachine(r.Context(), user.ID, agent); err != nil {
+			writeText(w, http.StatusBadGateway, "The machine could not be deleted.\n")
+			return
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	err = s.store.DeleteAgent(r.Context(), user.ID, agent.ID)
 	if mapStoreErr(w, r, err) {
 		return
 	}

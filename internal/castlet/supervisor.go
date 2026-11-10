@@ -49,6 +49,9 @@ type Config struct {
 	RuntimeURL string
 	RuntimeCmd []string
 	Token      string
+	// AllowHTTP keeps the local test control plane on http.
+	// The castlet command leaves this false, so a real boot requires https.
+	AllowHTTP bool
 }
 
 // Supervisor is one castlet process.
@@ -76,8 +79,23 @@ type secret struct {
 	Value string
 }
 
+// RequireHTTPS rejects a control plane URL that is not https.
+func RequireHTTPS(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" || !strings.EqualFold(u.Scheme, "https") {
+		return errors.New("control plane URL must use https")
+	}
+	return nil
+}
+
 // New builds a supervisor. Boot talks to the control plane.
+// The control plane URL must be https unless Config.AllowHTTP is set.
 func New(cfg Config) (*Supervisor, error) {
+	if cfg.ControlURL != "" && !cfg.AllowHTTP {
+		if err := RequireHTTPS(cfg.ControlURL); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.AgentDir == "" {
 		cfg.AgentDir = "/app/agent"
 	}

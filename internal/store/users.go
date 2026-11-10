@@ -103,6 +103,9 @@ func (s *Store) CreateUser(ctx context.Context, in NewUser) (User, error) {
 	if _, err := insertSection(ctx, tx, wid, uid, "Agents", "agents", 1, stamp); err != nil {
 		return User{}, err
 	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO user_quotas(user_id, workspace_id, max_agents) VALUES (?, ?, ?)`, uid, wid, DefaultMaxAgents); err != nil {
+		return User{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return User{}, err
 	}

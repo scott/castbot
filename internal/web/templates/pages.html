@@ -178,6 +178,8 @@
 <textarea class="ph" name="body" maxlength="8000" rows="1" placeholder="Message {{.Agent.Name}}" aria-label="Message {{.Agent.Name}}"></textarea>
 <div class="row"><span class="hint">Enter to send · Shift+Enter for a new line</span><button class="btn pri sm" type="submit">Send</button></div>
 </form></div>
+{{else if eq .Tab "machine"}}
+{{template "machinePanel" .}}
 {{else}}
 <div class="page-b"><h2>{{.StubTitle}}</h2><p class="muted">{{.StubBody}}</p></div>
 {{end}}
@@ -186,7 +188,7 @@
 {{define "infoPane"}}
 <aside class="pane" aria-label="{{.Agent.Name}} info"><div class="grabber" aria-hidden="true"></div>
 <div class="pane-h"><span class="av {{.Agent.Color}} lg" aria-hidden="true">{{.Agent.Letter}}</span><div class="grow"><div class="nm">{{.Agent.Name}}</div><div class="sub">{{.Agent.Title}}{{if .Agent.Created}} · created {{.Agent.Created}}{{end}}</div></div><a class="ibtn" href="/agents/{{.Agent.ID}}" aria-label="Close info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></a></div>
-<section class="psec"><div class="psec-h"><h4>Machine</h4><a class="link" href="/agents/{{.Agent.ID}}/machine">Open</a></div><span class="chip {{.Agent.ChipClass}}"><span class="pip"></span>{{.Agent.ChipLabel}}</span><div class="meta-grid"><div><div class="k">Size</div><div class="v">{{.Agent.SizeLabel}}</div></div><div><div class="k">Auto-pause</div><div class="v">{{.Agent.IdleLabel}}</div></div></div><p class="fineprint">Saved on your account. This version does not call a cloud API, so nothing here is a live check.</p></section>
+<section class="psec"><div class="psec-h"><h4>Machine</h4><a class="link" href="/agents/{{.Agent.ID}}/machine">Open</a></div><span class="chip {{.Agent.ChipClass}}"><span class="pip"></span>{{.Agent.ChipLabel}}</span><div class="meta-grid"><div><div class="k">Size</div><div class="v">{{.Agent.SizeLabel}}</div></div><div><div class="k">Auto-pause</div><div class="v">{{.Agent.IdleLabel}}</div></div></div><p class="fineprint">Status is the machine record. Checking it does not wake the machine.</p></section>
 <section class="psec"><div class="psec-h"><h4>Model</h4></div><div class="model"><span class="pv">{{.Agent.Letter}}</span><div class="grow"><div class="t1">{{if .Agent.Model}}{{.Agent.Model}}{{else}}No model saved{{end}}</div><div class="t2">Keys stay on your account.</div></div></div></section>
 <section class="psec"><div class="psec-h"><h4>Memory</h4></div><p class="fineprint">Memory arrives in a later update.</p></section>
 <section class="psec"><div class="psec-h"><h4>Routines</h4></div><p class="fineprint">Routines arrive in a later update.</p></section>
@@ -254,7 +256,7 @@
 
 {{define "newMain"}}
 <header class="ph-top ph-only"><a class="ibtn" href="/" aria-label="Back">{{template "backsvg" .}}</a><span class="t">New agent</span></header>
-<div class="page-h"><div><h1 class="dt-only">New agent</h1><p class="sub">A draft on this account. No machine is provisioned in this version.</p></div></div>
+<div class="page-h"><div><h1 class="dt-only">New agent</h1><p class="sub">A draft on this account. The machine tab starts it.</p></div></div>
 <div class="page-b"><form method="post" action="/new-agent">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 {{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
@@ -262,6 +264,23 @@
 <div class="field"><span class="lab">Title</span><div class="inp"><input name="title" maxlength="80" aria-label="Title"></div></div>
 <button class="btn pri" type="submit">Create agent</button>
 </form></div>
+{{end}}
+
+{{define "machinePanel"}}
+<div class="page-b machine">
+<h2>Machine</h2>
+<p class="muted">{{.Machine.Lead}}</p>
+{{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
+<span class="chip {{.Agent.ChipClass}}"><span class="pip"></span>{{.Agent.ChipLabel}}</span>
+<div class="meta-grid"><div><div class="k">Size</div><div class="v">{{.Agent.SizeLabel}}</div></div><div><div class="k">Auto-pause</div><div class="v">{{.Agent.IdleLabel}}</div></div>{{if .Machine.LastWake}}<div><div class="k">Last wake</div><div class="v">{{.Machine.LastWake}}</div></div>{{end}}</div>
+<div class="acts">
+{{if or .Machine.CanStart .Machine.CanRetry}}<form method="post" action="/agents/{{.Agent.ID}}/machine"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">{{if .Machine.CanRetry}}Try again{{else}}Start machine{{end}}</button></form>{{end}}
+{{if .Machine.CanPause}}<form method="post" action="/agents/{{.Agent.ID}}/machine/pause"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Pause</button></form>{{end}}
+{{if .Machine.CanWake}}<form method="post" action="/agents/{{.Agent.ID}}/machine/wake"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Wake</button></form>{{end}}
+</div>
+{{if .Machine.CanDelete}}<form class="machine-del" method="post" action="/agents/{{.Agent.ID}}/machine/delete"><input type="hidden" name="csrf" value="{{.CSRF}}"><label class="lab" for="confirm-name">Type {{.Agent.Name}} to delete this machine</label><div class="inp"><input id="confirm-name" name="confirm" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Type the agent name"></div><button class="btn sm danger-ghost" type="submit">Delete machine</button><p class="fineprint">Deleting removes this agent and its machine. This cannot be undone. Memory export is not in this version.</p></form>{{end}}
+<p class="fineprint">Status is the machine record. Checking it does not wake the machine.</p>
+</div>
 {{end}}
 
 {{define "stubMain"}}

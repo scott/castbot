@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS agents (
   activity TEXT NOT NULL DEFAULT '',
   unread INTEGER NOT NULL DEFAULT 0,
   approvals INTEGER NOT NULL DEFAULT 0,
-  idle_timeout INTEGER NOT NULL DEFAULT 900,
+  idle_timeout INTEGER NOT NULL DEFAULT 300,
   size TEXT NOT NULL DEFAULT '1:2048',
   position INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
@@ -216,6 +216,35 @@ CREATE INDEX IF NOT EXISTS idx_bundles_user ON agent_bundles(user_id, agent_id, 
 CREATE INDEX IF NOT EXISTS idx_tokens_agent ON agent_tokens(agent_id, kind);
 CREATE INDEX IF NOT EXISTS idx_secrets_user ON secret_fixtures(user_id, name);
 CREATE INDEX IF NOT EXISTS idx_grants_user ON agent_secret_grants(user_id, agent_id);
+
+-- One machine row per agent. The agent token is plaintext until the vault
+-- slice. Do not log it. deleted_at hides a machine that was removed.
+CREATE TABLE IF NOT EXISTS agent_vms (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  microvm_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  endpoint TEXT NOT NULL DEFAULT '',
+  image_ref TEXT NOT NULL,
+  state TEXT NOT NULL,
+  failure TEXT NOT NULL DEFAULT '',
+  agent_token TEXT NOT NULL DEFAULT '',
+  agent_token_hash TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  last_wake_at TEXT,
+  deleted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_vms_user ON agent_vms(user_id, agent_id);
+
+-- max_agents is the only cap. Running hours are not metered here.
+CREATE TABLE IF NOT EXISTS user_quotas (
+  user_id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  max_agents INTEGER NOT NULL
+);
 `
 
 func (s *Store) migrate() error {
@@ -231,7 +260,11 @@ func (s *Store) migrate() error {
 	if err := s.allowRetried(); err != nil {
 		return err
 	}
-	for _, version := range []int{1, 2, 3, 4, 5} {
+	if _, err := s.db.Exec(`INSERT INTO user_quotas(user_id, workspace_id, max_agents)
+SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_quotas)`, DefaultMaxAgents); err != nil {
+		return err
+	}
+	for _, version := range []int{1, 2, 3, 4, 5, 6} {
 		if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING`, version); err != nil {
 			return err
 		}

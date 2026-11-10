@@ -49,6 +49,7 @@ func TestReloadAppliesARotatedSecret(t *testing.T) {
 	sup, err := New(Config{
 		Token:      "agent-token",
 		ControlURL: cp.URL,
+		AllowHTTP:  true,
 		AgentID:    "agt1",
 		AgentDir:   filepath.Join(dir, "agent"),
 		RuntimeURL: up.URL,
@@ -108,6 +109,7 @@ func TestReloadDoesNotOverlap(t *testing.T) {
 	sup, err := New(Config{
 		Token:      "agent-token",
 		ControlURL: cp.URL,
+		AllowHTTP:  true,
 		AgentID:    "agt1",
 		AgentDir:   filepath.Join(dir, "agent"),
 		RuntimeURL: up.URL,
@@ -172,6 +174,7 @@ func TestDeadRuntimeIsNotReady(t *testing.T) {
 	sup, err := New(Config{
 		Token:      "agent-token",
 		ControlURL: cp.URL,
+		AllowHTTP:  true,
 		AgentID:    "agt1",
 		AgentDir:   filepath.Join(dir, "agent"),
 		RuntimeURL: up.URL,
@@ -221,6 +224,7 @@ func TestDeadRuntimeIsNotReady(t *testing.T) {
 	dead, err := New(Config{
 		Token:      "agent-token",
 		ControlURL: cp.URL,
+		AllowHTTP:  true,
 		AgentID:    "agt1",
 		AgentDir:   filepath.Join(dir, "agent2"),
 		RuntimeURL: up.URL,

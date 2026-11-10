@@ -34,7 +34,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusOK, "app", finish(p))
 		return
 	}
-	s.renderChat(w, r, user, agents[0].ID, false, "home")
+	s.renderChat(w, r, user, agents[0].ID, false, "home", http.StatusOK, "")
 }
 
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +42,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.renderChat(w, r, user, r.PathValue("id"), r.URL.Query().Get("pane") == "1", "chat")
+	s.renderChat(w, r, user, r.PathValue("id"), r.URL.Query().Get("pane") == "1", "chat", http.StatusOK, "")
 }
 
 func (s *Server) agentTab(w http.ResponseWriter, r *http.Request) {
@@ -57,13 +57,23 @@ func (s *Server) agentTab(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "/files"):
 		tab = "agent-files"
 	}
-	s.renderChat(w, r, user, r.PathValue("id"), false, tab)
+	s.renderChat(w, r, user, r.PathValue("id"), false, tab, http.StatusOK, "")
 }
 
-func (s *Server) renderChat(w http.ResponseWriter, r *http.Request, user store.User, id string, pane bool, tab string) {
+func (s *Server) renderChat(w http.ResponseWriter, r *http.Request, user store.User, id string, pane bool, tab string, status int, formError string) {
+	s.renderAgent(w, r, user, id, pane, tab, status, formError)
+}
+
+func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.User, id string, pane bool, tab string, status int, formError string) {
 	agent, err := s.store.GetAgent(r.Context(), user.ID, id)
 	if s.missing(w, err) {
 		return
+	}
+	machine := s.syncMachine(r.Context(), user.ID, &agent)
+	if machine.LastWake != "" {
+		if t, ok := inZone(machine.LastWake, userLocation(user.Timezone)); ok {
+			machine.LastWake = t.Format("Jan 2, 3:04 PM")
+		}
 	}
 	p, err := s.shell(r, user)
 	if err != nil {
@@ -72,6 +82,8 @@ func (s *Server) renderChat(w http.ResponseWriter, r *http.Request, user store.U
 	}
 	p.Agent = presentAgent(agent, true, userLocation(user.Timezone))
 	p.HasAgent = true
+	p.Machine = machine
+	p.FormError = formError
 	p.Pane = pane
 	p.markOn(agent.ID)
 	threads, err := s.store.ListThreadsByAgent(r.Context(), user.ID, agent.ID)
@@ -101,7 +113,10 @@ func (s *Server) renderChat(w http.ResponseWriter, r *http.Request, user store.U
 		p.StubTitle, p.StubBody = tabCopy(tab)
 	}
 	p.Title = agent.Name
-	s.render(w, http.StatusOK, "app", finish(p))
+	if status == 0 {
+		status = http.StatusOK
+	}
+	s.render(w, status, "app", finish(p))
 }
 
 func tabCopy(tab string) (string, string) {
@@ -111,7 +126,7 @@ func tabCopy(tab string) (string, string) {
 	case "agent-files":
 		return "Files", "Files arrive in a later update."
 	default:
-		return "Machine", "This version does not connect a machine. Status in the sidebar is saved on your account."
+		return "Machine", "Status is the machine record. Checking it does not wake the machine."
 	}
 }
 

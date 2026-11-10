@@ -116,12 +116,18 @@ func CapHistory(in []Turn) []Turn {
 type HTTPClient struct {
 	base   string
 	token  string
+	edge   string
 	client *http.Client
 }
 
 // SetToken sends X-Cast-Authorization on later opens.
 // Set it before the first open. The value is not logged.
 func (c *HTTPClient) SetToken(token string) { c.token = token }
+
+// SetEdgeToken sends Authorization for the machine edge.
+// The machine API strips this header before the guest sees it.
+// The value is not logged.
+func (c *HTTPClient) SetEdgeToken(token string) { c.edge = token }
 
 // NewHTTP returns a client for one runtime base URL.
 func NewHTTP(base string) *HTTPClient {
@@ -181,6 +187,9 @@ func (c *HTTPClient) Open(ctx context.Context, req Send) (Stream, error) {
 	httpReq.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
 		httpReq.Header.Set("X-Cast-Authorization", "Bearer "+c.token)
+	}
+	if c.edge != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.edge)
 	}
 	res, err := c.client.Do(httpReq)
 	if err != nil {
