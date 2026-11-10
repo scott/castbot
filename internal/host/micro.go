@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/scott/castbot/internal/runtime"
@@ -24,6 +25,7 @@ type Options struct {
 	BaseURL      string
 	HTTP         *http.Client
 	Interval     time.Duration
+	RetryFor     time.Duration
 	InsecureEdge bool
 }
 
@@ -34,7 +36,16 @@ type MicroVM struct {
 	http     *http.Client
 	edge     *http.Client
 	interval time.Duration
+	retryFor time.Duration
 	insecure bool
+
+	mu    sync.Mutex
+	cache map[string]statusHit
+}
+
+type statusHit struct {
+	at time.Time
+	vm Machine
 }
 
 // New returns a client. It does not call the API.
@@ -54,11 +65,16 @@ func New(opt Options) (*MicroVM, error) {
 	if interval <= 0 {
 		interval = time.Second
 	}
+	retryFor := opt.RetryFor
+	if retryFor <= 0 {
+		retryFor = 30 * time.Second
+	}
 	return &MicroVM{
 		token:    opt.Token,
 		base:     base,
 		http:     client,
 		interval: interval,
+		retryFor: retryFor,
 		insecure: opt.InsecureEdge,
 		edge: &http.Client{
 			Timeout: 20 * time.Second,
@@ -93,8 +109,18 @@ func (m *MicroVM) Create(ctx context.Context, spec CreateSpec) (Machine, error) 
 }
 
 // Status reads the machine API. It does not call the guest.
+// A successful read is reused for a few seconds so a page load does not
+// call the API again immediately. Pause, wake, and delete drop the cache.
 func (m *MicroVM) Status(ctx context.Context, id string) (Machine, error) {
-	return m.get(ctx, id)
+	if vm, ok := m.cached(id); ok {
+		return vm, nil
+	}
+	vm, err := m.get(ctx, id)
+	if err != nil {
+		return Machine{}, err
+	}
+	m.remember(vm)
+	return vm, nil
 }
 
 // Wake resumes a paused machine through the API.
@@ -117,6 +143,7 @@ func (m *MicroVM) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	defer res.Body.Close()
+	m.forget(id)
 	if res.StatusCode == http.StatusNoContent || res.StatusCode == http.StatusOK || res.StatusCode == http.StatusNotFound {
 		io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
 		return nil
@@ -152,7 +179,7 @@ func (m *MicroVM) List(ctx context.Context) ([]Machine, error) {
 // in Authorization and the agent token in X-Cast-Authorization.
 // It retries while the guest is still booting. Status never calls Probe.
 func (m *MicroVM) Probe(ctx context.Context, endpoint, agentToken string) error {
-	if err := checkEdge(endpoint, agentToken); err != nil {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
 		return err
 	}
 	deadline := time.NewTimer(2 * time.Minute)
@@ -161,7 +188,7 @@ func (m *MicroVM) Probe(ctx context.Context, endpoint, agentToken string) error 
 	defer tick.Stop()
 	var last string
 	for {
-		code, err := m.edgeOnce(ctx, http.MethodGet, endpoint+"/castlet/health", agentToken, nil)
+		code, err := m.edgeOnce(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/castlet/health", agentToken, nil)
 		if err == nil && code == http.StatusOK {
 			return nil
 		}
@@ -186,7 +213,7 @@ func (m *MicroVM) Probe(ctx context.Context, endpoint, agentToken string) error 
 // Stream opens message/send through the edge. Both tokens are set.
 // A paused machine resumes because the edge accepts the request.
 func (m *MicroVM) Stream(ctx context.Context, endpoint, agentToken string, req runtime.Send) (runtime.Stream, error) {
-	if err := checkEdge(endpoint, agentToken); err != nil {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
 		return nil, err
 	}
 	c := runtime.NewHTTP(endpoint)
@@ -210,6 +237,9 @@ func (m *MicroVM) Approve(ctx context.Context, endpoint, agentToken, requestID s
 		},
 	})
 	if err != nil {
+		return err
+	}
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
 		return err
 	}
 	code, err := m.edgeOnce(ctx, http.MethodPost, strings.TrimRight(endpoint, "/")+"/", agentToken, payload)
@@ -240,6 +270,9 @@ func (m *MicroVM) PutFile(ctx context.Context, endpoint, agentToken, name string
 	if len(raw) > 32<<20 {
 		return errors.New("file is too large")
 	}
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return err
+	}
 	code, err := m.edgeOnce(ctx, http.MethodPut, strings.TrimRight(endpoint, "/")+"/castlet/files/"+rel, agentToken, raw)
 	if err != nil {
 		return err
@@ -254,6 +287,9 @@ func (m *MicroVM) PutFile(ctx context.Context, endpoint, agentToken, name string
 func (m *MicroVM) GetFile(ctx context.Context, endpoint, agentToken, name string) (io.ReadCloser, error) {
 	rel, err := cleanName(name)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/castlet/files/"+rel, nil)
@@ -272,15 +308,24 @@ func (m *MicroVM) GetFile(ctx context.Context, endpoint, agentToken, name string
 	return res.Body, nil
 }
 
-// Reload posts /castlet/reload and retries a 409. A reload already in
-// flight is not a failure.
+// Reload posts /castlet/reload and retries a 409 until the budget ends
+// or the context is cancelled. The budget is about 30 seconds.
 func (m *MicroVM) Reload(ctx context.Context, endpoint, agentToken string) error {
-	if err := checkEdge(endpoint, agentToken); err != nil {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
 		return err
 	}
 	target := strings.TrimRight(endpoint, "/") + "/castlet/reload"
+	budget := m.retryFor
+	if budget <= 0 {
+		budget = 30 * time.Second
+	}
+	wait := m.interval
+	if wait <= 0 {
+		wait = time.Second
+	}
+	deadline := time.Now().Add(budget)
 	var last error
-	for i := 0; i < 6; i++ {
+	for {
 		code, err := m.edgeOnce(ctx, http.MethodPost, target, agentToken, nil)
 		if err != nil {
 			return err
@@ -292,17 +337,18 @@ func (m *MicroVM) Reload(ctx context.Context, endpoint, agentToken string) error
 			return fmt.Errorf("reload status %d", code)
 		}
 		last = errors.New("reload in progress")
-		wait := time.Duration(i+1) * 20 * time.Millisecond
+		if time.Until(deadline) <= wait {
+			return last
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(wait):
 		}
+		if wait < 8*time.Second {
+			wait *= 2
+		}
 	}
-	if last == nil {
-		last = errors.New("reload in progress")
-	}
-	return last
 }
 
 func (m *MicroVM) poll(ctx context.Context, id string) (Machine, error) {
@@ -345,7 +391,7 @@ func (m *MicroVM) postCreate(ctx context.Context, spec CreateSpec) (Machine, err
 		AutoPause: autoReq{
 			Idle: formatIdle(idle),
 		},
-		Tags: []string{"castbot", "agent:" + spec.AgentID},
+		Tags: machineTags(spec),
 		Env: map[string]string{
 			"CASTBOT_URL":             spec.ControlURL,
 			"CASTBOT_AGENT_ID":        spec.AgentID,
@@ -397,6 +443,7 @@ func (m *MicroVM) action(ctx context.Context, id, name string) (Machine, error) 
 	if strings.TrimSpace(id) == "" || id == "pending" {
 		return Machine{}, errors.New("missing machine id")
 	}
+	m.forget(id)
 	res, err := m.do(ctx, http.MethodPost, "/v2/microvms/"+url.PathEscape(id)+"/"+name, nil, "")
 	if err != nil {
 		return Machine{}, err
@@ -409,7 +456,9 @@ func (m *MicroVM) action(ctx context.Context, id, name string) (Machine, error) 
 	if err != nil {
 		return Machine{}, err
 	}
-	return vm.machine(m.insecure), nil
+	out := vm.machine(m.insecure)
+	m.remember(out)
+	return out, nil
 }
 
 func (m *MicroVM) do(ctx context.Context, method, path string, body []byte, secret string) (*http.Response, error) {
@@ -546,29 +595,51 @@ func endpoint(urls []struct {
 	Default  bool   `json:"default"`
 	Hostname string `json:"hostname"`
 }, insecure bool) string {
-	host := ""
+	raw := ""
 	for _, u := range urls {
 		if u.Hostname == "" {
 			continue
 		}
-		if u.Default || host == "" {
-			host = u.Hostname
+		if u.Default || raw == "" {
+			raw = u.Hostname
 		}
 		if u.Default {
 			break
 		}
 	}
-	if host == "" {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
 		return ""
 	}
-	if strings.Contains(host, "://") {
-		return strings.TrimRight(host, "/")
+	if strings.Contains(raw, "://") {
+		u, err := url.Parse(raw)
+		if err != nil || !edgeAllowed(u, insecure) {
+			return ""
+		}
+		return strings.TrimRight(raw, "/")
 	}
-	scheme := "https"
 	if insecure {
-		scheme = "http"
+		return "http://" + raw
 	}
-	return scheme + "://" + host
+	if !edgeSuffix(raw) {
+		return ""
+	}
+	return "https://" + raw
+}
+
+func edgeSuffix(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "microvm.ondigitalocean.com" || strings.HasSuffix(host, ".microvm.ondigitalocean.com")
+}
+
+func edgeAllowed(u *url.URL, insecure bool) bool {
+	if u == nil || u.Hostname() == "" {
+		return false
+	}
+	if insecure {
+		return u.Scheme == "http" || u.Scheme == "https"
+	}
+	return u.Scheme == "https" && edgeSuffix(u.Hostname())
 }
 
 func validateSpec(spec CreateSpec) error {
@@ -621,15 +692,57 @@ func redact(msg, secret, token string) string {
 	return msg
 }
 
-func checkEdge(endpoint, agentToken string) error {
+func (m *MicroVM) checkEdge(endpoint, agentToken string) error {
 	if strings.TrimSpace(agentToken) == "" {
 		return errors.New("agent token is empty")
 	}
 	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+	if err != nil || !edgeAllowed(u, m.insecure) {
 		return errors.New("machine endpoint is invalid")
 	}
 	return nil
+}
+
+func (m *MicroVM) cached(id string) (Machine, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	hit, ok := m.cache[id]
+	if !ok || time.Since(hit.at) >= 5*time.Second {
+		return Machine{}, false
+	}
+	return hit.vm, true
+}
+
+func (m *MicroVM) remember(vm Machine) {
+	if vm.ID == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cache == nil {
+		m.cache = map[string]statusHit{}
+	}
+	m.cache[vm.ID] = statusHit{at: time.Now(), vm: vm}
+}
+
+func (m *MicroVM) forget(id string) {
+	m.mu.Lock()
+	delete(m.cache, id)
+	m.mu.Unlock()
+}
+
+func machineTags(spec CreateSpec) []string {
+	tags := []string{"castbot", "agent:" + spec.AgentID}
+	seen := map[string]bool{"castbot": true, "agent:" + spec.AgentID: true}
+	for _, tag := range spec.Tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" || seen[tag] || strings.ContainsAny(tag, " ,") {
+			continue
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	return tags
 }
 
 func cleanName(name string) (string, error) {

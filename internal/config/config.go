@@ -111,12 +111,10 @@ func LoadFile(path string) (Config, error) {
 	if v := os.Getenv("CASTBOT_RUNTIME_URL"); v != "" {
 		cfg.RuntimeURL = v
 	}
-	if cfg.MachineToken == "" {
-		if v := os.Getenv("DIGITALOCEAN_ACCESS_TOKEN"); v != "" {
-			cfg.MachineToken = v
-		} else if v := os.Getenv("DIGITALOCEAN_TOKEN"); v != "" {
-			cfg.MachineToken = v
-		}
+	// Only CASTBOT_DO_TOKEN starts the machine host. A general token in the
+	// environment is for other tools and must not be adopted here.
+	if v := os.Getenv("CASTBOT_DO_TOKEN"); v != "" {
+		cfg.MachineToken = v
 	}
 	if v := os.Getenv("CASTBOT_IMAGE"); v != "" {
 		cfg.Image = v

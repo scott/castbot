@@ -2,9 +2,12 @@ package web
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +28,7 @@ func TestMachineHandlers(t *testing.T) {
 			if code != http.StatusSeeOther || !strings.HasSuffix(hdr.Get("Location"), "/machine") {
 				t.Fatalf("create %d %s", code, hdr.Get("Location"))
 			}
+			waitMachine(t, h, agent, ip, "Pause")
 			if len(fake.Creates) != 1 {
 				t.Fatalf("creates %d", len(fake.Creates))
 			}
@@ -52,6 +56,7 @@ func TestMachineHandlers(t *testing.T) {
 			if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
 				t.Fatal(code)
 			}
+			waitMachine(t, h, agent, ip, "Pause")
 			if code, _, hdr := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine/pause", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
 				t.Fatalf("pause %d %s", code, hdr.Get("Location"))
 			}
@@ -74,12 +79,24 @@ func TestMachineHandlers(t *testing.T) {
 		{"failed create releases the slot", func(t *testing.T) {
 			h, fake, agent := machineUser(t, ip)
 			fake.CreateErr = &host.Failed{Reason: "image pull failed"}
-			code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil)
-			if code != http.StatusBadGateway || !strings.Contains(body, "The machine did not start.") {
-				t.Fatalf("fail %d %s", code, body)
+			code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil)
+			if code != http.StatusSeeOther {
+				t.Fatalf("fail %d", code)
+			}
+			waitMachine(t, h, agent, ip, "The machine did not start.")
+			_, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+			if !strings.Contains(body, "Try again") {
+				t.Fatal("page has no retry")
+			}
+			if _, err := h.st.GetAgent(context.Background(), agent.UserID, agent.ID); err != nil {
+				t.Fatal(err)
 			}
 			if _, err := h.st.LiveVM(context.Background(), agent.UserID, agent.ID); err != store.ErrNotFound {
 				t.Fatal(err)
+			}
+			used, _, err := h.st.Quota(context.Background(), agent.UserID)
+			if err != nil || used != 0 {
+				t.Fatalf("quota %d %v", used, err)
 			}
 			fake.CreateErr = nil
 			if code, _, hdr := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
@@ -104,6 +121,7 @@ func TestMachineHandlers(t *testing.T) {
 			if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
 				t.Fatal(code)
 			}
+			waitMachine(t, h, agent, ip, "Pause")
 			code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine/delete", h.form(url.Values{"confirm": {"not-the-name"}}), ip, nil)
 			if code != http.StatusBadRequest || !strings.Contains(body, "Type the agent name") {
 				t.Fatalf("reject %d %s", code, body)
@@ -133,6 +151,7 @@ func TestVMAuthz(t *testing.T) {
 	if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), "203.0.113.130:9", nil); code != http.StatusSeeOther {
 		t.Fatal(code)
 	}
+	waitMachine(t, h, agent, "203.0.113.130:9", "Pause")
 	plain, err := h.st.IssueBootstrap(context.Background(), agent.UserID, agent.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -260,6 +279,180 @@ func TestClientAddr(t *testing.T) {
 	if got := clientAddr("192.0.2.5:9", "198.51.100.8", nets); got != "198.51.100.8" {
 		t.Fatalf("single %s", got)
 	}
+	if got := clientAddr("10.0.0.1:9", "198.51.100.7, unknown", nets); got != "10.0.0.1" {
+		t.Fatalf("unknown %s", got)
+	}
+	if got := clientAddr("10.0.0.1:9", "198.51.100.6, 198.51.100.5:80", nets); got != "10.0.0.1" {
+		t.Fatalf("host:port %s", got)
+	}
+	if got := clientAddr("10.0.0.1:9", "198.51.100.4,", nets); got != "10.0.0.1" {
+		t.Fatalf("trailing comma %s", got)
+	}
+	if got := clientAddr("10.0.0.1:9", "198.51.100.3, unknown, 10.1.1.1", nets); got != "10.1.1.1" {
+		t.Fatalf("trusted then junk %s", got)
+	}
+	if _, err := ParseTrustedProxies("0.0.0.0/0"); err == nil {
+		t.Fatal("accepted every address")
+	}
+	if _, err := ParseTrustedProxies("::/0"); err == nil {
+		t.Fatal("accepted every ipv6 address")
+	}
+}
+
+func TestCancelledRequestStillFinishes(t *testing.T) {
+	ip := "203.0.113.160:9"
+	h, fake, agent := machineUser(t, ip)
+	hold := make(chan struct{})
+	fake.WaitCreate = hold
+	fake.CreateStarted = make(chan struct{}, 1)
+	body := h.form(url.Values{})
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/agents/"+agent.ID+"/machine", strings.NewReader(body))
+	req = req.WithContext(ctx)
+	req.RemoteAddr = ip
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.mu.Lock()
+	for _, c := range h.jar {
+		req.AddCookie(c)
+	}
+	h.mu.Unlock()
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		h.srv.Handler().ServeHTTP(rec, req)
+		close(done)
+	}()
+	select {
+	case <-fake.CreateStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("create did not start")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("handler stayed on the cancelled request")
+	}
+	if rec.Code != http.StatusSeeOther {
+		raw, _ := io.ReadAll(rec.Body)
+		t.Fatalf("create %d %s", rec.Code, raw)
+	}
+	close(hold)
+	waitMachine(t, h, agent, ip, "Pause")
+	vm, err := h.st.LiveVM(context.Background(), agent.UserID, agent.ID)
+	if err != nil || vm.MicroVMID == "" || vm.MicroVMID == "pending" {
+		t.Fatalf("row %+v %v", vm, err)
+	}
+	used, _, err := h.st.Quota(context.Background(), agent.UserID)
+	if err != nil || used != 1 {
+		t.Fatalf("quota %d %v", used, err)
+	}
+	if _, err := h.st.GetAgent(context.Background(), agent.UserID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConcurrentProvisionIsConflict(t *testing.T) {
+	ip := "203.0.113.161:9"
+	h, _, agent := machineUser(t, ip)
+	var wg sync.WaitGroup
+	codes := make([]int, 6)
+	for i := range codes {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			codes[i], _, _ = h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil)
+		}(i)
+	}
+	wg.Wait()
+	sawOK := 0
+	for _, code := range codes {
+		switch code {
+		case http.StatusSeeOther:
+			sawOK++
+		case http.StatusConflict:
+		default:
+			t.Fatalf("codes %v", codes)
+		}
+	}
+	if sawOK != 1 {
+		t.Fatalf("codes %v", codes)
+	}
+}
+
+func TestChatDoesNotEchoWhileTheMachineStarts(t *testing.T) {
+	ip := "203.0.113.162:9"
+	h, fake, agent := machineUser(t, ip)
+	if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
+		t.Fatal(code)
+	}
+	waitMachine(t, h, agent, ip, "Pause")
+	code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {"hello"}}), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 {
+		t.Fatalf("send %d", code)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var got store.Run
+	for time.Now().Before(deadline) {
+		threads, err := h.st.ListThreadsByAgent(context.Background(), agent.UserID, agent.ID)
+		if err != nil || len(threads) == 0 {
+			t.Fatal(err)
+		}
+		runs, err := h.st.ListThreadRuns(context.Background(), agent.UserID, threads[0].ID)
+		if err != nil || len(runs) == 0 {
+			t.Fatal(err)
+		}
+		got = runs[len(runs)-1]
+		if got.Status == "failed" {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if got.Status != "failed" || got.Error != "The machine is starting." {
+		t.Fatalf("run %+v", got)
+	}
+	calls, edge := fake.Snapshot()
+	if edge != 0 || containsCall(calls, "stream") {
+		t.Fatalf("fell through to a runtime: %v edge %d", calls, edge)
+	}
+}
+
+func TestSweepReleasesStaleAndOrphans(t *testing.T) {
+	ip := "203.0.113.163:9"
+	h, fake, agent := machineUser(t, ip)
+	past := time.Now().Add(-20 * time.Minute)
+	h.st.SetNow(func() time.Time { return past })
+	if _, err := h.st.BeginVM(context.Background(), agent.UserID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s04"); err != nil {
+		t.Fatal(err)
+	}
+	h.st.SetNow(nil)
+	fake.Machines["demo"] = host.Machine{ID: "demo", Name: "cast-demo-agent-1", State: "paused", Tags: []string{"castbot"}}
+	fake.Machines["probe"] = host.Machine{ID: "probe", Name: "leftover-probe", State: "paused", Tags: []string{"castbot", "castbot-s00"}}
+	fake.Machines["orphan"] = host.Machine{ID: "orphan", Name: "castbot-leftover", State: "running", Tags: []string{"castbot", "castbot-live"}}
+	h.srv.SweepMachines(context.Background())
+	if _, err := h.st.LiveVM(context.Background(), agent.UserID, agent.ID); err != store.ErrNotFound {
+		t.Fatal(err)
+	}
+	used, _, err := h.st.Quota(context.Background(), agent.UserID)
+	if err != nil || used != 0 {
+		t.Fatalf("quota %d %v", used, err)
+	}
+	if _, err := h.st.GetAgent(context.Background(), agent.UserID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fake.Machines["orphan"]; ok {
+		t.Fatal("orphan remained")
+	}
+	if _, ok := fake.Machines["demo"]; !ok {
+		t.Fatal("demo machine was deleted")
+	}
+	if _, ok := fake.Machines["probe"]; !ok {
+		t.Fatal("probe machine was deleted")
+	}
+	_, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	if !strings.Contains(body, "Try again") {
+		t.Fatal(body)
+	}
 }
 
 func machineUser(t *testing.T, ip string) (*harness, *host.Fake, store.Agent) {
@@ -280,6 +473,21 @@ func machineUser(t *testing.T, ip string) (*harness, *host.Fake, store.Agent) {
 		t.Fatal(err)
 	}
 	return h, fake, agent
+}
+
+func waitMachine(t *testing.T, h *harness, agent store.Agent, ip, needle string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+		last = body
+		if code == 200 && strings.Contains(body, needle) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("machine page never showed %q (%d bytes)", needle, len(last))
 }
 
 func containsCall(calls []string, want string) bool {

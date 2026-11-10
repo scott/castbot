@@ -304,7 +304,7 @@ func testSpec(secret string) CreateSpec {
 
 func newTestClient(t *testing.T, api *scriptAPI, token string) *MicroVM {
 	t.Helper()
-	m, err := New(Options{Token: token, BaseURL: api.srv.URL, Interval: 5 * time.Millisecond, InsecureEdge: true})
+	m, err := New(Options{Token: token, BaseURL: api.srv.URL, Interval: 5 * time.Millisecond, RetryFor: 40 * time.Millisecond, InsecureEdge: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,4 +415,116 @@ func writeVM(w http.ResponseWriter, status int, id, state, reason string) {
 			}},
 		},
 	})
+}
+
+func TestLiveWindowRequiresFortyMinutes(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	if err := LiveWindow(time.Time{}, false, now); err == nil {
+		t.Fatal("missing deadline was accepted")
+	}
+	if err := LiveWindow(now.Add(10*time.Minute), true, now); err == nil {
+		t.Fatal("10m deadline was accepted")
+	}
+	if err := LiveWindow(now.Add(45*time.Minute), true, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLiveLeftoversSkipProtectedMachines(t *testing.T) {
+	got := LiveLeftovers([]Machine{
+		{ID: "a", Name: "cast-demo-agent-1", Tags: []string{"castbot-live"}},
+		{ID: "b", Name: "probe", Tags: []string{"castbot-s00", "castbot-live"}},
+		{ID: "c", Name: "castbot-old", Tags: []string{"castbot", "castbot-live"}},
+		{ID: "d", Name: "castbot-current", Tags: []string{"castbot"}},
+	})
+	if len(got) != 1 || got[0].ID != "c" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestEdgeURLRejectsArbitraryHosts(t *testing.T) {
+	if got := endpoint([]struct {
+		Default  bool   `json:"default"`
+		Hostname string `json:"hostname"`
+	}{{Default: true, Hostname: "http://127.0.0.1:9"}}, false); got != "" {
+		t.Fatalf("http endpoint %q", got)
+	}
+	if got := endpoint([]struct {
+		Default  bool   `json:"default"`
+		Hostname string `json:"hostname"`
+	}{{Default: true, Hostname: "https://evil.example.net"}}, false); got != "" {
+		t.Fatalf("arbitrary https %q", got)
+	}
+	if got := endpoint([]struct {
+		Default  bool   `json:"default"`
+		Hostname string `json:"hostname"`
+	}{{Default: true, Hostname: "vm.mkc1.microvm.ondigitalocean.com"}}, false); got != "https://vm.mkc1.microvm.ondigitalocean.com" {
+		t.Fatalf("real edge %q", got)
+	}
+	var hits int
+	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(edge.Close)
+	m, err := New(Options{Token: "machine-token-for-tests", BaseURL: "https://api.example", InsecureEdge: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Probe(context.Background(), edge.URL, "agent-token"); err == nil {
+		t.Fatal("http edge was accepted")
+	}
+	if hits != 0 {
+		t.Fatal("bearer was sent over http")
+	}
+	if err := m.Probe(context.Background(), "https://evil.example.net/", "agent-token"); err == nil {
+		t.Fatal("arbitrary host was accepted")
+	}
+}
+
+func TestReloadStopsWhenTheContextEnds(t *testing.T) {
+	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "reload in progress", http.StatusConflict)
+	}))
+	t.Cleanup(edge.Close)
+	m := newTestClient(t, newScriptAPI(t, ""), "machine-token-for-tests")
+	m.retryFor = 30 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := m.Reload(ctx, edge.URL, "agent-token")
+	if err == nil {
+		t.Fatal("expected cancel")
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("reload ignored the context for %s", time.Since(start))
+	}
+}
+
+func TestStatusIsCachedBriefly(t *testing.T) {
+	api := newScriptAPI(t, "")
+	m := newTestClient(t, api, "machine-token-for-tests")
+	if _, err := m.Status(context.Background(), "vm-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Status(context.Background(), "vm-1"); err != nil {
+		t.Fatal(err)
+	}
+	if api.getN != 1 {
+		t.Fatalf("status calls %d", api.getN)
+	}
+	paused, err := m.Pause(context.Background(), "vm-1")
+	if err != nil || paused.State != "paused" {
+		t.Fatal(err, paused.State)
+	}
+	got, err := m.Status(context.Background(), "vm-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "paused" {
+		t.Fatalf("stale status %s", got.State)
+	}
+	if api.getN != 1 {
+		t.Fatalf("status calls %d", api.getN)
+	}
 }

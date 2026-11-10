@@ -63,6 +63,9 @@ func serve(args []string) {
 	app := web.New(st, cfg.SessionKey, client)
 	defer app.Close()
 	attachMachine(app, cfg)
+	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	app.SweepMachines(sweepCtx)
+	sweepCancel()
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           app.Handler(),

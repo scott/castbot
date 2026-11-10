@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"time"
 )
 
 // DefaultMaxAgents is the machine cap seeded for an account.
@@ -149,6 +150,62 @@ func (s *Store) ReleaseVM(ctx context.Context, userID, agentID string) error {
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE agents SET status = 'failed', activity = '' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID)
 	return err
+}
+
+// ReleaseStalePending drops creating rows that never received a machine id
+// and are older than the cutoff. A process that died during create leaves
+// the quota slot taken. This runs at startup and is not a user handler.
+func (s *Store) ReleaseStalePending(ctx context.Context, olderThan time.Duration) (int, error) {
+	if olderThan <= 0 {
+		return 0, ErrInvalid
+	}
+	cutoff := s.stamp(s.Now().Add(-olderThan))
+	stamp := s.stamp(s.Now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE agents SET status = 'failed', activity = ''
+WHERE deleted_at IS NULL AND id IN (
+	SELECT agent_id FROM agent_vms
+	WHERE deleted_at IS NULL AND state = 'creating' AND microvm_id = 'pending' AND created_at < ?
+)`, cutoff); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = 'failed', deleted_at = ?
+WHERE deleted_at IS NULL AND state = 'creating' AND microvm_id = 'pending' AND created_at < ?`, stamp, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
+// LiveMicroIDs returns machine ids that still have a live row.
+// Startup orphan cleanup uses it. It is not a user handler and it returns
+// no tokens, names, or owners.
+func (s *Store) LiveMicroIDs(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT microvm_id FROM agent_vms WHERE deleted_at IS NULL AND microvm_id != '' AND microvm_id != 'pending'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = struct{}{}
+	}
+	return out, rows.Err()
 }
 
 // MarkVMDeleted records a confirmed delete and deletes the agent row's live state.

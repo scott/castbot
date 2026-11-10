@@ -47,14 +47,16 @@ About 9 minutes of 1:2048 at $0.039 per running hour is about $0.006, plus 50 Gi
 
 ## S04 appendix
 
-Measured Tuesday Nov 10, 2026. No writable machine token was present in the environment (`DIGITALOCEAN_ACCESS_TOKEN`, `DIGITALOCEAN_TOKEN`, and `DO_TOKEN` were unset). The live harness is `go test -tags live ./internal/host` and it skips without those values plus `CASTBOT_IMAGE` and an https `CASTBOT_PUBLIC_URL`. It was not run. No MicroVM was created. The two paused `cast-demo-agent` machines were not touched. Spend is $0.
+Measured Tuesday Nov 10, 2026. No `CASTBOT_DO_TOKEN` was present. `DIGITALOCEAN_ACCESS_TOKEN`, `DIGITALOCEAN_TOKEN`, and `DO_TOKEN` are not read. The live harness is `go test -tags live -timeout 45m ./internal/host`. It skips without `CASTBOT_DO_TOKEN`, `CASTBOT_IMAGE`, and an https `CASTBOT_PUBLIC_URL`. It was not run. No MicroVM was created. The two paused `cast-demo-agent` machines were not touched. Spend is $0.
+
+The harness can create one machine and delete it, and it logs how long the machine API takes to report running. It cannot measure the three rows below. A fake bootstrap token with no control plane cannot get an HTTP 200 from the guest, `GET /` is not an idle SSE stream, and resume-to-first-200 needs a real agent token from a deployed control plane. Those stay unmeasured until that plane exists.
 
 | Measure | Result | Method |
 | --- | --- | --- |
-| First create to first HTTP 200 with the real Cast image | Not measured. Blocked on a writable token. | `TestLiveTiming` would time `POST /v2/microvms` through the first probe 200 |
-| Resume after a 20-minute idle auto-pause | Not measured. Blocked on a writable token. | Status polls only, then `POST /v2/microvms/{id}/resume` |
-| Idle 30-second stream | Not measured. Blocked on a writable token. | `GET` with `Accept: text/event-stream`, both auth headers, read for 30 s |
-| Real agent chat through the web path | Not measured. Blocked on a writable token. | Would use the existing SSE path once a machine is running |
+| First create to first HTTP 200 with the real Cast image | Not measured. Needs a deployed control plane and a real agent token. The harness does not collect this. | Not collected by `TestLiveTiming` |
+| Resume after a 20-minute idle auto-pause, through first HTTP 200 | Not measured. Needs a deployed control plane. Resume API latency alone is not this number. | Not collected by `TestLiveTiming` |
+| Idle 30-second stream | Not measured. Needs a deployed control plane holding an SSE stream. | Not collected by `TestLiveTiming` |
+| Real agent chat through the web path | Not measured. Blocked on a writable `CASTBOT_DO_TOKEN` and a deployed control plane. | Would use the existing SSE path once a machine is running |
 | Cast message-id dedupe | Not measured. This slice did not talk to a Cast runtime. | Recorded here so a later slice can check it. Cast was not changed. |
 
 CI uses the in-memory machine host and a fake HTTP API. It does not need a token and does not create a machine.

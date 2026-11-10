@@ -62,6 +62,8 @@ type CreateSpec struct {
 	HTTPPort   int
 	ControlURL string
 	Bootstrap  string
+	// Tags are added after castbot and agent:<id>. The live harness sets castbot-live.
+	Tags []string
 }
 
 // Machine is the record returned by the machine API.
@@ -113,6 +115,38 @@ func MachineName(agentID string) string {
 		name = name[:63]
 	}
 	return strings.TrimRight(name, "-")
+}
+
+// LiveLeftovers returns castbot-live machines this process may delete.
+// Demo names and the castbot-s00 tag stay out even if they also carry the tag.
+func LiveLeftovers(vms []Machine) []Machine {
+	var out []Machine
+	for _, vm := range vms {
+		tagged := false
+		for _, tag := range vm.Tags {
+			if tag == "castbot-live" {
+				tagged = true
+			}
+		}
+		if !tagged {
+			continue
+		}
+		if err := GuardDelete(vm); err != nil {
+			continue
+		}
+		out = append(out, vm)
+	}
+	return out
+}
+
+// LiveWindow reports whether a live test has enough time to create a machine
+// and still delete it if the run is slow. go test's default timeout is 10
+// minutes, which is not enough, and a timeout panic skips cleanup.
+func LiveWindow(deadline time.Time, hasDeadline bool, now time.Time) error {
+	if !hasDeadline || deadline.Sub(now) < 40*time.Minute {
+		return errors.New("live test needs go test -tags live -timeout 45m ./internal/host")
+	}
+	return nil
 }
 
 // GuardDelete refuses the two demo machines and the leftover probe tag.

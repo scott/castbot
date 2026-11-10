@@ -57,6 +57,8 @@ type Server struct {
 	image     string
 	publicURL string
 	trusted   []*net.IPNet
+	base      context.Context
+	prov      sync.WaitGroup
 }
 
 // guest is one local castlet the control plane can proxy files through.
@@ -69,7 +71,7 @@ type guest struct {
 // client talks to the agent runtime. S03 and S04 swap that client.
 func New(st *store.Store, key []byte, client runtime.Client) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Server{store: st, key: key, client: client, runs: run.New(ctx, st, client), cancel: cancel}
+	s := &Server{store: st, key: key, client: client, runs: run.New(ctx, st, client), cancel: cancel, base: ctx}
 	s.runs.SetOpen(s.openRun)
 	return s
 }
@@ -107,6 +109,15 @@ func (s *Server) Close() {
 	}
 	if s.runs != nil {
 		s.runs.Wait(3 * time.Second)
+	}
+	done := make(chan struct{})
+	go func() {
+		s.prov.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
 	}
 }
 
@@ -445,27 +456,28 @@ func remoteHost(remote string) string {
 
 // clientAddr returns the connection address unless that hop is trusted.
 // A trusted hop walks X-Forwarded-For from the right and skips other trusted hops.
+// An entry that is not an IP, including a blank, "unknown", or host:port, stops
+// the walk. The address is then the last trusted hop, not a value further left
+// that the client chose.
 func clientAddr(remote, forwarded string, trusted []*net.IPNet) string {
 	host := remoteHost(remote)
 	if len(trusted) == 0 || !trustedIP(host, trusted) {
 		return host
 	}
+	last := host
 	parts := strings.Split(forwarded, ",")
 	for i := len(parts) - 1; i >= 0; i-- {
 		item := strings.TrimSpace(parts[i])
-		if item == "" {
-			continue
-		}
-		ip := net.ParseIP(item)
-		if ip == nil {
-			continue
+		if net.ParseIP(item) == nil {
+			return last
 		}
 		if trustedIP(item, trusted) {
+			last = item
 			continue
 		}
 		return item
 	}
-	return host
+	return last
 }
 
 func trustedIP(raw string, nets []*net.IPNet) bool {
@@ -497,6 +509,10 @@ func ParseTrustedProxies(raw string) ([]*net.IPNet, error) {
 			_, n, err := net.ParseCIDR(part)
 			if err != nil {
 				return nil, err
+			}
+			ones, _ := n.Mask.Size()
+			if ones == 0 {
+				return nil, errors.New("trusted proxy must not match every address")
 			}
 			out = append(out, n)
 			continue

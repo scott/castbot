@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ type harness struct {
 	t    *testing.T
 	srv  *Server
 	st   *store.Store
+	mu   sync.Mutex
 	jar  map[string]*http.Cookie
 	csrf string
 }
@@ -89,16 +91,21 @@ func (h *harness) do(method, path, form, ip string, header map[string]string) (i
 	for k, v := range header {
 		req.Header.Set(k, v)
 	}
+	h.mu.Lock()
 	for _, c := range h.jar {
 		if c.Path != "" && !pathMatch(c.Path, req.URL.Path) {
 			continue
 		}
 		req.AddCookie(c)
 	}
+	h.mu.Unlock()
 	rec := httptest.NewRecorder()
 	h.srv.Handler().ServeHTTP(rec, req)
 	res := rec.Result()
 	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	text := string(raw)
+	h.mu.Lock()
 	for _, c := range res.Cookies() {
 		if c.MaxAge < 0 {
 			delete(h.jar, c.Name)
@@ -106,11 +113,10 @@ func (h *harness) do(method, path, form, ip string, header map[string]string) (i
 		}
 		h.jar[c.Name] = c
 	}
-	raw, _ := io.ReadAll(res.Body)
-	text := string(raw)
 	if tok := tokenFrom(text); tok != "" {
 		h.csrf = tok
 	}
+	h.mu.Unlock()
 	return res.StatusCode, text, res.Header
 }
 
@@ -139,10 +145,19 @@ func tokenFrom(body string) string {
 }
 
 func (h *harness) form(vals url.Values) string {
-	if h.csrf == "" {
+	if vals == nil {
+		vals = url.Values{}
+	}
+	h.mu.Lock()
+	empty := h.csrf == ""
+	h.mu.Unlock()
+	if empty {
 		h.do(http.MethodGet, "/login", "", "203.0.113.10:4000", nil)
 	}
-	vals.Set("csrf", h.csrf)
+	h.mu.Lock()
+	csrf := h.csrf
+	h.mu.Unlock()
+	vals.Set("csrf", csrf)
 	return vals.Encode()
 }
 

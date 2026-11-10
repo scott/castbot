@@ -4,27 +4,43 @@ package host
 
 import (
 	"context"
-	"net/http"
 	"os"
+	"os/signal"
 	"strings"
-	"sync/atomic"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
 
-// TestLiveTiming measures one machine and deletes it.
-// It does not run in CI. go test ./... omits this file.
-// Set DIGITALOCEAN_ACCESS_TOKEN or DIGITALOCEAN_TOKEN, CASTBOT_IMAGE, and
-// CASTBOT_PUBLIC_URL (https) to run it. The harness refuses the demo
-// machines and the leftover probe tag, creates at most two machines, and
-// deletes every machine it creates.
+// TestLiveTiming creates one machine and deletes it.
+//
+// Run it with:
+//
+//	go test -tags live -timeout 45m ./internal/host
+//
+// It refuses a shorter deadline. go test's default timeout is 10 minutes,
+// and a timeout panic does not run t.Cleanup, which would leave the machine
+// running. SIGINT and SIGTERM delete it too. Leftover machines tagged
+// castbot-live are deleted at the start. Demo machines and the castbot-s00
+// tag are refused by GuardDelete.
+//
+// Set CASTBOT_DO_TOKEN, CASTBOT_IMAGE, and an https CASTBOT_PUBLIC_URL.
+// DIGITALOCEAN_ACCESS_TOKEN and DIGITALOCEAN_TOKEN are ignored.
+//
+// This does not measure first-create-to-HTTP-200, resume-to-first-200, or a
+// 30 second idle stream. Those need a deployed control plane that can issue
+// a real agent token and hold an SSE stream. A fake bootstrap cannot get a
+// 200 from castlet, and GET / is not an idle stream. The only timing logged
+// here is create until the machine API reports running.
 func TestLiveTiming(t *testing.T) {
-	token := strings.TrimSpace(os.Getenv("DIGITALOCEAN_ACCESS_TOKEN"))
-	if token == "" {
-		token = strings.TrimSpace(os.Getenv("DIGITALOCEAN_TOKEN"))
+	deadline, ok := t.Deadline()
+	if err := LiveWindow(deadline, ok, time.Now()); err != nil {
+		t.Fatal(err)
 	}
+	token := strings.TrimSpace(os.Getenv("CASTBOT_DO_TOKEN"))
 	if token == "" {
-		t.Skip("no writable machine token")
+		t.Skip("CASTBOT_DO_TOKEN is not set")
 	}
 	image := strings.TrimSpace(os.Getenv("CASTBOT_IMAGE"))
 	publicURL := strings.TrimSpace(os.Getenv("CASTBOT_PUBLIC_URL"))
@@ -46,108 +62,64 @@ func TestLiveTiming(t *testing.T) {
 			protected[vm.ID] = vm
 		}
 	}
+	for _, vm := range LiveLeftovers(before) {
+		if err := client.Delete(ctx, vm.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mu sync.Mutex
+	var created string
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sig
+		mu.Lock()
+		id := created
+		mu.Unlock()
+		_ = safeDelete(client, id)
+		os.Exit(1)
+	}()
+	t.Cleanup(func() {
+		signal.Stop(sig)
+		mu.Lock()
+		id := created
+		created = ""
+		mu.Unlock()
+		if err := safeDelete(client, id); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
+
 	agentID := "s04" + strings.ToLower(time.Now().UTC().Format("150405"))
 	spec := CreateSpec{
 		Name: MachineName(agentID), AgentID: agentID, Image: image,
 		Region: DefaultRegion, CPU: DefaultCPU, MemoryMiB: DefaultMemoryMiB,
-		Idle: 20 * time.Minute, HTTPPort: DefaultHTTPPort, ControlURL: publicURL,
+		Idle: DefaultIdle, HTTPPort: DefaultHTTPPort, ControlURL: publicURL,
 		Bootstrap: "cbt_live_bootstrap_not_logged",
+		Tags:      []string{"castbot-live"},
 	}
 	started := time.Now()
 	vm, err := client.Create(ctx, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if err := safeDelete(client, vm.ID); err != nil {
-			t.Errorf("cleanup: %v", err)
-		}
-	})
-	created := time.Since(started)
-	probeStart := time.Now()
-	// The first HTTP 200 is measured with the machine token only when the
-	// guest does not require an agent token yet. Probe sends both.
-	pctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	err = client.Probe(pctx, vm.Endpoint, spec.Bootstrap)
-	cancel()
-	probed := time.Since(probeStart)
-	t.Logf("create %s probe %s state %s", created.Round(time.Millisecond), probed.Round(time.Millisecond), vm.State)
-	if err != nil {
-		t.Logf("probe did not reach 200: %v", err)
-	}
-
-	// Wait until the API reports paused. Do not call the guest while waiting.
-	deadline := time.Now().Add(25 * time.Minute)
-	var paused Machine
-	for time.Now().Before(deadline) {
-		got, err := client.Status(ctx, vm.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.State == "paused" {
-			paused = got
-			break
-		}
-		time.Sleep(5 * time.Second)
-	}
-	if paused.State != "paused" {
-		t.Fatal("machine did not auto-pause")
-	}
-	resumeStart := time.Now()
-	woke, err := client.Wake(ctx, vm.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("resume api %s state %s", time.Since(resumeStart).Round(time.Millisecond), woke.State)
-
-	idleStart := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(vm.Endpoint, "/")+"/", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-Cast-Authorization", "Bearer "+spec.Bootstrap)
-	idleClient := &http.Client{Timeout: 45 * time.Second}
-	res, err := idleClient.Do(req)
-	if err != nil {
-		t.Logf("idle stream did not open")
-	} else {
-		t.Logf("idle stream status %d", res.StatusCode)
-		defer res.Body.Close()
-		buf := make([]byte, 1024)
-		var reads atomic.Int32
-		readCtx, readCancel := context.WithTimeout(ctx, 30*time.Second)
-		defer readCancel()
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			for {
-				_, rerr := res.Body.Read(buf)
-				reads.Add(1)
-				if rerr != nil {
-					return
-				}
-			}
-		}()
-		select {
-		case <-done:
-			t.Logf("idle connection closed after %s reads %d", time.Since(idleStart).Round(time.Millisecond), reads.Load())
-		case <-readCtx.Done():
-			t.Logf("idle connection still open after 30s reads %d", reads.Load())
-		}
-	}
-
+	mu.Lock()
+	created = vm.ID
+	mu.Unlock()
+	t.Logf("api running after %s state %s", time.Since(started).Round(time.Millisecond), vm.State)
 	if err := safeDelete(client, vm.ID); err != nil {
 		t.Fatal(err)
 	}
-	vm.ID = ""
+	mu.Lock()
+	created = ""
+	mu.Unlock()
+
 	after, err := client.List(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, got := range after {
-		if strings.HasPrefix(got.Name, "castbot-"+agentID) || got.Name == spec.Name {
+		if got.Name == spec.Name || (hasTag(got, "castbot-live") && strings.Contains(got.Name, agentID)) {
 			t.Fatalf("machine still listed %s", got.ID)
 		}
 	}

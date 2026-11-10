@@ -6,13 +6,15 @@ Delete asks for the agent name. A mismatch does not call the host. A match delet
 
 Each account gets a machine cap of 4, stored in `user_quotas`. The slot is reserved in SQLite before the create call. A denial is HTTP 409 and does not call the host. Another user's create, pause, wake, delete, and chat are 404.
 
-`X-Forwarded-For` is used only when the connection address is in `CASTBOT_TRUSTED_PROXIES`. The default trusts the connection address only. A trusted hop walks the header from the right and skips other trusted hops.
+`X-Forwarded-For` is used only when the connection address is in `CASTBOT_TRUSTED_PROXIES`. The default trusts the connection address only. A trusted hop walks the header from the right and skips other trusted hops. An entry that is not an IP stops the walk. `0.0.0.0/0` is refused.
 
-A reload that returns 409 is retried up to six times. castlet rejects an http control plane URL unless the test flag `AllowHTTP` is set. The command leaves that flag false.
+A reload that returns 409 is retried for about 30 seconds, or until the context ends. castlet rejects an http control plane URL unless the test flag `AllowHTTP` is set. The command leaves that flag false. Guest calls require https and a `.microvm.ondigitalocean.com` host unless the test flag `InsecureEdge` is set.
+
+Create runs after the response is sent. A disconnected browser does not cancel it. Startup drops stale pending rows and deletes `castbot`-tagged machines with no row. Demo machines and the `castbot-s00` tag are left alone. Only `CASTBOT_DO_TOKEN` enables the machine host.
 
 ## Live timing
 
-No writable token was in the environment. `TestLiveTiming` (`//go:build live`) is the harness for first create to first HTTP 200, resume after a 20-minute idle auto-pause, and a 30-second idle stream. It was not run. Machines created: 0. Spend: $0. The two paused demo machines were not touched. This slice did not talk to a Cast runtime, so message-id dedupe was not checked. Cast was not changed.
+No `CASTBOT_DO_TOKEN` was in the environment. `TestLiveTiming` (`go test -tags live -timeout 45m ./internal/host`) can create one machine, log API time until running, and delete it. It does not measure first HTTP 200, resume-to-first-200, or a 30-second idle stream. Those need a deployed control plane. It was not run. Machines created: 0. Spend: $0. The two paused demo machines were not touched. This slice did not talk to a Cast runtime, so message-id dedupe was not checked. Cast was not changed.
 
 ## What the tests show
 

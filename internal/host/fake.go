@@ -20,6 +20,10 @@ type Fake struct {
 	CreateErr  error
 	ForceState string
 	Frames     []runtime.Frame
+	// WaitCreate blocks Create until it is closed or the context ends.
+	WaitCreate <-chan struct{}
+	// CreateStarted is signaled when Create begins. Tests use a buffer of 1.
+	CreateStarted chan struct{}
 }
 
 // NewFake returns an empty host.
@@ -47,7 +51,25 @@ func (f *Fake) edge() {
 }
 
 // Create records the spec and returns a running machine.
-func (f *Fake) Create(_ context.Context, spec CreateSpec) (Machine, error) {
+func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
+	f.mu.Lock()
+	wait := f.WaitCreate
+	started := f.CreateStarted
+	f.mu.Unlock()
+	if started != nil {
+		select {
+		case started <- struct{}{}:
+		case <-ctx.Done():
+			return Machine{}, ctx.Err()
+		}
+	}
+	if wait != nil {
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return Machine{}, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, "create")
@@ -170,6 +192,17 @@ func (f *Fake) Reload(context.Context, string, string) error {
 	f.edge()
 	f.note("reload")
 	return nil
+}
+
+// List returns the machines this fake currently holds.
+func (f *Fake) List(context.Context) ([]Machine, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]Machine, 0, len(f.Machines))
+	for _, m := range f.Machines {
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 // Snapshot copies the call list.

@@ -59,6 +59,18 @@ var (
 	errRunLimit  = errors.New("run time limit")
 )
 
+// Notice is a run failure shown as written. It is not retried.
+type Notice struct {
+	Text string
+}
+
+func (n *Notice) Error() string {
+	if n == nil {
+		return ""
+	}
+	return n.Text
+}
+
 // Job is one reply to stream.
 // MessageID is the stored user message. Retries send the same id so the
 // runtime session keeps that user turn once.
@@ -264,6 +276,11 @@ func (r *Runner) execute(job Job) {
 			cancel()
 			if r.ctx.Err() != nil || time.Since(started) >= r.runLimit() {
 				r.fail(job, Interrupted, offset)
+				return
+			}
+			var note *Notice
+			if errors.As(err, &note) && note.Text != "" {
+				r.fail(job, note.Text, offset)
 				return
 			}
 			if !transient(err) {
