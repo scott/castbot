@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS agents (
   idle_timeout INTEGER NOT NULL DEFAULT 300,
   size TEXT NOT NULL DEFAULT '1:2048',
   position INTEGER NOT NULL DEFAULT 0,
+  cli_slug TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   deleted_at TEXT
 );
@@ -123,9 +124,10 @@ CREATE TABLE IF NOT EXISTS threads (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('dm', 'group', 'routine')),
+  kind TEXT NOT NULL CHECK (kind IN ('dm', 'group', 'routine', 'cli')),
   agent_id TEXT,
   title TEXT NOT NULL DEFAULT '',
+  cast_session_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 
@@ -138,6 +140,8 @@ CREATE TABLE IF NOT EXISTS messages (
   author_id TEXT NOT NULL,
   body_md TEXT NOT NULL,
   run_id TEXT,
+  origin TEXT NOT NULL DEFAULT 'web',
+  journal_seq INTEGER,
   created_at TEXT NOT NULL
 );
 
@@ -254,6 +258,55 @@ CREATE TABLE IF NOT EXISTS agent_avatars (
 
 CREATE INDEX IF NOT EXISTS idx_avatars_user ON agent_avatars(user_id, agent_id);
 
+-- CLI tokens are hashes only. The raw value is shown once and never stored.
+CREATE TABLE IF NOT EXISTS cli_tokens (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('agent_direct', 'relay')),
+  token_hash TEXT NOT NULL UNIQUE,
+  prefix TEXT NOT NULL,
+  scopes TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  expires_at TEXT,
+  last_used_at TEXT,
+  revoked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_cli_tokens_user ON cli_tokens(user_id, agent_id);
+
+-- Journal rows are idempotent on (agent_vm_id, seq).
+CREATE TABLE IF NOT EXISTS journal_entries (
+  agent_vm_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  session_id TEXT NOT NULL DEFAULT '',
+  caller TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  tool TEXT NOT NULL DEFAULT '',
+  request_id TEXT NOT NULL DEFAULT '',
+  decision TEXT NOT NULL DEFAULT '',
+  incomplete INTEGER NOT NULL DEFAULT 0,
+  at TEXT NOT NULL,
+  message_id TEXT NOT NULL DEFAULT '',
+  stream_id TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (agent_vm_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_user ON journal_entries(user_id, agent_id, seq);
+
+CREATE TABLE IF NOT EXISTS turn_journal_cursor (
+  agent_vm_id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  last_seq INTEGER NOT NULL,
+  synced_at TEXT NOT NULL
+);
+
 -- Import drafts hold the keys the form does not own between review and save.
 -- The form posts the id, never the document.
 CREATE TABLE IF NOT EXISTS import_drafts (
@@ -305,6 +358,33 @@ func (s *Store) migrate() error {
 	if err := s.allowRetried(); err != nil {
 		return err
 	}
+	if err := s.allowCLIThread(); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("messages", "origin", `ALTER TABLE messages ADD COLUMN origin TEXT NOT NULL DEFAULT 'web'`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("messages", "journal_seq", `ALTER TABLE messages ADD COLUMN journal_seq INTEGER`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("journal_entries", "message_id", `ALTER TABLE journal_entries ADD COLUMN message_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("journal_entries", "stream_id", `ALTER TABLE journal_entries ADD COLUMN stream_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agents", "cli_slug", `ALTER TABLE agents ADD COLUMN cli_slug TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_cli_slug ON agents(user_id, cli_slug) WHERE cli_slug != '' AND deleted_at IS NULL`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_journal ON messages(thread_id, journal_seq) WHERE journal_seq IS NOT NULL`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_threads_cli_session ON threads(user_id, agent_id, cast_session_id) WHERE kind = 'cli' AND cast_session_id != ''`); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(`INSERT INTO user_quotas(user_id, workspace_id, max_agents)
 SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_quotas)`, DefaultMaxAgents); err != nil {
 		return err
@@ -312,7 +392,7 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.ensureInstance(); err != nil {
 		return err
 	}
-	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10} {
+	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11} {
 		if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING`, version); err != nil {
 			return err
 		}
@@ -365,6 +445,96 @@ SELECT id, workspace_id, thread_id, agent_id, user_id, routine_run_id, status, s
 		return err
 	}
 	return tx.Commit()
+}
+
+// allowCLIThread rebuilds threads when an older file still rejects kind cli.
+// SQLite cannot alter a check. New databases already include the kind.
+// The rebuild drops threads and renames the replacement in one transaction.
+// Take a backup before opening a database that still rejects kind cli.
+func (s *Store) allowCLIThread() error {
+	var ddl string
+	err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'threads'`).Scan(&ddl)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(ddl, "'cli'") {
+		if err := s.ensureColumn("threads", "cast_session_id", `ALTER TABLE threads ADD COLUMN cast_session_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+		return s.fixThreadsUserIndex()
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`CREATE TABLE threads_v11 (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('dm', 'group', 'routine', 'cli')),
+  agent_id TEXT,
+  title TEXT NOT NULL DEFAULT '',
+  cast_session_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO threads_v11(id, workspace_id, user_id, kind, agent_id, title, cast_session_id, created_at)
+SELECT id, workspace_id, user_id, kind, agent_id, title, '', created_at FROM threads`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DROP TABLE threads`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE threads_v11 RENAME TO threads`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE INDEX idx_threads_user ON threads(user_id, agent_id)`); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.fixThreadsUserIndex()
+}
+
+// fixThreadsUserIndex makes idx_threads_user match a fresh database.
+// CREATE INDEX IF NOT EXISTS leaves an older (user_id, created_at) index in place
+// because the name already exists.
+func (s *Store) fixThreadsUserIndex() error {
+	cols, err := s.indexColumns("idx_threads_user")
+	if err != nil {
+		return err
+	}
+	if len(cols) == 2 && cols[0] == "user_id" && cols[1] == "agent_id" {
+		return nil
+	}
+	if len(cols) > 0 {
+		if _, err := s.db.Exec(`DROP INDEX idx_threads_user`); err != nil {
+			return err
+		}
+	}
+	_, err = s.db.Exec(`CREATE INDEX idx_threads_user ON threads(user_id, agent_id)`)
+	return err
+}
+
+func (s *Store) indexColumns(name string) ([]string, error) {
+	rows, err := s.db.Query(`PRAGMA index_info(` + name + `)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cols []string
+	for rows.Next() {
+		var seqno, cid int
+		var col string
+		if err := rows.Scan(&seqno, &cid, &col); err != nil {
+			return nil, err
+		}
+		cols = append(cols, col)
+	}
+	return cols, rows.Err()
 }
 
 func (s *Store) ensureColumn(table, column, alter string) error {

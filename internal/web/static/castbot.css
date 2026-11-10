@@ -826,6 +826,14 @@ textarea.ph::placeholder { color: var(--tx3); }
   .comp .btn { order: 3; flex: none; }
 }
 .machine { display: grid; gap: 14px; max-width: 560px; }
+.cli-box { display: grid; gap: 8px; min-width: 0; }
+.cli-blob { font: 12.5px/1.55 var(--mono); background: var(--con-bg); color: var(--con-tx); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; overflow-x: hidden; max-width: 100%; }
+.tok { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); min-width: 0; }
+.tok .meta { color: var(--tx3); font-size: 12.5px; }
+.m-note { margin: 8px 0; padding: 10px 12px; border-radius: 10px; background: var(--raise); color: var(--tx2); font-size: 13.5px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.thread-switch { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 16px 0; min-width: 0; }
+.thread-switch a { font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--tx2); text-decoration: none; }
+.thread-switch a.on { color: var(--tx); border-color: var(--acc); }
 .machine h2 { margin: 0; font: 650 22px/1.2 var(--hd); }
 .machine-del { display: grid; gap: 8px; }
 .machine .chip { justify-self: start; }

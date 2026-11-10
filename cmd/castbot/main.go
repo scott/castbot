@@ -66,6 +66,20 @@ func serve(args []string) {
 	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	app.SweepMachines(sweepCtx)
 	sweepCancel()
+	go func() {
+		tick := time.NewTicker(time.Hour)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				_, _ = st.SweepExpiredDrafts(cctx)
+				cancel()
+			}
+		}
+	}()
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           app.Handler(),

@@ -37,6 +37,16 @@ type msgView struct {
 	ShowDay                                     bool
 }
 
+type threadView struct {
+	Title, Href string
+	On          bool
+}
+
+type cliTokView struct {
+	ID, Prefix, Created, LastUsed, Status string
+	Revoked                               bool
+}
+
 type liveView struct {
 	RunID, Color, Letter, Text, Error, CSRF string
 	Failed                                  bool
@@ -91,6 +101,12 @@ type page struct {
 	FormError  string
 	AgentForm  agentForm
 	Machine    machineView
+	CLIBlob    string
+	CLINote    string
+	CLIName    string
+	CLITokens  []cliTokView
+	Threads    []threadView
+	ThreadID   string
 	Text       string
 	RoleLine   string
 	PasswordOn string
@@ -282,6 +298,14 @@ func monthDay(stamp string, loc *time.Location) string {
 		return ""
 	}
 	return t.Format("Jan 2")
+}
+
+func clockStamp(stamp string, loc *time.Location) string {
+	t, ok := inZone(stamp, loc)
+	if !ok {
+		return ""
+	}
+	return t.Format("Jan 2, 3:04 PM")
 }
 
 func clockLabel(stamp string, loc *time.Location) string {

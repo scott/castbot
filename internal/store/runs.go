@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 )
 
@@ -178,13 +179,44 @@ func (s *Store) FinishRun(ctx context.Context, userID, runID, body string, offse
 		return Message{}, RunEvent{}, err
 	}
 	defer tx.Rollback()
-	msgID, err := newID()
-	if err != nil {
+	stamp := s.stamp(s.Now())
+	var msgID string
+	err = tx.QueryRowContext(ctx, `SELECT m.id FROM messages m
+JOIN journal_entries j ON j.user_id = m.user_id AND j.agent_id = ? AND j.seq = m.journal_seq AND j.kind = 'reply' AND j.stream_id = ?
+WHERE m.user_id = ? AND m.thread_id = ? AND m.author_kind = 'agent' AND m.journal_seq IS NOT NULL AND m.run_id IS NULL
+ORDER BY m.journal_seq LIMIT 1`,
+		run.AgentID, run.ID, userID, run.ThreadID).Scan(&msgID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Message{}, RunEvent{}, err
 	}
-	stamp := s.stamp(s.Now())
-	if _, err := tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, run_id, created_at) VALUES (?, ?, ?, ?, 'agent', ?, ?, ?, ?)`,
-		msgID, run.WorkspaceID, userID, run.ThreadID, run.AgentID, body, runID, stamp); err != nil {
+	if msgID != "" {
+		res, err := tx.ExecContext(ctx, `UPDATE messages SET run_id = ? WHERE id = ? AND user_id = ? AND run_id IS NULL`, runID, msgID, userID)
+		if err != nil {
+			return Message{}, RunEvent{}, err
+		}
+		if err := rowsAffected(res); err != nil {
+			return Message{}, RunEvent{}, err
+		}
+	} else {
+		msgID, err = newID()
+		if err != nil {
+			return Message{}, RunEvent{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, run_id, created_at) VALUES (?, ?, ?, ?, 'agent', ?, ?, ?, ?)`,
+			msgID, run.WorkspaceID, userID, run.ThreadID, run.AgentID, body, runID, stamp); err != nil {
+			return Message{}, RunEvent{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = (
+  SELECT j.seq FROM journal_entries j
+  WHERE j.user_id = ? AND j.agent_id = ? AND j.kind = 'reply' AND j.stream_id = ?
+    AND NOT EXISTS (SELECT 1 FROM messages other WHERE other.user_id = j.user_id AND other.thread_id = ? AND other.journal_seq = j.seq)
+  ORDER BY j.seq LIMIT 1
+) WHERE id = ? AND user_id = ? AND journal_seq IS NULL AND EXISTS (
+  SELECT 1 FROM journal_entries j
+  WHERE j.user_id = ? AND j.agent_id = ? AND j.kind = 'reply' AND j.stream_id = ?
+    AND NOT EXISTS (SELECT 1 FROM messages other WHERE other.user_id = j.user_id AND other.thread_id = ? AND other.journal_seq = j.seq)
+)`, userID, run.AgentID, run.ID, run.ThreadID, msgID, userID, userID, run.AgentID, run.ID, run.ThreadID); err != nil {
 		return Message{}, RunEvent{}, err
 	}
 	var seq int

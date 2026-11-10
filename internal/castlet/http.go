@@ -3,6 +3,7 @@ package castlet
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -19,7 +20,14 @@ import (
 )
 
 func (s *Supervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !s.authorize(w, r) {
+	s.observeClock()
+	caller, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	r = r.WithContext(context.WithValue(r.Context(), callerKey{}, caller))
+	if strings.HasPrefix(r.URL.Path, "/castlet/") && caller != "control_plane" {
+		http.NotFound(w, r)
 		return
 	}
 	switch {
@@ -37,6 +45,10 @@ func (s *Supervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.listFiles(w, r)
 	case strings.HasPrefix(r.URL.Path, "/castlet/files/") && (r.Method == http.MethodGet || r.Method == http.MethodPut):
 		s.file(w, r)
+	case r.URL.Path == "/castlet/journal" && r.Method == http.MethodGet:
+		s.serveJournal(w, r)
+	case r.URL.Path == "/castlet/cli-tokens" && r.Method == http.MethodPost:
+		s.serveCLITokens(w, r)
 	case r.URL.Path == "/.well-known/agent.json" && r.Method == http.MethodGet:
 		s.proxy(w, r)
 	case (r.URL.Path == "/" || r.URL.Path == "") && r.Method == http.MethodPost:
@@ -46,17 +58,33 @@ func (s *Supervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Supervisor) authorize(w http.ResponseWriter, r *http.Request) bool {
+func (s *Supervisor) authorize(w http.ResponseWriter, r *http.Request) (string, bool) {
 	got := bearer(r.Header.Get("X-Cast-Authorization"))
+	if got == "" {
+		got = bearer(r.Header.Get("Authorization"))
+	}
 	s.mu.Lock()
 	want := s.token
 	s.mu.Unlock()
-	if want == "" || !hashEq(got, want) {
-		w.Header().Set("Cache-Control", "no-store")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return false
+	if want != "" && hashEq(got, want) {
+		return "control_plane", true
 	}
-	return true
+	if got != "" && s.cfg.ControlURL != "" {
+		if !s.refreshCLITokens(r.Context()) {
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return "", false
+		}
+	}
+	if got != "" {
+		if id, revoked := s.matchCLI(got); id != "" && !revoked {
+			s.noteCLIUse(r.Context(), id)
+			return "cli:" + id, true
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+	return "", false
 }
 
 func bearer(h string) string {
@@ -123,6 +151,35 @@ func (s *Supervisor) proxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too large", http.StatusRequestEntityTooLarge)
 		return
 	}
+	caller := callerOf(r)
+	rpc := parseRPC(body)
+	text := messageText(rpc)
+	session := rpc.Params.Metadata.SessionID
+	var wrote bool
+	if rpc.Method == "message/send" && strings.TrimSpace(text) != "" {
+		if _, err := s.appendJournal(journalEntry{
+			SessionID: session, Caller: caller, Kind: "request", Text: text,
+			MessageID: rpc.Params.Message.MessageID, StreamID: rpc.Params.Metadata.StreamID,
+		}); err == nil {
+			wrote = true
+		}
+	}
+	if rpc.Method == "permission/respond" {
+		decision := "recorded"
+		if rpc.Params.Approved != nil {
+			if *rpc.Params.Approved {
+				decision = "approved"
+			} else {
+				decision = "denied"
+			}
+		}
+		if session == "" {
+			session = s.sessionForPerm(rpc.Params.ID)
+		}
+		if _, err := s.appendJournal(journalEntry{SessionID: session, Caller: caller, Kind: "decision", RequestID: rpc.Params.ID, Decision: decision}); err == nil {
+			wrote = true
+		}
+	}
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, s.cfg.RuntimeURL+r.URL.RequestURI(), bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, "bad gateway", http.StatusBadGateway)
@@ -134,11 +191,20 @@ func (s *Supervisor) proxy(w http.ResponseWriter, r *http.Request) {
 	if accept := r.Header.Get("Accept"); accept != "" {
 		req.Header.Set("Accept", accept)
 	}
-	if auth := r.Header.Get("X-Cast-Authorization"); auth != "" {
-		req.Header.Set("X-Cast-Authorization", auth)
+	s.mu.Lock()
+	token := s.token
+	s.mu.Unlock()
+	if token != "" {
+		req.Header.Set("X-Cast-Authorization", "Bearer "+token)
 	}
 	res, err := s.proxyClient.Do(req)
 	if err != nil {
+		if wrote && rpc.Method == "message/send" {
+			_, _ = s.appendJournal(journalEntry{SessionID: session, Caller: caller, Kind: "reply", Incomplete: true})
+		}
+		if wrote && strings.HasPrefix(caller, "cli:") {
+			s.pushJournal(r.Context())
+		}
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		return
 	}
@@ -150,20 +216,46 @@ func (s *Supervisor) proxy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(res.StatusCode)
 	flusher, _ := w.(http.Flusher)
+	var cap turnCapture
 	buf := make([]byte, 1024)
 	for {
 		n, rerr := res.Body.Read(buf)
 		if n > 0 {
+			cap.feed(buf[:n])
 			if _, err := w.Write(buf[:n]); err != nil {
-				return
+				break
 			}
 			if flusher != nil {
 				flusher.Flush()
 			}
 		}
 		if rerr != nil {
-			return
+			break
 		}
+	}
+	cap.finish()
+	if rpc.Method == "message/send" && strings.TrimSpace(text) != "" {
+		for _, perm := range cap.perms {
+			perm.SessionID = session
+			perm.Caller = caller
+			if _, err := s.appendJournal(perm); err == nil {
+				wrote = true
+			}
+		}
+		reply := cap.text.String()
+		streamed := strings.Contains(res.Header.Get("Content-Type"), "event-stream")
+		incomplete := res.StatusCode >= 400 || (streamed && !cap.sawDone)
+		if strings.TrimSpace(reply) != "" || incomplete {
+			if _, err := s.appendJournal(journalEntry{
+				SessionID: session, Caller: caller, Kind: "reply", Text: reply, Incomplete: incomplete,
+				MessageID: rpc.Params.Message.MessageID, StreamID: rpc.Params.Metadata.StreamID,
+			}); err == nil {
+				wrote = true
+			}
+		}
+	}
+	if wrote && strings.HasPrefix(caller, "cli:") {
+		s.pushJournal(r.Context())
 	}
 }
 

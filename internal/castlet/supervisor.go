@@ -60,16 +60,33 @@ type Supervisor struct {
 	proxyClient *http.Client
 	logs        *ring
 
-	mu       sync.Mutex
-	reloadMu sync.Mutex
-	token    string
-	ready    bool
-	version  string
-	sha      string
-	secrets  []secret
-	proc     *exec.Cmd
-	procDone chan struct{}
-	bootErr  string
+	mu           sync.Mutex
+	reloadMu     sync.Mutex
+	journalMu    sync.Mutex
+	cliMu        sync.Mutex
+	cliTokens    []cliToken
+	cliLoaded    bool
+	cliWall      time.Time
+	cliMono      time.Duration
+	cliMonoSet   bool
+	wallNow      func() time.Time
+	monoNow      func() time.Duration
+	clockWall    time.Time
+	clockMono    time.Duration
+	clockInit    bool
+	journalReady bool
+	journalNext  int
+	journalEnd   int64
+	journalOff   map[int]int64
+	permSession  map[string]string
+	token        string
+	ready        bool
+	version      string
+	sha          string
+	secrets      []secret
+	proc         *exec.Cmd
+	procDone     chan struct{}
+	bootErr      string
 }
 
 var errReloadBusy = errors.New("reload in progress")
@@ -159,7 +176,15 @@ func (s *Supervisor) Boot(ctx context.Context) error {
 		s.setBootErr("runtime")
 		return err
 	}
+	s.refreshCLITokens(ctx)
 	return nil
+}
+
+// MarkReady lets a test proxy without pulling a bundle.
+func (s *Supervisor) MarkReady() {
+	s.mu.Lock()
+	s.ready = true
+	s.mu.Unlock()
 }
 
 // Close stops the runtime process.
@@ -506,6 +531,7 @@ func (s *Supervisor) reload(ctx context.Context) error {
 		s.setBootErr("runtime")
 		return err
 	}
+	s.refreshCLITokens(ctx)
 	return nil
 }
 

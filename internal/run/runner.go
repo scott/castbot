@@ -81,6 +81,7 @@ type Job struct {
 	RunID     string
 	MessageID string
 	Text      string
+	SessionID string
 	History   []runtime.Turn
 }
 
@@ -254,8 +255,12 @@ func (r *Runner) execute(job Job) {
 		}
 		remain := r.runLimit() - time.Since(started)
 		ctx, cancel := context.WithTimeout(r.ctx, remain)
+		sessionID := job.ThreadID
+		if job.SessionID != "" {
+			sessionID = job.SessionID
+		}
 		send := runtime.Send{
-			SessionID: job.ThreadID,
+			SessionID: sessionID,
 			StreamID:  job.RunID,
 			MessageID: job.MessageID,
 			Offset:    offset,

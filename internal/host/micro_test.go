@@ -394,6 +394,10 @@ func (a *scriptAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		step := a.urlAt(a.getN)
 		a.getN++
+		if state == "404" {
+			http.Error(w, "MicroVM not found", http.StatusNotFound)
+			return
+		}
 		writeVM(w, http.StatusOK, "vm-1", state, a.reason, step)
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pause"):
 		writeVM(w, http.StatusOK, "vm-1", "paused", "", urlStep{Hostname: "vm-1.example.test"})
@@ -404,6 +408,23 @@ func (a *scriptAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+func TestWaitGoneAcceptsTerminatingThen404(t *testing.T) {
+	api := newScriptAPI(t, "secret")
+	api.gets = []string{"terminating", "terminating", "404"}
+	m := newTestClient(t, api, "test-token")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := m.WaitGone(ctx, "vm-1"); err != nil {
+		t.Fatal(err)
+	}
+	api.mu.Lock()
+	n := api.getN
+	api.mu.Unlock()
+	if n < 3 {
+		t.Fatalf("polls %d", n)
 	}
 }
 

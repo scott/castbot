@@ -400,8 +400,11 @@ func loadMatchingRefs(ctx context.Context, client *http.Client, api string, repo
 		if res.StatusCode == http.StatusNotFound {
 			continue
 		}
+		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+			return nil, errPrivate
+		}
 		if res.StatusCode != http.StatusOK {
-			return nil, errors.New("a branch name with a slash needs ?ref=")
+			return nil, errors.New("repository archive is unavailable")
 		}
 		var list []struct {
 			Ref string `json:"ref"`

@@ -21,6 +21,10 @@ func (e *DuplicateKeyError) Error() string { return "duplicate key " + e.Key }
 // ErrTooLarge means the keys kept beside the form are over the cap.
 var ErrTooLarge = errors.New("agent file is too large")
 
+// ErrAlias means the file uses a YAML alias or merge key.
+// Aliases can point at a node that scrubbing removed, and the save would fail.
+var ErrAlias = errors.New("yaml aliases are not allowed")
+
 // Spec is the agent form. It is the subset of agent.yaml the runtime reads
 // plus the instructions body. Kept is the rest of the document, with secret
 // values removed, so a save does not drop keys the form does not edit.
@@ -49,6 +53,9 @@ type KeptItem struct {
 func ParseYAML(text string) (Spec, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
+		return Spec{}, err
+	}
+	if err := rejectAliases(&doc); err != nil {
 		return Spec{}, err
 	}
 	if err := rejectDuplicates(&doc, ""); err != nil {
@@ -120,9 +127,13 @@ func RenderYAML(spec Spec) ([]byte, error) {
 		if err := yaml.Unmarshal(spec.Kept, &doc); err != nil {
 			return nil, err
 		}
+		if err := rejectAliases(&doc); err != nil {
+			return nil, err
+		}
 		if err := rejectDuplicates(&doc, ""); err != nil {
 			return nil, err
 		}
+		dropAliases(&doc)
 	}
 	root := ensureMapping(&doc)
 	scrubNode(root, "", nil)
@@ -215,7 +226,71 @@ func SummarizeKept(raw []byte) []KeptItem {
 			out = append(out, mcpItems(mcp)...)
 		}
 	}
+	shown := map[string]bool{"skills": true, "runtime": true, "tools": true}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key := strings.TrimSpace(root.Content[i].Value)
+		if key == "" || shown[key] || secretKey(key) {
+			continue
+		}
+		val := root.Content[i+1]
+		if key == "brain" {
+			out = append(out, brainLeftovers(val)...)
+			continue
+		}
+		if text := keptValue(val); text != "" {
+			out = append(out, KeptItem{Label: labelize(key), Value: text})
+		}
+	}
 	return out
+}
+
+func brainLeftovers(n *yaml.Node) []KeptItem {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	var out []KeptItem
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		key := strings.TrimSpace(n.Content[i].Value)
+		if key == "" || key == "model" || key == "instructions_file" || secretKey(key) {
+			continue
+		}
+		if text := keptValue(n.Content[i+1]); text != "" {
+			out = append(out, KeptItem{Label: "Brain " + key, Value: text})
+		}
+	}
+	return out
+}
+
+func keptValue(n *yaml.Node) string {
+	if n == nil {
+		return ""
+	}
+	switch n.Kind {
+	case yaml.ScalarNode:
+		return clip(strings.TrimSpace(n.Value))
+	case yaml.MappingNode:
+		var parts []string
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			key := strings.TrimSpace(n.Content[i].Value)
+			if key == "" || secretKey(key) || n.Content[i+1].Kind != yaml.ScalarNode {
+				continue
+			}
+			parts = append(parts, key+" "+strings.TrimSpace(n.Content[i+1].Value))
+		}
+		if len(parts) == 0 {
+			return "set"
+		}
+		return clip(strings.Join(parts, ", "))
+	default:
+		return "set"
+	}
+}
+
+func labelize(key string) string {
+	if key == "" {
+		return key
+	}
+	return strings.ToUpper(key[:1]) + key[1:]
 }
 
 func skillNames(n *yaml.Node) []string {
@@ -355,12 +430,78 @@ func rejectDuplicates(n *yaml.Node, path string) error {
 func secretKey(key string) bool {
 	k := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
 	switch k {
+	case "max_tokens", "max_output_tokens", "max_input_tokens",
+		"max_completion_tokens", "max_new_tokens",
+		"prompt_tokens", "completion_tokens", "input_tokens", "output_tokens",
+		"total_tokens", "sort_key":
+		return false
 	case "env", "headers", "token", "secret", "password", "api_key", "apikey",
 		"access_token", "refresh_token", "authorization", "private_key",
 		"client_secret", "credentials", "auth_token", "secret_key":
 		return true
 	default:
+		if strings.Contains(k, "token") || strings.Contains(k, "secret") ||
+			strings.Contains(k, "password") || strings.Contains(k, "passwd") ||
+			strings.Contains(k, "api_key") || strings.Contains(k, "apikey") ||
+			strings.Contains(k, "credential") || strings.HasSuffix(k, "_key") {
+			return true
+		}
 		return false
+	}
+}
+
+func rejectAliases(n *yaml.Node) error {
+	if n == nil {
+		return nil
+	}
+	if n.Kind == yaml.AliasNode || n.Alias != nil {
+		return ErrAlias
+	}
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if strings.TrimSpace(n.Content[i].Value) == "<<" {
+				return ErrAlias
+			}
+			if err := rejectAliases(n.Content[i+1]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, child := range n.Content {
+		if err := rejectAliases(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func dropAliases(n *yaml.Node) {
+	if n == nil {
+		return
+	}
+	if n.Kind == yaml.AliasNode || n.Alias != nil {
+		n.Kind = yaml.ScalarNode
+		n.Alias = nil
+		n.Value = ""
+		n.Tag = "!!str"
+		n.Content = nil
+		return
+	}
+	if n.Kind == yaml.MappingNode {
+		next := n.Content[:0]
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if strings.TrimSpace(n.Content[i].Value) == "<<" || n.Content[i+1].Kind == yaml.AliasNode || n.Content[i+1].Alias != nil {
+				continue
+			}
+			dropAliases(n.Content[i+1])
+			next = append(next, n.Content[i], n.Content[i+1])
+		}
+		n.Content = next
+		return
+	}
+	for _, child := range n.Content {
+		dropAliases(child)
 	}
 }
 
