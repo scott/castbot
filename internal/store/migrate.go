@@ -1,6 +1,9 @@
 package store
 
-import "database/sql"
+import (
+	"database/sql"
+	"strings"
+)
 
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -150,7 +153,7 @@ CREATE TABLE IF NOT EXISTS runs (
   agent_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   routine_run_id TEXT,
-  status TEXT NOT NULL CHECK (status IN ('queued', 'streaming', 'waiting_approval', 'done', 'failed', 'stopped')),
+  status TEXT NOT NULL CHECK (status IN ('queued', 'streaming', 'waiting_approval', 'done', 'failed', 'stopped', 'retried')),
   stream_offset INTEGER NOT NULL DEFAULT 0,
   started_at TEXT NOT NULL,
   finished_at TEXT,
@@ -179,14 +182,62 @@ func (s *Store) migrate() error {
 	if err := s.ensureColumn("credentials", "last_step", `ALTER TABLE credentials ADD COLUMN last_step INTEGER`); err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (1) ON CONFLICT(version) DO NOTHING`); err != nil {
+	if err := s.allowRetried(); err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (2) ON CONFLICT(version) DO NOTHING`); err != nil {
+	for _, version := range []int{1, 2, 3, 4} {
+		if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING`, version); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// allowRetried rebuilds runs when an older file still has the status check
+// from before retry claimed a failed row. SQLite cannot alter a check.
+func (s *Store) allowRetried() error {
+	var ddl string
+	err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runs'`).Scan(&ddl)
+	if err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (3) ON CONFLICT(version) DO NOTHING`)
-	return err
+	if strings.Contains(ddl, "'retried'") {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`CREATE TABLE runs_v4 (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  routine_run_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'streaming', 'waiting_approval', 'done', 'failed', 'stopped', 'retried')),
+  stream_offset INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  error TEXT NOT NULL DEFAULT ''
+)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO runs_v4(id, workspace_id, thread_id, agent_id, user_id, routine_run_id, status, stream_offset, started_at, finished_at, error)
+SELECT id, workspace_id, thread_id, agent_id, user_id, routine_run_id, status, stream_offset, started_at, finished_at, error FROM runs`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DROP TABLE runs`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE runs_v4 RENAME TO runs`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id, thread_id, started_at)`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ensureColumn(table, column, alter string) error {

@@ -143,7 +143,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	s.runs.Start(runJob(user.ID, threads[0].ID, agent.ID, run.ID, msg.Body))
+	s.runs.Start(runJob(user.ID, threads[0].ID, agent.ID, run.ID, msg.Body, s.priorTurns(r.Context(), user.ID, threads[0].ID, msg.ID)))
 	if r.Header.Get("HX-Request") == "true" {
 		av := presentAgent(agent, true, userLocation(user.Timezone))
 		loc := userLocation(user.Timezone)

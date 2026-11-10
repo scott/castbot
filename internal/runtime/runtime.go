@@ -15,14 +15,31 @@ import (
 	"strings"
 )
 
+// Turn is one saved transcript entry. Cast reads role and text.
+type Turn struct {
+	Role string
+	Text string
+}
+
 // Send is one message/send, or a resume of one.
 // Offset is the count of data events already consumed. Keepalive comments
 // do not count. SessionID is the thread id and StreamID is the run id.
+// History is the earlier transcript and is sent only on the first open.
 type Send struct {
 	SessionID string
 	StreamID  string
 	Offset    int
 	Text      string
+	History   []Turn
+}
+
+// StatusError is a non-200 response from the runtime.
+type StatusError struct {
+	Code int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("runtime status %d", e.Code)
 }
 
 // Frame is one SSE event from the runtime.
@@ -65,6 +82,18 @@ func NewHTTP(base string) *HTTPClient {
 
 // Open posts message/send with Accept: text/event-stream.
 func (c *HTTPClient) Open(ctx context.Context, req Send) (Stream, error) {
+	meta := map[string]any{
+		"sessionId":    req.SessionID,
+		"streamId":     req.StreamID,
+		"streamOffset": req.Offset,
+	}
+	if req.Offset == 0 && len(req.History) > 0 {
+		turns := make([]map[string]string, 0, len(req.History))
+		for _, turn := range req.History {
+			turns = append(turns, map[string]string{"role": turn.Role, "text": turn.Text})
+		}
+		meta["history"] = turns
+	}
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      req.StreamID + ":" + strconv.Itoa(req.Offset),
@@ -75,11 +104,7 @@ func (c *HTTPClient) Open(ctx context.Context, req Send) (Stream, error) {
 				"messageId": req.StreamID,
 				"parts":     []map[string]string{{"kind": "text", "text": req.Text}},
 			},
-			"metadata": map[string]any{
-				"sessionId":    req.SessionID,
-				"streamId":     req.StreamID,
-				"streamOffset": req.Offset,
-			},
+			"metadata": meta,
 		},
 	})
 	if err != nil {
@@ -97,7 +122,7 @@ func (c *HTTPClient) Open(ctx context.Context, req Send) (Stream, error) {
 	}
 	if res.StatusCode != http.StatusOK {
 		res.Body.Close()
-		return nil, fmt.Errorf("runtime status %d", res.StatusCode)
+		return nil, &StatusError{Code: res.StatusCode}
 	}
 	return &httpStream{body: res.Body, reader: bufio.NewReader(res.Body)}, nil
 }

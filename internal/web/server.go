@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
@@ -45,6 +46,7 @@ type Server struct {
 	key    []byte
 	runs   *run.Runner
 	cancel context.CancelFunc
+	ka     time.Duration
 }
 
 // New builds a server. key is the 32-byte session key.
@@ -54,11 +56,34 @@ func New(st *store.Store, key []byte, client runtime.Client) *Server {
 	return &Server{store: st, key: key, runs: run.New(ctx, st, client), cancel: cancel}
 }
 
-// Close stops run goroutines started by this server.
+// Close cancels run goroutines and waits until they record an outcome.
 func (s *Server) Close() {
 	if s.cancel != nil {
 		s.cancel()
+		s.cancel = nil
 	}
+	if s.runs != nil {
+		s.runs.Wait(3 * time.Second)
+	}
+}
+
+// SetRetryBudget shortens how long a run waits on a refused runtime.
+func (s *Server) SetRetryBudget(d time.Duration) {
+	if s.runs != nil {
+		s.runs.SetBudget(d)
+	}
+}
+
+// SetKeepalive changes how often the event stream writes a comment.
+func (s *Server) SetKeepalive(d time.Duration) {
+	s.ka = d
+}
+
+func (s *Server) keepaliveEvery() time.Duration {
+	if s.ka > 0 {
+		return s.ka
+	}
+	return 15 * time.Second
 }
 
 // Handler is the application router with security headers.

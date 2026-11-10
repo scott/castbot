@@ -11,11 +11,27 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/run"
+	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
 )
 
-func runJob(userID, threadID, agentID, runID, text string) run.Job {
-	return run.Job{UserID: userID, ThreadID: threadID, AgentID: agentID, RunID: runID, Text: text}
+func runJob(userID, threadID, agentID, runID, text string, history []runtime.Turn) run.Job {
+	return run.Job{UserID: userID, ThreadID: threadID, AgentID: agentID, RunID: runID, Text: text, History: history}
+}
+
+func (s *Server) priorTurns(ctx context.Context, userID, threadID, skip string) []runtime.Turn {
+	msgs, err := s.store.ListMessages(ctx, userID, threadID)
+	if err != nil {
+		return nil
+	}
+	var out []runtime.Turn
+	for _, msg := range msgs {
+		if msg.ID == skip || (msg.AuthorKind != "user" && msg.AuthorKind != "agent") {
+			continue
+		}
+		out = append(out, runtime.Turn{Role: msg.AuthorKind, Text: msg.Body})
+	}
+	return out
 }
 
 func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
@@ -39,28 +55,15 @@ func (s *Server) retryRun(w http.ResponseWriter, r *http.Request) {
 	if mapStoreErr(w, r, err) {
 		return
 	}
-	if prev.Status != "failed" {
-		writeText(w, http.StatusConflict, "Conflict\n")
-		return
-	}
-	msg, err := s.store.UserMessageForRun(r.Context(), user.ID, prev.ID)
+	next, msg, err := s.store.RetryRun(r.Context(), user.ID, prev.ID)
 	if mapStoreErr(w, r, err) {
 		return
 	}
+	s.runs.Start(runJob(user.ID, prev.ThreadID, prev.AgentID, next.ID, msg.Body, s.priorTurns(r.Context(), user.ID, prev.ThreadID, msg.ID)))
 	agent, err := s.store.GetAgent(r.Context(), user.ID, prev.AgentID)
 	if mapStoreErr(w, r, err) {
 		return
 	}
-	next, err := s.store.CreateRun(r.Context(), user.ID, prev.ThreadID, prev.AgentID)
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	if err := s.store.SetMessageRun(r.Context(), user.ID, msg.ID, next.ID); err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	s.runs.Start(runJob(user.ID, prev.ThreadID, prev.AgentID, next.ID, msg.Body))
 	if r.Header.Get("HX-Request") == "true" {
 		av := presentAgent(agent, true, userLocation(user.Timezone))
 		body, err := execTemplate("pending", liveView{RunID: next.ID, Color: av.Color, Letter: av.Letter, CSRF: from(r).CSRF})
@@ -94,18 +97,22 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	flush := func() { _ = rc.Flush() }
 	flush()
 
-	after := 0
-	if raw := r.Header.Get("Last-Event-ID"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			after = n
-		}
-	}
+	after := streamCursor(r)
 	signals, unsub := s.runs.Hub.Subscribe(runRow.ID)
 	defer unsub()
 	sentTerminal := false
+	orphaned := false
+	lastKA := time.Now()
 	for {
 		if err := r.Context().Err(); err != nil {
 			return
+		}
+		if time.Since(lastKA) >= s.keepaliveEvery() {
+			if _, err := io.WriteString(w, ": ka\n\n"); err != nil {
+				return
+			}
+			flush()
+			lastKA = time.Now()
 		}
 		events, err := s.store.ListRunEvents(r.Context(), user.ID, runRow.ID, after)
 		if err != nil {
@@ -141,26 +148,90 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			if len(more) > 0 {
 				continue
 			}
+			if err := s.writeCaughtUp(r.Context(), w, user, current, from(r).CSRF); err != nil {
+				return
+			}
+			flush()
 			_ = writeSSE(w, 0, "stop", "")
 			flush()
 			return
 		}
+		if !runTerminal(current.Status) && !s.runs.Watching(current.ID) {
+			if orphaned {
+				return
+			}
+			orphaned = true
+			_, _ = s.store.FailRun(context.Background(), user.ID, current.ID, run.Interrupted, current.StreamOffset)
+			continue
+		}
 		select {
 		case <-r.Context().Done():
 			return
+		case <-s.runs.Done():
+			if !orphaned && !runTerminal(current.Status) {
+				orphaned = true
+				_, _ = s.store.FailRun(context.Background(), user.ID, current.ID, run.Interrupted, current.StreamOffset)
+			}
+			timer := time.NewTimer(20 * time.Millisecond)
+			select {
+			case <-r.Context().Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		case <-signals:
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
 }
 
+func streamCursor(r *http.Request) int {
+	after := 0
+	if n, ok := parseSeq(r.URL.Query().Get("after")); ok && n > after {
+		after = n
+	}
+	if n, ok := parseSeq(r.Header.Get("Last-Event-ID")); ok && n > after {
+		after = n
+	}
+	return after
+}
+
+func parseSeq(raw string) (int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
 func runTerminal(status string) bool {
 	switch status {
-	case "done", "failed", "stopped":
+	case "done", "failed", "stopped", "retried":
 		return true
 	default:
 		return false
 	}
+}
+
+func (s *Server) writeCaughtUp(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, csrf string) error {
+	events, err := s.store.ListRunEvents(ctx, user.ID, runRow.ID, 0)
+	if err != nil {
+		return err
+	}
+	var last *store.RunEvent
+	for i := range events {
+		if events[i].Kind == "done" || events[i].Kind == "error" {
+			last = &events[i]
+		}
+	}
+	if last == nil {
+		return nil
+	}
+	return s.writeRunEvent(ctx, w, user, runRow, *last, csrf)
 }
 
 func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, ev store.RunEvent, csrf string) error {

@@ -258,6 +258,126 @@ func (s *Store) FailRun(ctx context.Context, userID, runID, message string, offs
 	return RunEvent{RunID: runID, Seq: seq, Kind: "error", Payload: payload, CreatedAt: stamp}, nil
 }
 
+// RetryRun claims a failed run and creates its replacement in one transaction.
+// A second caller sees no failed row and gets ErrConflict.
+func (s *Store) RetryRun(ctx context.Context, userID, runID string) (Run, Message, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Run{}, Message{}, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE runs SET status = 'retried' WHERE id = ? AND user_id = ? AND status = 'failed'`, runID, userID)
+	if err != nil {
+		return Run{}, Message{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return Run{}, Message{}, err
+	}
+	if n != 1 {
+		return Run{}, Message{}, ErrConflict
+	}
+	var prev Run
+	var routine, finished sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT id, workspace_id, thread_id, agent_id, user_id, routine_run_id, status, stream_offset, started_at, finished_at, error FROM runs WHERE id = ? AND user_id = ?`, runID, userID).
+		Scan(&prev.ID, &prev.WorkspaceID, &prev.ThreadID, &prev.AgentID, &prev.UserID, &routine, &prev.Status, &prev.StreamOffset, &prev.StartedAt, &finished, &prev.Error)
+	if err != nil {
+		return Run{}, Message{}, scanErr(err)
+	}
+	var msg Message
+	err = tx.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, created_at FROM messages WHERE user_id = ? AND run_id = ? AND author_kind = 'user' ORDER BY created_at, rowid LIMIT 1`, userID, runID).
+		Scan(&msg.ID, &msg.WorkspaceID, &msg.UserID, &msg.ThreadID, &msg.AuthorKind, &msg.AuthorID, &msg.Body, &msg.CreatedAt)
+	if err != nil {
+		return Run{}, Message{}, scanErr(err)
+	}
+	id, err := newID()
+	if err != nil {
+		return Run{}, Message{}, err
+	}
+	stamp := s.stamp(s.Now())
+	if _, err := tx.ExecContext(ctx, `INSERT INTO runs(id, workspace_id, thread_id, agent_id, user_id, status, stream_offset, started_at, error) VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, '')`,
+		id, prev.WorkspaceID, prev.ThreadID, prev.AgentID, userID, stamp); err != nil {
+		return Run{}, Message{}, err
+	}
+	moved, err := tx.ExecContext(ctx, `UPDATE messages SET run_id = ? WHERE id = ? AND user_id = ?`, id, msg.ID, userID)
+	if err != nil {
+		return Run{}, Message{}, err
+	}
+	if err := rowsAffected(moved); err != nil {
+		return Run{}, Message{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Run{}, Message{}, err
+	}
+	next, err := s.GetRun(ctx, userID, id)
+	if err != nil {
+		return Run{}, Message{}, err
+	}
+	return next, msg, nil
+}
+
+// FailAbandoned marks every queued, streaming, and waiting_approval run failed
+// and writes the error event in the same transaction. Startup uses it so a
+// restarted process does not leave a bubble on Replying.
+func (s *Store) FailAbandoned(ctx context.Context, message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" || len(message) > 400 {
+		return ErrInvalid
+	}
+	payload, err := jsonString(map[string]string{"message": message})
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT id, user_id, stream_offset FROM runs WHERE status IN ('queued', 'streaming', 'waiting_approval')`)
+	if err != nil {
+		return err
+	}
+	type left struct {
+		id     string
+		userID string
+		offset int
+	}
+	var pending []left
+	for rows.Next() {
+		var row left
+		if err := rows.Scan(&row.id, &row.userID, &row.offset); err != nil {
+			rows.Close()
+			return err
+		}
+		pending = append(pending, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	stamp := s.stamp(s.Now())
+	for _, row := range pending {
+		var seq int
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id = ?`, row.id).Scan(&seq); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO run_events(run_id, seq, kind, payload_json, created_at) VALUES (?, ?, 'error', ?, ?)`,
+			row.id, seq, payload, stamp); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE runs SET status = 'failed', stream_offset = ?, finished_at = ?, error = ? WHERE id = ? AND user_id = ? AND status IN ('queued', 'streaming', 'waiting_approval')`,
+			row.offset, stamp, message, row.id, row.userID)
+		if err != nil {
+			return err
+		}
+		if err := rowsAffected(res); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // SetMessageRun links one of the caller's messages to a run they own.
 func (s *Store) SetMessageRun(ctx context.Context, userID, messageID, runID string) error {
 	msg, err := s.GetMessage(ctx, userID, messageID)

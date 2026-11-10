@@ -5,16 +5,20 @@ package web
 import (
 	"context"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
-	"net/http/httptest"
 )
 
 func TestShots(t *testing.T) {
@@ -46,6 +50,12 @@ func TestShots(t *testing.T) {
 		})
 		t.Run("error-"+vp.name, func(t *testing.T) {
 			shootError(t, browserCtx, dir, vp.w, vp.h, vp.name)
+		})
+		t.Run("502-"+vp.name, func(t *testing.T) {
+			shoot502(t, browserCtx, dir, vp.w, vp.h, vp.name)
+		})
+		t.Run("restart-"+vp.name, func(t *testing.T) {
+			shootRestart(t, browserCtx, dir, vp.w, vp.h, vp.name)
 		})
 	}
 }
@@ -103,6 +113,7 @@ func shootError(t *testing.T, browser context.Context, dir string, width, height
 	addr := ln.Addr().String()
 	ln.Close()
 	h := newHarnessWith(t, runtime.NewHTTP("http://"+addr))
+	h.srv.SetRetryBudget(400 * time.Millisecond)
 	user, _ := h.account("err@example.com", "Err User", "correct-horse-1")
 	agent := seedAgent(t, h.st, user.ID, "Atlas")
 	ts := httptest.NewTLSServer(h.srv.Handler())
@@ -126,9 +137,181 @@ func shootError(t *testing.T, browser context.Context, dir string, width, height
 	assertNoSideScroll(t, ctx)
 }
 
+func shoot502(t *testing.T, browser context.Context, dir string, width, height int, name string) {
+	t.Helper()
+	echo := runtime.NewEcho(runtime.EchoOptions{Name: "Atlas", WordDelay: 700 * time.Millisecond})
+	t.Cleanup(echo.Close)
+	gate := &browserGate{}
+	h := newHarnessWith(t, runtime.NewHTTP(mustEchoURL(t, echo)))
+	user, _ := h.account("gate@example.com", "Gate User", "correct-horse-1")
+	agent := seedAgent(t, h.st, user.ID, "Atlas")
+	gate.next = h.srv.Handler()
+	ts := httptest.NewTLSServer(gate)
+	t.Cleanup(ts.Close)
+	token := sessionToken(t, h, user.ID)
+	ctx := longTab(t, browser, 90*time.Second)
+	page := ts.URL + "/agents/" + agent.ID
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		network.Enable(),
+		network.SetCookie("castbot_session", token).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
+		chromedp.EmulateViewport(int64(width), int64(height)),
+		chromedp.Navigate(page),
+		chromedp.WaitVisible(`textarea[name="body"]`, chromedp.ByQuery),
+		chromedp.SendKeys(`textarea[name="body"]`, "please keep going now", chromedp.ByQuery),
+		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
+		chromedp.Poll(js(`(function(){var s=document.querySelector(".stream");return !!(s&&s.textContent.indexOf("You said:")>=0);})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var armed bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){
+		window.__dup = 0;
+		var root = document.querySelector("#msgs");
+		var look = function(){
+			var t = (root && root.innerText) || "";
+			var n = t.split("You said:").length - 1;
+			if (n > 1) window.__dup = n;
+		};
+		new MutationObserver(look).observe(root, {childList:true, subtree:true, characterData:true});
+		look();
+		return true;
+	})()`), &armed)); err != nil {
+		t.Fatal(err)
+	}
+	gate.outage(12 * time.Second)
+	time.Sleep(1 * time.Second)
+	var during int
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(document.body.innerText.split("You said:").length-1)`), &during)); err != nil {
+		t.Fatal(err)
+	}
+	if during != 1 {
+		t.Fatalf("text repeated during the 502 window: %d", during)
+	}
+	saveShot(t, ctx, filepath.Join(dir, "502-"+name+".png"))
+	if err := chromedp.Run(ctx,
+		chromedp.Poll(js(`(function(){var t=document.querySelector("#msgs").innerText;return t.indexOf("OPENROUTER_API_KEY")>=0&&!document.querySelector(".pending");})()`), nil, chromedp.WithPollingTimeout(45*time.Second)),
+	); err != nil {
+		t.Fatal(err)
+	}
+	var dup, count int
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.Evaluate(js(`window.__dup||0`), &dup),
+		chromedp.Evaluate(js(`(document.querySelector("#msgs").innerText.split("You said:").length-1)`), &count),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if dup != 0 || count != 1 {
+		t.Fatalf("duplicated text dup %d count %d", dup, count)
+	}
+	assertNoSideScroll(t, ctx)
+}
+
+func shootRestart(t *testing.T, browser context.Context, dir string, width, height int, name string) {
+	t.Helper()
+	echo := runtime.NewEcho(runtime.EchoOptions{Name: "Atlas", WordDelay: 300 * time.Millisecond})
+	up := httptest.NewServer(echo)
+	t.Cleanup(func() {
+		up.Close()
+		echo.Close()
+	})
+	h := newHarnessWith(t, runtime.NewHTTP(up.URL))
+	user, _ := h.account("rest@example.com", "Rest User", "correct-horse-1")
+	agent := seedAgent(t, h.st, user.ID, "Atlas")
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	token := sessionToken(t, h, user.ID)
+	ctx := tab(t, browser)
+	page := ts.URL + "/agents/" + agent.ID
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		network.Enable(),
+		network.SetCookie("castbot_session", token).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
+		chromedp.EmulateViewport(int64(width), int64(height)),
+		chromedp.Navigate(page),
+		chromedp.WaitVisible(`textarea[name="body"]`, chromedp.ByQuery),
+		chromedp.SendKeys(`textarea[name="body"]`, "hello", chromedp.ByQuery),
+		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
+		chromedp.Poll(js(`(function(){var s=document.querySelector(".stream");return !!(s&&s.textContent.indexOf("Hello")>=0);})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.Close()
+	if err := h.st.FailAbandoned(context.Background(), run.Interrupted); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.Reload(),
+		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("The reply was interrupted.")>=0&&t.indexOf("Retry")>=0;})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saveShot(t, ctx, filepath.Join(dir, "restart-"+name+".png"))
+	assertNoSideScroll(t, ctx)
+}
+
+func mustEchoURL(t *testing.T, echo *runtime.Echo) string {
+	t.Helper()
+	up := httptest.NewServer(echo)
+	t.Cleanup(up.Close)
+	return up.URL
+}
+
+type browserGate struct {
+	next     http.Handler
+	mu       sync.Mutex
+	cancel   context.CancelFunc
+	badUntil time.Time
+}
+
+func (g *browserGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !strings.Contains(r.URL.Path, "/events") {
+		g.next.ServeHTTP(w, r)
+		return
+	}
+	g.mu.Lock()
+	until := g.badUntil
+	g.mu.Unlock()
+	if time.Now().Before(until) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+		return
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	g.mu.Lock()
+	if time.Now().Before(g.badUntil) {
+		g.mu.Unlock()
+		cancel()
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+		return
+	}
+	if g.cancel != nil {
+		g.cancel()
+	}
+	g.cancel = cancel
+	g.mu.Unlock()
+	defer cancel()
+	g.next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+func (g *browserGate) outage(d time.Duration) {
+	g.mu.Lock()
+	if g.cancel != nil {
+		g.cancel()
+	}
+	g.badUntil = time.Now().Add(d)
+	g.mu.Unlock()
+}
+
+func longTab(t *testing.T, browser context.Context, d time.Duration) context.Context {
+	t.Helper()
+	ctx, cancel := chromedp.NewContext(browser)
+	t.Cleanup(cancel)
+	ctx, timeout := context.WithTimeout(ctx, d)
+	t.Cleanup(timeout)
+	return ctx
+}
+
 func tab(t *testing.T, browser context.Context) context.Context {
 	t.Helper()
-	ctx, cancel := chromedp.NewContext(browser, chromedp.WithLogf(quietLog), chromedp.WithErrorf(quietLog))
+	ctx, cancel := chromedp.NewContext(browser)
 	t.Cleanup(cancel)
 	ctx, timeout := context.WithTimeout(ctx, 60*time.Second)
 	t.Cleanup(timeout)

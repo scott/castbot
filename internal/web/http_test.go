@@ -531,7 +531,7 @@ func TestAuthzMatrix(t *testing.T) {
 	h.csrf = ""
 	h.login("a@example.com", "correct-horse-1", aSecret, "203.0.113.91:9", false)
 	code, resumeBody, _ := h.do(http.MethodGet, "/runs/"+runRow.ID+"/events", "", "203.0.113.91:9", map[string]string{"Last-Event-ID": "1"})
-	if code != http.StatusOK || strings.Contains(resumeBody, marker) {
+	if code != http.StatusOK || !strings.Contains(resumeBody, "event: fail") || !strings.Contains(resumeBody, marker) {
 		t.Fatalf("owner resume %d %s", code, resumeBody)
 	}
 	code, _, hdr := h.do(http.MethodPost, "/runs/"+runRow.ID+"/retry", h.form(url.Values{}), "203.0.113.91:9", nil)
