@@ -182,15 +182,11 @@ func TestTwoBrowsersSeeTheSameRun(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		first, err1 = readSSE(ctx, eventsURL, h.cookieList(), "", func(ev []sseEvent) bool {
-			return countEvent(ev, "done") > 0
-		})
+		first, err1 = collectSSE(ctx, eventsURL, h.cookieList())
 	}()
 	go func() {
 		defer wg.Done()
-		second, err2 = readSSE(ctx, eventsURL, h.cookieList(), "", func(ev []sseEvent) bool {
-			return countEvent(ev, "done") > 0
-		})
+		second, err2 = collectSSE(ctx, eventsURL, h.cookieList())
 	}()
 	wg.Wait()
 	if err1 != nil || err2 != nil {
@@ -444,6 +440,36 @@ func runIDFrom(t *testing.T, body string) string {
 		t.Fatal(rest)
 	}
 	return rest[:j]
+}
+
+// collectSSE follows a run until its done or fail event. A cut connection
+// resumes with Last-Event-ID, which is what the browser does on its own.
+func collectSSE(ctx context.Context, rawURL string, cookies []*http.Cookie) ([]sseEvent, error) {
+	var all []sseEvent
+	var lastErr error
+	last := ""
+	for i := 0; i < 8; i++ {
+		ev, err := readSSE(ctx, rawURL, cookies, last, func(batch []sseEvent) bool {
+			return countEvent(batch, "done") > 0 || countEvent(batch, "fail") > 0
+		})
+		all = append(all, ev...)
+		if countEvent(ev, "done") > 0 || countEvent(ev, "fail") > 0 {
+			return all, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return all, ctx.Err()
+		}
+		next := lastID(all)
+		if next == last && err != nil {
+			return all, err
+		}
+		last = next
+	}
+	if lastErr == nil {
+		lastErr = io.ErrUnexpectedEOF
+	}
+	return all, lastErr
 }
 
 func readSSE(ctx context.Context, rawURL string, cookies []*http.Cookie, lastID string, stop func([]sseEvent) bool) ([]sseEvent, error) {

@@ -130,7 +130,17 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		// Status and the terminal event commit together. A list from before
+		// that commit can be empty while this read already sees done or
+		// failed, so look once more before telling the browser to stop.
 		if runTerminal(current.Status) && len(events) == 0 {
+			more, err := s.store.ListRunEvents(r.Context(), user.ID, runRow.ID, after)
+			if err != nil {
+				return
+			}
+			if len(more) > 0 {
+				continue
+			}
 			_ = writeSSE(w, 0, "stop", "")
 			flush()
 			return
