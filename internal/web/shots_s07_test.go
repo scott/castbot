@@ -62,7 +62,7 @@ func shootS07Waking(t *testing.T, browser context.Context, dir string, width, he
 
 func shootS07Reply(t *testing.T, browser context.Context, dir string, width, height int, theme, name string) {
 	t.Helper()
-	t.Setenv("CASTBOT_PROVIDER_KEY_DIGITALOCEAN", "fixture-s07-key")
+	t.Setenv("CASTBOT_PROVIDER_KEY_DIGITALOCEAN", "fixture-s07-key") // gitleaks:allow
 	h, agent := s07ShotAgent(t, theme, "reply")
 	ctx := openS07(t, browser, h, agent.UserID, "/agents/"+agent.ID, width, height, `(function(){return document.querySelector("#composer textarea")!=null;})()`)
 	if err := chromedp.Run(ctx, chromedp.Tasks{

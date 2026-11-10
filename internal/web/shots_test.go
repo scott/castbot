@@ -793,7 +793,7 @@ func shootCLITokens(t *testing.T, browser context.Context, dir string, width, he
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.WaitVisible(`#cast-cli .tok button`, chromedp.ByQuery),
 		chromedp.Click(`#cast-cli .tok button`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Revoked")>=0&&t.indexOf("Not yet")>=0&&t.indexOf("Active")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Revoked")>=0&&t.indexOf("Not yet")>=0&&t.indexOf("Not shown")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
 	}); err != nil {
 		t.Fatal(err)
 	}

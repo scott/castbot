@@ -339,7 +339,7 @@
 {{if .CLINote}}<p class="fineprint">{{.CLINote}}</p>{{end}}
 {{if .CLIBlob}}<pre class="cli-blob">{{.CLIBlob}}</pre>{{end}}
 <form method="post" action="/agents/{{.Agent.ID}}/cli"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Add to Cast CLI</button></form>
-{{if .CLITokens}}<div class="toks">{{range .CLITokens}}<div class="tok"><div class="mono">{{.Prefix}}</div><div class="meta">Created {{.Created}} · Last used {{.LastUsed}} · {{.Status}}{{if .Unseen}} · Not shown{{end}}</div>{{if not .Revoked}}<form method="post" action="/agents/{{$.Agent.ID}}/cli/{{.ID}}/revoke" hx-post="/agents/{{$.Agent.ID}}/cli/{{.ID}}/revoke" hx-target="#cast-cli" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="btn sm danger-ghost" type="submit">Revoke</button></form>{{end}}</div>{{end}}</div><p class="fineprint">To rotate, revoke this token and add a new one.</p>{{end}}
+{{if .CLITokens}}<div class="toks">{{range .CLITokens}}<div class="tok"><div class="mono">{{.Prefix}}</div><div class="meta">Created {{.Created}} · Last used {{.LastUsed}} · {{.Status}}{{if and .Unseen .Revoked}} · Not shown{{end}}</div>{{if not .Revoked}}<form method="post" action="/agents/{{$.Agent.ID}}/cli/{{.ID}}/revoke" hx-post="/agents/{{$.Agent.ID}}/cli/{{.ID}}/revoke" hx-target="#cast-cli" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="btn sm danger-ghost" type="submit">Revoke</button></form>{{end}}</div>{{end}}</div><p class="fineprint">To rotate, revoke this token and add a new one.</p>{{end}}
 </section>
 {{end}}
 

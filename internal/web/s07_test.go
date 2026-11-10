@@ -334,25 +334,25 @@ func TestMissingProviderKeyFailsFast(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ev := range events {
-		if strings.Contains(ev.Payload, "fixture-s07-key") {
+		if strings.Contains(ev.Payload, "fixture-s07-key") { // gitleaks:allow
 			t.Fatal("key in run events")
 		}
 	}
 	code, page, _ := h.do(http.MethodGet, "/agents/"+agent.ID, "", ip, nil)
-	if code != 200 || strings.Contains(page, "fixture-s07-key") || !strings.Contains(page, want) {
+	if code != 200 || strings.Contains(page, "fixture-s07-key") || !strings.Contains(page, want) { // gitleaks:allow
 		t.Fatalf("page %d", code)
 	}
-	t.Setenv("CASTBOT_PROVIDER_KEY_DIGITALOCEAN", "fixture-s07-key")
+	t.Setenv("CASTBOT_PROVIDER_KEY_DIGITALOCEAN", "fixture-s07-key") // gitleaks:allow
 	code, secrets, _ := h.do(http.MethodGet, "/api/castlet/agents/"+agent.ID+"/secrets", "", ip, map[string]string{"Authorization": "Bearer " + token})
-	if code != 200 || !strings.Contains(secrets, "DIGITALOCEAN_MODEL_ACCESS_KEY") || !strings.Contains(secrets, "fixture-s07-key") {
+	if code != 200 || !strings.Contains(secrets, "DIGITALOCEAN_MODEL_ACCESS_KEY") || !strings.Contains(secrets, "fixture-s07-key") { // gitleaks:allow
 		t.Fatalf("secrets %d", code)
 	}
 	code, page, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/secrets", "", ip, nil)
-	if code != 200 || strings.Contains(page, "fixture-s07-key") {
+	if code != 200 || strings.Contains(page, "fixture-s07-key") { // gitleaks:allow
 		t.Fatal("key on the owner page")
 	}
 	bundle, err := h.st.LatestBundle(context.Background(), agent.UserID, agent.ID)
-	if err != nil || strings.Contains(bundle.YAML, "fixture-s07-key") || !strings.Contains(bundle.YAML, model) {
+	if err != nil || strings.Contains(bundle.YAML, "fixture-s07-key") || !strings.Contains(bundle.YAML, model) { // gitleaks:allow
 		t.Fatal("bundle")
 	}
 }

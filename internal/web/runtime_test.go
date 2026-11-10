@@ -54,7 +54,7 @@ func TestRuntimeImageAndSmoke(t *testing.T) {
 	}
 
 	const reply = "Streamed from the fixture provider."
-	const key = "fixture-s07-key"
+	const key = "fixture-s07-key" // gitleaks:allow
 	ln, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
