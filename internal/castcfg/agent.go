@@ -431,7 +431,7 @@ func rejectDuplicates(n *yaml.Node, path string) error {
 func SecretKey(key string) bool { return secretKey(key) }
 
 func secretKey(key string) bool {
-	k := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
+	k := normalizeSecretKey(key)
 	switch k {
 	case "max_tokens", "max_output_tokens", "max_input_tokens",
 		"max_completion_tokens", "max_new_tokens",
@@ -440,17 +440,43 @@ func secretKey(key string) bool {
 		return false
 	case "env", "headers", "token", "secret", "password", "api_key", "apikey",
 		"access_token", "refresh_token", "authorization", "private_key",
-		"client_secret", "credentials", "auth_token", "secret_key":
+		"client_secret", "credentials", "auth_token", "secret_key",
+		"cookie", "passphrase", "auth", "session", "pass", "pwd":
 		return true
 	default:
 		if strings.Contains(k, "token") || strings.Contains(k, "secret") ||
 			strings.Contains(k, "password") || strings.Contains(k, "passwd") ||
+			strings.Contains(k, "passphrase") || strings.Contains(k, "cookie") ||
 			strings.Contains(k, "api_key") || strings.Contains(k, "apikey") ||
 			strings.Contains(k, "credential") || strings.HasSuffix(k, "_key") {
 			return true
 		}
 		return false
 	}
+}
+
+// normalizeSecretKey folds camelCase and dashes so privateKey matches private_key.
+func normalizeSecretKey(key string) string {
+	key = strings.TrimSpace(key)
+	var b strings.Builder
+	prevLower := false
+	for _, r := range key {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			if prevLower {
+				b.WriteByte('_')
+			}
+			b.WriteByte(byte(r - 'A' + 'a'))
+			prevLower = false
+		case r == '-':
+			b.WriteByte('_')
+			prevLower = false
+		default:
+			b.WriteRune(r)
+			prevLower = r >= 'a' && r <= 'z'
+		}
+	}
+	return b.String()
 }
 
 func rejectAliases(n *yaml.Node) error {

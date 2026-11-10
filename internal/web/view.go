@@ -62,6 +62,15 @@ type cardView struct {
 	Pending, ReadOnly, Approved           bool
 }
 
+type chromeView struct {
+	AgentID        string
+	RunID          string
+	AgentApprovals int
+	Total          int
+	Unread         int
+	Tail           string
+}
+
 type argView struct {
 	Key, Value, Short string
 	Hidden, Long      bool

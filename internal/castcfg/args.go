@@ -43,6 +43,20 @@ func scrubJSON(raw json.RawMessage, path string, redacted *[]string) (json.RawMe
 
 var errBadJSON = errors.New("bad json")
 
+// bearerValue reports a string that starts with "Bearer ".
+// Those arguments are treated as secrets even when the key is ordinary.
+func bearerValue(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) < 2 || raw[0] != '"' {
+		return false
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "bearer ")
+}
+
 func scrubObject(raw json.RawMessage, path string, redacted *[]string) (json.RawMessage, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	tok, err := dec.Token()
@@ -72,7 +86,7 @@ func scrubObject(raw json.RawMessage, path string, redacted *[]string) (json.Raw
 		if path != "" {
 			child = path + "." + key
 		}
-		if SecretKey(key) {
+		if SecretKey(key) || bearerValue(val) {
 			*redacted = append(*redacted, child)
 			continue
 		}

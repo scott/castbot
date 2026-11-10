@@ -66,16 +66,24 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 					}
 				}
 			}
-			if err := s.runReload(ctx, job.UserID, job.AgentID); err != nil {
+			deferRestart, err := s.store.DeferGuestRestart(ctx, job.UserID, job.AgentID, job.RunID)
+			if err != nil {
 				return nil, err
+			}
+			if !deferRestart {
+				if err := s.runReloadExcept(ctx, job.UserID, job.AgentID, job.RunID); err != nil {
+					return nil, err
+				}
 			}
 			endpoint, token, err = s.store.VMCredentials(ctx, job.UserID, job.AgentID)
 			if err != nil && !errors.Is(err, store.ErrNotFound) {
 				return nil, err
 			}
 			if state == "running" && err == nil && endpoint != "" && token != "" {
-				if rerr := s.refreshSecrets(ctx, job.UserID, agent, endpoint, token); rerr != nil {
-					return nil, rerr
+				if !deferRestart {
+					if rerr := s.refreshSecrets(ctx, job.UserID, agent, endpoint, token); rerr != nil {
+						return nil, rerr
+					}
 				}
 				s.pullJournal(ctx, job.UserID, job.AgentID, endpoint, token)
 				return h.Stream(ctx, endpoint, token, req)
@@ -510,6 +518,13 @@ func (s *Server) observedMachine(ctx context.Context, userID, agentID string, vm
 // running. It does nothing unless the machine is running, and it clears the
 // mark only after the reload succeeds.
 func (s *Server) applyPending(ctx context.Context, userID, agentID string) error {
+	return s.applyPendingExcept(ctx, userID, agentID, "")
+}
+
+func (s *Server) applyPendingExcept(ctx context.Context, userID, agentID, exceptRun string) error {
+	if deferRestart, err := s.store.DeferGuestRestart(ctx, userID, agentID, exceptRun); err != nil || deferRestart {
+		return err
+	}
 	version, err := s.store.PendingBundle(ctx, userID, agentID)
 	if err != nil || version == "" {
 		return err

@@ -242,10 +242,12 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userID string) ([]Appr
 }
 
 // ClaimDecision moves a pending web approval to approved or denied.
+// runID must be the approval's run. A mismatched run does not claim.
 // claimed is false when another caller already decided it, or it is not pending.
-// The audit row is written by the caller after the agent accepts the decision.
-func (s *Store) ClaimDecision(ctx context.Context, userID, id, status, actor string) (Approval, bool, error) {
-	if status != "approved" && status != "denied" {
+// sent stays false until the agent accepts the decision. The audit row is
+// written by the caller after that accept, on a context the browser does not own.
+func (s *Store) ClaimDecision(ctx context.Context, userID, id, runID, status, actor string) (Approval, bool, error) {
+	if status != "approved" && status != "denied" || runID == "" {
 		return Approval{}, false, ErrInvalid
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -253,8 +255,8 @@ func (s *Store) ClaimDecision(ctx context.Context, userID, id, status, actor str
 		return Approval{}, false, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE approvals SET status = ?, decided_by = ?, decided_at = ? WHERE id = ? AND user_id = ? AND status = 'pending' AND origin = 'web'`,
-		status, actor, s.stamp(s.Now()), id, userID)
+	res, err := tx.ExecContext(ctx, `UPDATE approvals SET status = ?, decided_by = ?, decided_at = ?, sent = 0 WHERE id = ? AND user_id = ? AND run_id = ? AND status = 'pending' AND origin = 'web'`,
+		status, actor, s.stamp(s.Now()), id, userID, runID)
 	if err != nil {
 		return Approval{}, false, err
 	}
@@ -302,39 +304,54 @@ func (s *Store) ReleaseDecision(ctx context.Context, userID, id, status, actor s
 	return tx.Commit()
 }
 
+// MarkPendingInactive records that a still-open prompt died with its run.
+// A row that was already decided is left as it is.
+func (s *Store) MarkPendingInactive(ctx context.Context, userID, id, actorKind, actorID string) (Approval, bool, error) {
+	return s.markInactive(ctx, userID, id, actorKind, actorID, true)
+}
+
 // MarkInactive records that the agent no longer has this prompt.
 // It writes one audit row when the status actually changes.
 func (s *Store) MarkInactive(ctx context.Context, userID, id, actorKind, actorID string) (Approval, error) {
+	row, _, err := s.markInactive(ctx, userID, id, actorKind, actorID, false)
+	return row, err
+}
+
+func (s *Store) markInactive(ctx context.Context, userID, id, actorKind, actorID string, onlyPending bool) (Approval, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Approval{}, err
+		return Approval{}, false, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'inactive', decided_by = ?, decided_at = ? WHERE id = ? AND user_id = ? AND status IN ('pending', 'approved', 'denied') AND origin = 'web'`,
+	match := `status IN ('pending', 'approved', 'denied')`
+	if onlyPending {
+		match = `status = 'pending'`
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'inactive', decided_by = ?, decided_at = ?, sent = 1 WHERE id = ? AND user_id = ? AND `+match+` AND origin = 'web'`,
 		actorID, s.stamp(s.Now()), id, userID)
 	if err != nil {
-		return Approval{}, err
+		return Approval{}, false, err
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return Approval{}, err
+		return Approval{}, false, err
 	}
 	row, err := scanApproval(tx.QueryRowContext(ctx, approvalSelect+` WHERE a.user_id = ? AND a.id = ?`, userID, id))
 	if err != nil {
-		return Approval{}, err
+		return Approval{}, false, err
 	}
 	if n == 1 {
 		if err := s.insertAudit(ctx, tx, row.WorkspaceID, userID, actorKind, actorID, "approval.inactive", "approval:"+row.ID, auditDetail(row.Tool, row.RequestID, json.RawMessage(row.Arguments), decodeList(row.Redacted))); err != nil {
-			return Approval{}, err
+			return Approval{}, false, err
 		}
 		if err := s.syncApprovalCount(ctx, tx, userID, row.AgentID); err != nil {
-			return Approval{}, err
+			return Approval{}, false, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return Approval{}, err
+		return Approval{}, false, err
 	}
-	return row, nil
+	return row, n == 1, nil
 }
 
 // WriteDecisionAudit records one approved or denied decision.
@@ -426,7 +443,13 @@ func (s *Store) ExpireDue(ctx context.Context) ([]Approval, error) {
 
 // MarkDenialSent records that Deny was posted for an expired approval.
 func (s *Store) MarkDenialSent(ctx context.Context, userID, id string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE approvals SET sent = 1 WHERE id = ? AND user_id = ? AND status = 'expired'`, id, userID)
+	return s.MarkSent(ctx, userID, id)
+}
+
+// MarkSent records that the agent was told the decision.
+// A second call is a no-op when the row is already sent.
+func (s *Store) MarkSent(ctx context.Context, userID, id string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE approvals SET sent = 1 WHERE id = ? AND user_id = ? AND sent = 0`, id, userID)
 	if err != nil {
 		return err
 	}
@@ -434,10 +457,51 @@ func (s *Store) MarkDenialSent(ctx context.Context, userID, id string) error {
 	if err != nil {
 		return err
 	}
-	if n == 0 {
-		return ErrNotFound
+	if n == 1 {
+		return nil
 	}
-	return nil
+	row, err := s.GetApproval(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if row.Sent {
+		return nil
+	}
+	return ErrNotFound
+}
+
+// ResumeAfterApproval moves a run from waiting_approval back to streaming
+// once the agent has the decision. A run that already moved on is left as it is.
+func (s *Store) ResumeAfterApproval(ctx context.Context, userID, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status = 'streaming' WHERE id = ? AND user_id = ? AND status = 'waiting_approval'`, id, userID)
+	return err
+}
+
+// ListUnconfirmed returns claimed web decisions that still need a post or an audit row.
+// before is the newest decided_at to include, so an in-flight click is left alone.
+func (s *Store) ListUnconfirmed(ctx context.Context, before time.Time) ([]Approval, error) {
+	cut := s.stamp(before.UTC())
+	return s.listApprovals(ctx, approvalSelect+` WHERE a.origin = 'web' AND a.status IN ('approved', 'denied') AND a.decided_at != '' AND a.decided_at <= ? AND (
+  a.sent = 0 OR NOT EXISTS (
+    SELECT 1 FROM audit_log g WHERE g.user_id = a.user_id AND g.target = 'approval:' || a.id
+    AND g.action = CASE a.status WHEN 'approved' THEN 'approval.approved' ELSE 'approval.denied' END
+  )
+) ORDER BY a.decided_at, a.id`, cut)
+}
+
+// ListRestartDenials returns approvals a restart left inactive before Deny was posted.
+func (s *Store) ListRestartDenials(ctx context.Context) ([]Approval, error) {
+	return s.listApprovals(ctx, approvalSelect+` WHERE a.origin = 'web' AND a.status = 'inactive' AND a.sent = 0 AND a.decided_by = 'system:restart' ORDER BY a.decided_at, a.id`)
+}
+
+// PendingApprovalCount is the caller's open web approvals.
+func (s *Store) PendingApprovalCount(ctx context.Context, userID string) (int, error) {
+	if _, err := s.GetUser(ctx, userID); err != nil {
+		return 0, err
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM approvals WHERE user_id = ? AND status = 'pending' AND origin = 'web'`, userID).Scan(&n)
+	return n, err
 }
 
 // ListAudit returns the caller's audit rows, oldest first.

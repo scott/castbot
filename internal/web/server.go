@@ -77,6 +77,11 @@ type Server struct {
 
 	approvalFor time.Duration
 	expireMu    sync.Mutex
+	busyMu      sync.Mutex
+	busy        map[string]struct{}
+	denyMu      sync.Mutex
+	denyNext    map[string]time.Time
+	denyFails   map[string]int
 }
 
 // guest is one local castlet the control plane can proxy files through.

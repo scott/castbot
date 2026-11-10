@@ -61,6 +61,10 @@ func (s *Server) kickReload(userID, agentID string) {
 // runReload applies the pending bundle on the caller's goroutine.
 // It waits for an in-flight reload, then runs once so a newer version is not lost.
 func (s *Server) runReload(ctx context.Context, userID, agentID string) error {
+	return s.runReloadExcept(ctx, userID, agentID, "")
+}
+
+func (s *Server) runReloadExcept(ctx context.Context, userID, agentID, exceptRun string) error {
 	g := s.gate(agentID)
 	g.mu.Lock()
 	for g.running {
@@ -77,7 +81,7 @@ func (s *Server) runReload(ctx context.Context, userID, agentID string) error {
 	done := make(chan struct{})
 	g.done = done
 	g.mu.Unlock()
-	err := s.applyPending(ctx, userID, agentID)
+	err := s.applyPendingExcept(ctx, userID, agentID, exceptRun)
 	s.finishReload(g, done, err)
 	return err
 }

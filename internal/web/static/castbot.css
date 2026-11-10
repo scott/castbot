@@ -253,6 +253,7 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 /* composer */
 .comp-wrap { width: 100%; max-width: 780px; margin: 0 auto; padding: 8px 28px 22px; display: grid; gap: 8px; }
 .pending-bar { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 12px; border-radius: 12px; background: var(--acc-soft); border: 1px solid var(--acc-line); font-size: 13.5px; font-weight: 600; }
+.pending-bar[hidden] { display: none; }
 .pending-bar .i { color: var(--acc); }
 .comp { border: 1px solid var(--line2); background: var(--surf); border-radius: 16px; padding: 12px 12px 10px 16px; display: grid; gap: 8px; }
 .comp .ph { color: var(--tx3); min-height: 24px; }

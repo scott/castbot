@@ -2,6 +2,9 @@ package web
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/runtime"
@@ -271,8 +275,8 @@ func TestCLIApprovalIsReadOnly(t *testing.T) {
 	agent := makeAgent(t, h.st, user.ID, "Atlas")
 	if _, err := h.st.IngestJournal(context.Background(), user.ID, agent.ID, []store.JournalEntry{
 		{Seq: 1, At: "2026-11-10T18:00:00Z", SessionID: "sess-s07b", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "request", Text: "from the cli"},
-		{Seq: 2, At: "2026-11-10T18:00:01Z", SessionID: "sess-s07b", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "permission", Tool: "bash"},
-		{Seq: 3, At: "2026-11-10T18:00:02Z", SessionID: "sess-s07b", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "decision", Tool: "bash", Decision: "approved"},
+		{Seq: 2, At: "2026-11-10T18:00:01Z", SessionID: "sess-s07b", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "decision", RequestID: "req-s07b", Decision: "approved"},
+		{Seq: 3, At: "2026-11-10T18:00:02Z", SessionID: "sess-s07b", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "permission", Tool: "bash", RequestID: "req-s07b"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -498,6 +502,548 @@ func assertAudit(t *testing.T, h *harness, userID, action, kind, actor string, w
 	if n != want {
 		t.Fatalf("%s count %d %#v", action, n, rows)
 	}
+}
+
+func TestMismatchedRunDoesNotClaim(t *testing.T) {
+	h, ask, user, agent, ip := newAsk(t, nil, nil)
+	sendPrompt(t, h, agent, ip, "List the demo folder")
+	ap := waitPending(t, h, user.ID)
+	other, err := h.st.CreateRun(context.Background(), user.ID, agentThread(t, h, user.ID, agent.ID), agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body, _ := h.do(http.MethodPost, "/runs/"+other.ID+"/approvals/"+ap.ID+"/approve", h.form(url.Values{}), ip, nil)
+	if code != http.StatusNotFound || strings.Contains(body, "ls demo") {
+		t.Fatalf("mismatch %d %s", code, body)
+	}
+	row, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+	if err != nil || row.Status != "pending" || row.DecidedBy != "" {
+		t.Fatalf("row %#v %v", row, err)
+	}
+	if len(ask.Calls()) != 0 {
+		t.Fatalf("calls %#v", ask.Calls())
+	}
+	code, body = postDecision(h, ap, ip, true)
+	if code != http.StatusOK || !strings.Contains(body, "Approved by you") || len(ask.Calls()) != 1 {
+		t.Fatalf("real approve %d calls %#v %s", code, ask.Calls(), body)
+	}
+}
+
+func TestCanceledClickStillDecides(t *testing.T) {
+	t.Run("delivered", func(t *testing.T) {
+		ask := runtime.NewAsk(runtime.AskOptions{Tool: "bash", Args: map[string]any{"command": "ls demo"}})
+		up := httptest.NewServer(&slowAsk{ask: ask, delay: 400 * time.Millisecond})
+		t.Cleanup(up.Close)
+		h := newHarnessWith(t, runtime.NewHTTP(up.URL))
+		ip := "203.0.113.142:9"
+		user, secret := h.account("cancel-late-s07b@example.com", "Demo User", "correct-horse-1")
+		h.login("cancel-late-s07b@example.com", "correct-horse-1", secret, ip, false)
+		agent := h.newAgent(ip, "Atlas")
+		live := httptest.NewServer(h.srv.Handler())
+		t.Cleanup(live.Close)
+		sendPrompt(t, h, agent, ip, "go")
+		ap := waitPending(t, h, user.ID)
+		req, err := http.NewRequest(http.MethodPost, live.URL+decisionPath(ap, true), strings.NewReader(url.Values{"csrf": {h.csrf}}.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for _, c := range h.jar {
+			req.AddCookie(c)
+		}
+		client := &http.Client{Timeout: 150 * time.Millisecond}
+		if _, err := client.Do(req); err == nil {
+			t.Fatal("client should give up while the agent is slow")
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) && len(ask.Calls()) == 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if calls := ask.Calls(); len(calls) != 1 || !calls[0] {
+			t.Fatalf("calls %#v", calls)
+		}
+		row, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+		if err != nil || row.Status != "approved" || !row.Sent {
+			t.Fatalf("row %#v %v", row, err)
+		}
+		assertAudit(t, h, user.ID, "approval.approved", "user", user.ID, 1)
+		runRow, err := h.st.GetRun(context.Background(), user.ID, ap.RunID)
+		if err != nil || runRow.Status == "waiting_approval" {
+			t.Fatalf("run %#v %v", runRow, err)
+		}
+	})
+	t.Run("never delivered", func(t *testing.T) {
+		ask := runtime.NewAsk(runtime.AskOptions{Tool: "bash", Args: map[string]any{"command": "ls demo"}})
+		up := httptest.NewServer(&failAsk{ask: ask})
+		t.Cleanup(up.Close)
+		h := newHarnessWith(t, runtime.NewHTTP(up.URL))
+		var off atomic.Int64
+		h.st.SetNow(func() time.Time { return time.Now().Add(time.Duration(off.Load())) })
+		ip := "203.0.113.143:9"
+		user, secret := h.account("cancel-miss-s07b@example.com", "Demo User", "correct-horse-1")
+		h.login("cancel-miss-s07b@example.com", "correct-horse-1", secret, ip, false)
+		agent := h.newAgent(ip, "Atlas")
+		sendPrompt(t, h, agent, ip, "go")
+		ap := waitPending(t, h, user.ID)
+		code, body := postDecision(h, ap, ip, true)
+		if code != http.StatusBadGateway {
+			t.Fatalf("post %d %s", code, body)
+		}
+		row, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+		if err != nil || row.Status != "pending" {
+			t.Fatalf("row %#v %v", row, err)
+		}
+		assertAudit(t, h, user.ID, "approval.approved", "", "", 0)
+		if len(ask.Calls()) != 0 {
+			t.Fatalf("calls %#v", ask.Calls())
+		}
+		off.Store(int64(11 * time.Minute))
+		h.srv.ExpireDue(context.Background())
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) && len(ask.Calls()) == 0 {
+			h.srv.ExpireDue(context.Background())
+			time.Sleep(20 * time.Millisecond)
+		}
+		if calls := ask.Calls(); len(calls) != 1 || calls[0] {
+			t.Fatalf("deny %#v", calls)
+		}
+		row, err = h.st.GetApproval(context.Background(), user.ID, ap.ID)
+		if err != nil || row.Status != "expired" || !row.Sent {
+			t.Fatalf("expired %#v %v", row, err)
+		}
+	})
+}
+
+func TestWebJournalDoesNotDuplicateCard(t *testing.T) {
+	h, _, user, agent, ip := newAsk(t, nil, nil)
+	sendPrompt(t, h, agent, ip, "List the demo folder")
+	ap := waitPending(t, h, user.ID)
+	thread := agentThread(t, h, user.ID, agent.ID)
+	if _, err := h.st.IngestJournal(context.Background(), user.ID, agent.ID, []store.JournalEntry{
+		{Seq: 1, At: "2026-11-10T22:12:17Z", SessionID: thread, Caller: "control_plane", Kind: "request", Text: "List the demo folder", MessageID: "msg-web-1", StreamID: ap.RunID},
+		{Seq: 2, At: "2026-11-10T22:12:17Z", SessionID: "", Caller: "control_plane", Kind: "decision", RequestID: ap.RequestID, Decision: "approved"},
+		{Seq: 3, At: "2026-11-10T22:12:17Z", SessionID: thread, Caller: "control_plane", Kind: "permission", Tool: "bash", RequestID: ap.RequestID},
+		{Seq: 4, At: "2026-11-10T22:12:17Z", SessionID: thread, Caller: "control_plane", Kind: "reply", Text: "bash finished.", MessageID: "msg-web-1", StreamID: ap.RunID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page := h.poll(ip, "/agents/"+agent.ID, ">Approve<")
+	if strings.Count(page, `id="appr-`) != 1 || strings.Contains(page, "Answer it in the Cast CLI") {
+		t.Fatalf("cards %d page %s", strings.Count(page, `class="appr`), page)
+	}
+	msgs, err := h.st.ListMessages(context.Background(), user.ID, thread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range msgs {
+		if strings.Contains(m.Body, "Cast CLI") {
+			t.Fatalf("web thread stored %q", m.Body)
+		}
+	}
+}
+
+func TestSecretArgNamesStayHidden(t *testing.T) {
+	secrets := map[string]string{
+		"privateKey": "pk-demo", "accessKey": "ak-demo", "sessionKey": "sk-demo",
+		"cookie": "ck-demo", "passphrase": "pp-demo", "auth": "au-demo",
+		"note": "Bearer demo-token",
+	}
+	args := map[string]any{"command": "ls demo", "visible": "keep-me"}
+	for k, v := range secrets {
+		args[k] = v
+	}
+	h, _, user, agent, ip := newAsk(t, args, nil)
+	sendPrompt(t, h, agent, ip, "go")
+	ap := waitPending(t, h, user.ID)
+	page := h.poll(ip, "/agents/"+agent.ID, ">Approve<")
+	code, card, _ := h.do(http.MethodGet, "/approvals/"+ap.ID, "", ip, nil)
+	if code != http.StatusOK {
+		t.Fatal(code)
+	}
+	events, err := h.st.ListRunEvents(context.Background(), user.ID, ap.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runEv strings.Builder
+	for _, ev := range events {
+		runEv.WriteString(ev.Payload)
+	}
+	audits, err := h.st.ListAudit(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var aud strings.Builder
+	for _, a := range audits {
+		aud.WriteString(a.Detail)
+	}
+	for name, body := range map[string]string{
+		"page": page, "card": card, "run_events": runEv.String(),
+		"arguments": ap.Arguments, "audit": aud.String(),
+	} {
+		for _, secret := range secrets {
+			if strings.Contains(body, secret) {
+				t.Fatalf("%s leaked %s", name, secret)
+			}
+		}
+		if !strings.Contains(body, "keep-me") && name != "audit" {
+			t.Fatalf("%s dropped a plain value %s", name, body)
+		}
+	}
+}
+
+func TestLongValueTruncatesOnRunes(t *testing.T) {
+	long := strings.Repeat("é", 81)
+	h, _, user, agent, ip := newAsk(t, map[string]any{"command": long}, nil)
+	sendPrompt(t, h, agent, ip, "go")
+	ap := waitPending(t, h, user.ID)
+	_, card, _ := h.do(http.MethodGet, "/approvals/"+ap.ID, "", ip, nil)
+	if !utf8.ValidString(card) {
+		t.Fatal("card is not valid utf-8")
+	}
+	if !strings.Contains(card, strings.Repeat("é", 80)+"...") || strings.Contains(card, strings.Repeat("é", 81)+"...") {
+		t.Fatalf("clip %s", card)
+	}
+}
+
+func TestAbandonedApprovalIsDeniedWhenLive(t *testing.T) {
+	h, ask, user, _, ip := newAsk(t, nil, nil)
+	sendPrompt(t, h, mustAgent(t, h, user.ID), ip, "go")
+	ap := waitPending(t, h, user.ID)
+	if err := h.st.FailAbandoned(context.Background(), "The reply was interrupted."); err != nil {
+		t.Fatal(err)
+	}
+	row, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+	if err != nil || row.Status != "inactive" || row.Sent {
+		t.Fatalf("after restart %#v %v", row, err)
+	}
+	page := h.poll(ip, "/agents/"+row.AgentID, "no longer active")
+	if strings.Contains(page, ">Approve<") {
+		t.Fatal(page)
+	}
+	h.srv.ExpireDue(context.Background())
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && len(ask.Calls()) == 0 {
+		h.srv.ExpireDue(context.Background())
+		time.Sleep(20 * time.Millisecond)
+	}
+	if calls := ask.Calls(); len(calls) != 1 || calls[0] {
+		t.Fatalf("deny %#v", calls)
+	}
+	row, err = h.st.GetApproval(context.Background(), user.ID, ap.ID)
+	if err != nil || !row.Sent {
+		t.Fatalf("sent %#v %v", row, err)
+	}
+}
+
+func TestExpiryDoesNotWakePausedMachine(t *testing.T) {
+	h, ask, user, agent, ip := newAsk(t, nil, nil)
+	var off atomic.Int64
+	h.st.SetNow(func() time.Time { return time.Now().Add(time.Duration(off.Load())) })
+	sendPrompt(t, h, agent, ip, "go")
+	ap := waitPending(t, h, user.ID)
+	fake := host.NewFake()
+	h.srv.SetHost(fake, "example.invalid/castbot-runtime:s07b", "https://castbot.example")
+	if _, err := h.st.BeginVM(context.Background(), user.ID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s07b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.FinishVM(context.Background(), user.ID, agent.ID, "vm-paused", "https://vm.example", "paused", ""); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := h.st.IssueBootstrap(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := h.st.ExchangeBootstrap(context.Background(), agent.ID, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SaveVMToken(context.Background(), agent.ID, token); err != nil {
+		t.Fatal(err)
+	}
+	fake.Machines["vm-paused"] = host.Machine{ID: "vm-paused", State: "paused", Endpoint: "https://vm.example"}
+	fake.SetForce("paused")
+	off.Store(int64(11 * time.Minute))
+	h.srv.ExpireDue(context.Background())
+	h.srv.ExpireDue(context.Background())
+	calls, approvals := fake.Decisions()
+	for _, call := range calls {
+		if call == "wake" || call == "approve" {
+			t.Fatalf("woke %v", calls)
+		}
+	}
+	if len(approvals) != 0 || len(ask.Calls()) != 0 {
+		t.Fatalf("posted approvals %v http %v", approvals, ask.Calls())
+	}
+	row, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+	if err != nil || row.Status != "expired" || row.Sent {
+		t.Fatalf("row %#v %v", row, err)
+	}
+}
+
+func TestRunLeavesWaitingAfterDecision(t *testing.T) {
+	hub := newHoldHub()
+	up := httptest.NewServer(hub)
+	t.Cleanup(up.Close)
+	h := newHarnessWith(t, runtime.NewHTTP(up.URL))
+	ip := "203.0.113.144:9"
+	user, secret := h.account("stream-s07b@example.com", "Demo User", "correct-horse-1")
+	h.login("stream-s07b@example.com", "correct-horse-1", secret, ip, false)
+	agent := h.newAgent(ip, "Atlas")
+	sendPrompt(t, h, agent, ip, "go")
+	ap := waitPending(t, h, user.ID)
+	code, body := postDecision(h, ap, ip, true)
+	if code != http.StatusOK || !strings.Contains(body, "Approved by you") || !strings.Contains(body, `hx-swap-oob="outerHTML"`) || !strings.Contains(body, `id="pending-bar"`) {
+		t.Fatalf("card %d %s", code, body)
+	}
+	runRow, err := h.st.GetRun(context.Background(), user.ID, ap.RunID)
+	if err != nil || runRow.Status != "streaming" {
+		t.Fatalf("status %#v %v", runRow, err)
+	}
+	close(hub.release)
+	h.waitRuns(user.ID, agentThread(t, h, user.ID, agent.ID))
+	if calls := hub.calls(); len(calls) != 1 || !calls[0] {
+		t.Fatalf("calls %#v", calls)
+	}
+}
+
+func TestApprovalSurvivesCutProxy(t *testing.T) {
+	hub := newHoldHub()
+	up := httptest.NewServer(hub)
+	t.Cleanup(up.Close)
+	proxy := runtime.NewCutProxy(up.URL, 4*time.Second)
+	px := httptest.NewServer(proxy)
+	t.Cleanup(px.Close)
+	h := newHarnessWith(t, runtime.NewHTTP(px.URL))
+	ip := "203.0.113.145:9"
+	user, secret := h.account("cut-s07b@example.com", "Demo User", "correct-horse-1")
+	h.login("cut-s07b@example.com", "correct-horse-1", secret, ip, false)
+	agent := h.newAgent(ip, "Atlas")
+	live := httptest.NewServer(h.srv.Handler())
+	t.Cleanup(live.Close)
+	sendPrompt(t, h, agent, ip, "go")
+	ap := waitPending(t, h, user.ID)
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) && proxy.Cuts() < 2 {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if proxy.Cuts() < 2 {
+		t.Fatalf("cuts %d", proxy.Cuts())
+	}
+	rows, err := h.st.ListRunApprovals(context.Background(), user.ID, ap.RunID)
+	if err != nil || len(rows) != 1 || rows[0].Status != "pending" {
+		t.Fatalf("rows %#v %v", rows, err)
+	}
+	if len(hub.calls()) != 0 {
+		t.Fatalf("responded during cuts %#v", hub.calls())
+	}
+	page := h.poll(ip, "/agents/"+agent.ID, ">Approve<")
+	if !strings.Contains(page, ">Deny<") {
+		t.Fatal(page)
+	}
+	code, body := postDecision(h, ap, ip, true)
+	if code != http.StatusOK || !strings.Contains(body, "Approved by you") {
+		t.Fatalf("approve %d %s", code, body)
+	}
+	close(hub.release)
+	h.waitRuns(user.ID, agentThread(t, h, user.ID, agent.ID))
+	runRow, err := h.st.GetRun(context.Background(), user.ID, ap.RunID)
+	if err != nil || runRow.Status != "done" {
+		t.Fatalf("run %#v %v", runRow, err)
+	}
+	if calls := hub.calls(); len(calls) != 1 || !calls[0] {
+		t.Fatalf("calls %#v producers %d", calls, hub.starts.Load())
+	}
+	msgs, err := h.st.ListMessages(context.Background(), user.ID, runRow.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, m := range msgs {
+		n += strings.Count(m.Body, runtime.AskFinished)
+	}
+	if n != 1 {
+		t.Fatalf("finished text %d", n)
+	}
+}
+
+type slowAsk struct {
+	ask   *runtime.Ask
+	delay time.Duration
+}
+
+func (s *slowAsk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(strings.NewReader(string(body)))
+	if strings.Contains(string(body), "permission/respond") {
+		time.Sleep(s.delay)
+	}
+	s.ask.ServeHTTP(w, r)
+}
+
+type failAsk struct {
+	ask  *runtime.Ask
+	once atomic.Bool
+}
+
+func (f *failAsk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	if strings.Contains(string(body), "permission/respond") && f.once.CompareAndSwap(false, true) {
+		http.Error(w, "down", http.StatusBadGateway)
+		return
+	}
+	r.Body = io.NopCloser(strings.NewReader(string(body)))
+	f.ask.ServeHTTP(w, r)
+}
+
+type holdHub struct {
+	mu      sync.Mutex
+	runs    map[string]*holdRun
+	respond []bool
+	release chan struct{}
+	starts  atomic.Int32
+}
+
+type holdRun struct {
+	events  []string
+	done    bool
+	reqID   string
+	answer  chan bool
+	changed chan struct{}
+}
+
+func newHoldHub() *holdHub {
+	return &holdHub{runs: map[string]*holdRun{}, release: make(chan struct{})}
+}
+
+func (z *holdHub) calls() []bool {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	out := append([]bool(nil), z.respond...)
+	return out
+}
+
+func (z *holdHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Method string `json:"method"`
+		Params struct {
+			ID       string `json:"id"`
+			Approved *bool  `json:"approved"`
+			Metadata struct {
+				StreamID     string `json:"streamId"`
+				StreamOffset int    `json:"streamOffset"`
+			} `json:"metadata"`
+		} `json:"params"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Method == "permission/respond" {
+		z.mu.Lock()
+		var hit *holdRun
+		for _, run := range z.runs {
+			if run.reqID == req.Params.ID && run.answer != nil {
+				hit = run
+			}
+		}
+		if hit != nil && req.Params.Approved != nil {
+			z.respond = append(z.respond, *req.Params.Approved)
+			hit.answer <- *req.Params.Approved
+			hit.answer = nil
+		}
+		z.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if hit == nil {
+			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":"1","error":{"code":-32602,"message":"No pending permission request"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":"1","result":{"ok":true}}`)
+		return
+	}
+	sid := req.Params.Metadata.StreamID
+	z.mu.Lock()
+	run := z.runs[sid]
+	if run == nil {
+		run = &holdRun{reqID: fmt.Sprintf("hold-%d", time.Now().UnixNano()), answer: make(chan bool, 1), changed: make(chan struct{})}
+		z.runs[sid] = run
+		z.starts.Add(1)
+		go z.produce(run)
+	}
+	z.mu.Unlock()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	fl, _ := w.(http.Flusher)
+	_, _ = io.WriteString(w, ": cast-stream "+sid+"\n\n")
+	if fl != nil {
+		fl.Flush()
+	}
+	idx := req.Params.Metadata.StreamOffset
+	for {
+		z.mu.Lock()
+		if idx < len(run.events) {
+			ev := run.events[idx]
+			idx++
+			z.mu.Unlock()
+			if _, err := io.WriteString(w, ev); err != nil {
+				return
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+			continue
+		}
+		if run.done {
+			z.mu.Unlock()
+			return
+		}
+		ch := run.changed
+		z.mu.Unlock()
+		select {
+		case <-ch:
+		case <-time.After(time.Second):
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+func (z *holdHub) push(run *holdRun, ev string, done bool) {
+	z.mu.Lock()
+	run.events = append(run.events, ev)
+	run.done = done
+	close(run.changed)
+	run.changed = make(chan struct{})
+	z.mu.Unlock()
+}
+
+func (z *holdHub) produce(run *holdRun) {
+	z.mu.Lock()
+	reqID := run.reqID
+	answer := run.answer
+	z.mu.Unlock()
+	perm, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": "1", "result": map[string]any{"parts": []any{}, "metadata": map[string]any{"permissionRequest": map[string]any{"id": reqID, "tool": "bash", "arguments": map[string]any{"command": "ls demo"}}}}})
+	z.push(run, "data: "+string(perm)+"\n\n", false)
+	allow := <-answer
+	<-z.release
+	text := runtime.DenialMessage("bash")
+	if allow {
+		text = runtime.AskFinished
+	}
+	frame, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": "1", "result": map[string]any{"parts": []map[string]string{{"kind": "text", "text": text}}}})
+	z.push(run, "data: "+string(frame)+"\n\n", false)
+	z.push(run, "data: [DONE]\n\n", true)
+}
+
+func mustAgent(t *testing.T, h *harness, userID string) store.Agent {
+	t.Helper()
+	rows, err := h.st.ListAgents(context.Background(), userID)
+	if err != nil || len(rows) == 0 {
+		t.Fatal(err)
+	}
+	return rows[0]
 }
 
 func assertNoSecret(t *testing.T, h *harness, userID string) {

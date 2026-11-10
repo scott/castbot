@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 )
@@ -406,8 +407,106 @@ func (s *Store) FailAbandoned(ctx context.Context, message string) error {
 		if err := rowsAffected(res); err != nil {
 			return err
 		}
+		if err := s.abandonApprovals(ctx, tx, row.userID, row.id, stamp); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
+}
+
+// abandonApprovals marks a failed run's open web approvals inactive.
+// sent stays false so the server can still post Deny when the machine is live.
+func (s *Store) abandonApprovals(ctx context.Context, tx *sql.Tx, userID, runID, stamp string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT a.id, a.workspace_id, r.agent_id, a.tool, a.request_id, a.arguments_json, a.redacted_json FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id WHERE a.user_id = ? AND a.run_id = ? AND a.status = 'pending' AND a.origin = 'web'`, userID, runID)
+	if err != nil {
+		return err
+	}
+	type left struct {
+		id, workspace, agent, tool, request, args, redacted string
+	}
+	var found []left
+	for rows.Next() {
+		var row left
+		if err := rows.Scan(&row.id, &row.workspace, &row.agent, &row.tool, &row.request, &row.args, &row.redacted); err != nil {
+			rows.Close()
+			return err
+		}
+		found = append(found, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	seen := map[string]bool{}
+	for _, row := range found {
+		res, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'inactive', decided_by = 'system:restart', decided_at = ?, sent = 0 WHERE id = ? AND user_id = ? AND status = 'pending'`, stamp, row.id, userID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			continue
+		}
+		if err := s.insertAudit(ctx, tx, row.workspace, userID, "system", "system:restart", "approval.inactive", "approval:"+row.id, auditDetail(row.tool, row.request, json.RawMessage(row.args), decodeList(row.redacted))); err != nil {
+			return err
+		}
+		seen[row.agent] = true
+	}
+	for agentID := range seen {
+		if err := s.syncApprovalCount(ctx, tx, userID, agentID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeferGuestRestart reports that a bundle or secret reload should wait.
+// A pending web approval, another open run, or a resume of runID would
+// restart the guest and drop the prompt. A brand new run with no offset
+// does not defer, so the next message can apply the change first.
+func (s *Store) DeferGuestRestart(ctx context.Context, userID, agentID, runID string) (bool, error) {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return false, err
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id WHERE a.user_id = ? AND r.agent_id = ? AND a.status = 'pending' AND a.origin = 'web'`, userID, agentID).Scan(&n); err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	q := `SELECT COUNT(*) FROM runs WHERE user_id = ? AND agent_id = ? AND status IN ('streaming', 'waiting_approval')`
+	args := []any{userID, agentID}
+	if runID != "" {
+		q += ` AND id != ?`
+		args = append(args, runID)
+	}
+	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	if runID == "" {
+		return false, nil
+	}
+	var status string
+	var offset int
+	err := s.db.QueryRowContext(ctx, `SELECT status, stream_offset FROM runs WHERE id = ? AND user_id = ?`, runID, userID).Scan(&status, &offset)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if status == "waiting_approval" || offset > 0 {
+		return true, nil
+	}
+	return false, nil
 }
 
 // SetMessageRun links one of the caller's messages to a run they own.

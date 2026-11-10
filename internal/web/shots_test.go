@@ -938,8 +938,8 @@ func shootApproval(t *testing.T, browser context.Context, dir string, width, hei
 	if kind == "cli" {
 		if _, err := h.st.IngestJournal(context.Background(), user.ID, agent.ID, []store.JournalEntry{
 			{Seq: 1, At: "2026-11-10T20:40:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "request", Text: "List the demo folder"},
-			{Seq: 2, At: "2026-11-10T20:41:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "permission", Tool: "bash"},
-			{Seq: 3, At: "2026-11-10T20:42:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "decision", Tool: "bash", Decision: "approved"},
+			{Seq: 2, At: "2026-11-10T20:41:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "decision", RequestID: "req-shot", Decision: "approved"},
+			{Seq: 3, At: "2026-11-10T20:42:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "permission", Tool: "bash", RequestID: "req-shot"},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -977,14 +977,14 @@ func shootApproval(t *testing.T, browser context.Context, dir string, width, hei
 		cur = when
 		switch kind {
 		case "approved":
-			if _, claimed, err := h.st.ClaimDecision(context.Background(), user.ID, ap.ID, "approved", user.ID); err != nil || !claimed {
+			if _, claimed, err := h.st.ClaimDecision(context.Background(), user.ID, ap.ID, runRow.ID, "approved", user.ID); err != nil || !claimed {
 				t.Fatal(err)
 			}
 			if _, _, err := h.st.FinishRun(context.Background(), user.ID, runRow.ID, "bash finished.", 2); err != nil {
 				t.Fatal(err)
 			}
 		case "denied":
-			if _, claimed, err := h.st.ClaimDecision(context.Background(), user.ID, ap.ID, "denied", user.ID); err != nil || !claimed {
+			if _, claimed, err := h.st.ClaimDecision(context.Background(), user.ID, ap.ID, runRow.ID, "denied", user.ID); err != nil || !claimed {
 				t.Fatal(err)
 			}
 			if _, _, err := h.st.FinishRun(context.Background(), user.ID, runRow.ID, runtime.DenialMessage("bash"), 2); err != nil {
@@ -1016,7 +1016,7 @@ func shootApproval(t *testing.T, browser context.Context, dir string, width, hei
 	case "denied":
 		needle = "Denied"
 	case "cli":
-		needle = "Answer it in the Cast CLI"
+		needle = "An approval for bash was approved."
 	}
 	if err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("`+needle+`")>=0&&t.indexOf("demo-secret-value")<0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second))); err != nil {
 		t.Fatal(err)

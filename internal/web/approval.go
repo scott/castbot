@@ -8,12 +8,21 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
 )
+
+const (
+	decisionTimeout = 45 * time.Second
+	denyTimeout     = 15 * time.Second
+	confirmGrace    = 30 * time.Second
+)
+
+var errMachinePaused = errors.New("machine is paused")
 
 func approvalWaitFromEnv() time.Duration {
 	raw := strings.TrimSpace(os.Getenv("CASTBOT_APPROVAL_TIMEOUT"))
@@ -51,6 +60,7 @@ func (s *Server) approvalTimeout() time.Duration {
 }
 
 func (s *Server) expireLoop() {
+	s.recoverDecisions(context.Background(), 0)
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
@@ -59,16 +69,75 @@ func (s *Server) expireLoop() {
 			return
 		case <-tick.C:
 			s.ExpireDue(context.Background())
+			s.recoverDecisions(context.Background(), confirmGrace)
 		}
 	}
 }
 
 // ExpireDue posts Deny for approvals whose wait has elapsed.
-// A second call does not post twice.
+// A second call does not post twice. A paused machine is not woken.
+// Each post has its own timeout, and a failure backs off.
 func (s *Server) ExpireDue(ctx context.Context) {
-	s.expireMu.Lock()
-	defer s.expireMu.Unlock()
 	rows, err := s.store.ExpireDue(ctx)
+	if err != nil {
+		return
+	}
+	s.postDenials(ctx, rows, true)
+	left, err := s.store.ListRestartDenials(ctx)
+	if err != nil {
+		return
+	}
+	s.postDenials(ctx, left, false)
+}
+
+func (s *Server) postDenials(ctx context.Context, rows []store.Approval, resume bool) {
+	for _, row := range rows {
+		if ctx.Err() != nil || s.base.Err() != nil {
+			return
+		}
+		if !s.denyReady(row.ID) || !s.markBusy(row.ID) {
+			continue
+		}
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), denyTimeout)
+		err := s.deliverDenial(callCtx, row, resume)
+		cancel()
+		s.clearBusy(row.ID)
+		if err != nil {
+			s.noteDenyFail(row.ID)
+			continue
+		}
+		s.clearDeny(row.ID)
+	}
+}
+
+func (s *Server) deliverDenial(ctx context.Context, row store.Approval, resume bool) error {
+	runRow, err := s.store.GetRun(ctx, row.UserID, row.RunID)
+	if err != nil {
+		return err
+	}
+	user, err := s.store.GetUser(ctx, row.UserID)
+	if err != nil {
+		return err
+	}
+	postErr := s.postPermission(ctx, user, runRow, row.RequestID, false, false)
+	if postErr != nil && !lostPermission(postErr) {
+		return postErr
+	}
+	if err := s.store.MarkSent(ctx, row.UserID, row.ID); err != nil {
+		return err
+	}
+	if resume && !runTerminal(runRow.Status) {
+		_ = s.store.ResumeAfterApproval(ctx, row.UserID, row.RunID)
+	}
+	s.runs.Hub.Notify(row.RunID)
+	return nil
+}
+
+// recoverDecisions re-posts claims that never confirmed, and writes an audit
+// row when the post landed but the record did not. grace is how long a fresh
+// claim is left to the click that owns it. Startup uses zero.
+func (s *Server) recoverDecisions(ctx context.Context, grace time.Duration) {
+	rows, err := s.store.ListUnconfirmed(ctx, s.store.Now().Add(-grace))
 	if err != nil {
 		return
 	}
@@ -76,26 +145,52 @@ func (s *Server) ExpireDue(ctx context.Context) {
 		if ctx.Err() != nil || s.base.Err() != nil {
 			return
 		}
-		runRow, err := s.store.GetRun(ctx, row.UserID, row.RunID)
+		if !s.denyReady(row.ID) || !s.markBusy(row.ID) {
+			continue
+		}
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), denyTimeout)
+		err := s.confirmClaim(callCtx, row)
+		cancel()
+		s.clearBusy(row.ID)
 		if err != nil {
+			s.noteDenyFail(row.ID)
 			continue
 		}
-		user, err := s.store.GetUser(ctx, row.UserID)
-		if err != nil {
-			continue
-		}
-		var postErr error
-		if !runTerminal(runRow.Status) {
-			postErr = s.postPermission(ctx, user, runRow, row.RequestID, false)
-		}
-		if postErr != nil && !lostPermission(postErr) {
-			continue
-		}
-		if err := s.store.MarkDenialSent(ctx, row.UserID, row.ID); err != nil {
-			continue
-		}
-		s.runs.Hub.Notify(row.RunID)
+		s.clearDeny(row.ID)
 	}
+}
+
+func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
+	runRow, err := s.store.GetRun(ctx, row.UserID, row.RunID)
+	if err != nil {
+		return err
+	}
+	user, err := s.store.GetUser(ctx, row.UserID)
+	if err != nil {
+		return err
+	}
+	allow := row.Status == "approved"
+	action := "approval.denied"
+	if allow {
+		action = "approval.approved"
+	}
+	if !row.Sent {
+		postErr := s.postPermission(ctx, user, runRow, row.RequestID, allow, false)
+		if postErr != nil && !lostPermission(postErr) {
+			return postErr
+		}
+	}
+	if err := s.store.WriteDecisionAudit(ctx, row.UserID, row.ID, action, "user", row.DecidedBy); err != nil {
+		return err
+	}
+	if err := s.store.MarkSent(ctx, row.UserID, row.ID); err != nil {
+		return err
+	}
+	if !runTerminal(runRow.Status) {
+		_ = s.store.ResumeAfterApproval(ctx, row.UserID, row.RunID)
+	}
+	s.runs.Hub.Notify(row.RunID)
+	return nil
 }
 
 func (s *Server) approveRun(w http.ResponseWriter, r *http.Request) {
@@ -137,35 +232,55 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, allow bool) {
 		status = "approved"
 		action = "approval.approved"
 	}
+	// The run id is checked before the claim. A mismatched URL must not
+	// stick the row at approved with nothing posted.
 	runRow, err := s.store.GetRun(r.Context(), user.ID, r.PathValue("id"))
 	if s.missing(w, err) {
 		return
 	}
-	row, claimed, err := s.store.ClaimDecision(r.Context(), user.ID, r.PathValue("approval"), status, user.ID)
+	current, err := s.store.GetApproval(r.Context(), user.ID, r.PathValue("approval"))
 	if s.missing(w, err) {
 		return
 	}
-	if row.RunID != runRow.ID {
+	if current.RunID != runRow.ID {
 		writeText(w, http.StatusNotFound, "Not found\n")
+		return
+	}
+	if current.Status != "pending" {
+		s.writeCard(w, user, current, from(r).CSRF)
+		return
+	}
+	if runTerminal(runRow.Status) {
+		next, changed, merr := s.store.MarkPendingInactive(r.Context(), user.ID, current.ID, "user", user.ID)
+		if merr != nil {
+			s.writeCard(w, user, current, from(r).CSRF)
+			return
+		}
+		if changed {
+			s.runs.Hub.Notify(runRow.ID)
+		}
+		s.writeCard(w, user, next, from(r).CSRF)
+		return
+	}
+	row, claimed, err := s.store.ClaimDecision(r.Context(), user.ID, current.ID, runRow.ID, status, user.ID)
+	if s.missing(w, err) {
 		return
 	}
 	if !claimed {
 		s.writeCard(w, user, row, from(r).CSRF)
 		return
 	}
-	if runTerminal(runRow.Status) {
-		next, err := s.store.MarkInactive(r.Context(), user.ID, row.ID, "user", user.ID)
-		if err != nil {
-			s.writeCard(w, user, row, from(r).CSRF)
-			return
-		}
-		s.runs.Hub.Notify(runRow.ID)
-		s.writeCard(w, user, next, from(r).CSRF)
+	// The post, the release, and the audit use a context the tab cannot cancel.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), decisionTimeout)
+	defer cancel()
+	if !s.markBusy(row.ID) {
+		s.writeCard(w, user, row, from(r).CSRF)
 		return
 	}
-	if err := s.postPermission(r.Context(), user, runRow, row.RequestID, allow); err != nil {
+	defer s.clearBusy(row.ID)
+	if err := s.postPermission(ctx, user, runRow, row.RequestID, allow, true); err != nil {
 		if lostPermission(err) {
-			next, merr := s.store.MarkInactive(r.Context(), user.ID, row.ID, "user", user.ID)
+			next, merr := s.store.MarkInactive(ctx, user.ID, row.ID, "user", user.ID)
 			if merr != nil {
 				s.writeCard(w, user, row, from(r).CSRF)
 				return
@@ -174,16 +289,22 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, allow bool) {
 			s.writeCard(w, user, next, from(r).CSRF)
 			return
 		}
-		_ = s.store.ReleaseDecision(r.Context(), user.ID, row.ID, status, user.ID)
+		_ = s.store.ReleaseDecision(ctx, user.ID, row.ID, status, user.ID)
 		writeText(w, http.StatusBadGateway, "The agent did not take that decision.\n")
 		return
 	}
-	if err := s.store.WriteDecisionAudit(r.Context(), user.ID, row.ID, action, "user", user.ID); err != nil {
+	if err := s.store.WriteDecisionAudit(ctx, user.ID, row.ID, action, "user", user.ID); err != nil {
 		writeText(w, http.StatusInternalServerError, "Error\n")
 		return
 	}
-	next, err := s.store.GetApproval(r.Context(), user.ID, row.ID)
-	if s.missing(w, err) {
+	if err := s.store.MarkSent(ctx, user.ID, row.ID); err != nil {
+		writeText(w, http.StatusInternalServerError, "Error\n")
+		return
+	}
+	_ = s.store.ResumeAfterApproval(ctx, user.ID, runRow.ID)
+	next, err := s.store.GetApproval(ctx, user.ID, row.ID)
+	if err != nil {
+		s.runs.Hub.Notify(runRow.ID)
 		return
 	}
 	s.runs.Hub.Notify(runRow.ID)
@@ -195,6 +316,9 @@ func (s *Server) writeCard(w http.ResponseWriter, user store.User, row store.App
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
+	}
+	if chrome, cerr := s.approvalChrome(context.Background(), user, row.AgentID, row.RunID); cerr == nil {
+		body += chrome
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -210,7 +334,7 @@ type permissionResponder interface {
 	Respond(ctx context.Context, requestID string, allow bool) error
 }
 
-func (s *Server) postPermission(ctx context.Context, user store.User, runRow store.Run, requestID string, allow bool) error {
+func (s *Server) postPermission(ctx context.Context, user store.User, runRow store.Run, requestID string, allow, wake bool) error {
 	s.mu.Lock()
 	h := s.machine
 	client := s.client
@@ -218,7 +342,7 @@ func (s *Server) postPermission(ctx context.Context, user store.User, runRow sto
 	if h != nil {
 		vm, err := s.store.LiveVM(ctx, user.ID, runRow.AgentID)
 		if err == nil {
-			return s.postMachine(ctx, h, user.ID, runRow.AgentID, vm, requestID, allow)
+			return s.postMachine(ctx, h, user.ID, runRow.AgentID, vm, requestID, allow, wake)
 		}
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return err
@@ -231,13 +355,16 @@ func (s *Server) postPermission(ctx context.Context, user store.User, runRow sto
 	return responder.Respond(ctx, requestID, allow)
 }
 
-func (s *Server) postMachine(ctx context.Context, h host.AgentHost, userID, agentID string, vm store.VM, requestID string, allow bool) error {
+func (s *Server) postMachine(ctx context.Context, h host.AgentHost, userID, agentID string, vm store.VM, requestID string, allow, wake bool) error {
 	state, _ := s.observedMachine(ctx, userID, agentID, vm)
 	endpoint, token, err := s.store.VMCredentials(ctx, userID, agentID)
 	if err != nil {
 		return err
 	}
 	if state == "paused" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
+		if !wake {
+			return errMachinePaused
+		}
 		s.noteVM(ctx, userID, agentID, vm.MicroVMID, store.EventWakeRequested, 0)
 		wakeAt := time.Now()
 		got, werr := h.Wake(ctx, vm.MicroVMID)
@@ -350,11 +477,25 @@ func argText(key, raw string) argView {
 		}
 	}
 	view := argView{Key: key, Value: value}
-	if len(value) > 80 {
+	if utf8.RuneCountInString(value) > 80 {
 		view.Long = true
-		view.Short = value[:80] + "..."
+		view.Short = clipRunes(value, 80) + "..."
 	}
 	return view
+}
+
+func clipRunes(s string, n int) string {
+	if n <= 0 || utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	i := 0
+	for k := range s {
+		if i == n {
+			return s[:k]
+		}
+		i++
+	}
+	return s
 }
 
 func (s *Server) cardsFor(ctx context.Context, user store.User, runID, csrf string) ([]cardView, error) {
@@ -377,7 +518,102 @@ func (s *Server) cardsHTML(ctx context.Context, user store.User, runID, csrf str
 	if len(cards) == 0 {
 		return "", nil
 	}
-	return execTemplate("approvalCards", page{Cards: cards})
+	body, err := execTemplate("approvalCards", page{Cards: cards})
+	if err != nil {
+		return "", err
+	}
+	chrome, err := s.approvalChrome(ctx, user, "", runID)
+	if err != nil {
+		return body, nil
+	}
+	return body + chrome, nil
+}
+
+func (s *Server) approvalChrome(ctx context.Context, user store.User, agentID, runID string) (string, error) {
+	if agentID == "" && runID != "" {
+		runRow, err := s.store.GetRun(ctx, user.ID, runID)
+		if err != nil {
+			return "", err
+		}
+		agentID = runRow.AgentID
+	}
+	agent, err := s.store.GetAgent(ctx, user.ID, agentID)
+	if err != nil {
+		return "", err
+	}
+	total, err := s.store.PendingApprovalCount(ctx, user.ID)
+	if err != nil {
+		return "", err
+	}
+	tail := "Replying"
+	if runID != "" {
+		rows, err := s.store.ListRunApprovals(ctx, user.ID, runID)
+		if err != nil {
+			return "", err
+		}
+		for _, row := range rows {
+			if row.Status == "pending" && row.Origin == "web" {
+				tail = "Waiting for approval"
+				break
+			}
+		}
+	}
+	return execTemplate("approvalChrome", chromeView{
+		AgentID: agent.ID, RunID: runID, AgentApprovals: agent.Approvals,
+		Total: total, Unread: agent.Unread, Tail: tail,
+	})
+}
+
+func (s *Server) markBusy(id string) bool {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	if s.busy == nil {
+		s.busy = map[string]struct{}{}
+	}
+	if _, ok := s.busy[id]; ok {
+		return false
+	}
+	s.busy[id] = struct{}{}
+	return true
+}
+
+func (s *Server) clearBusy(id string) {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	delete(s.busy, id)
+}
+
+func (s *Server) denyReady(id string) bool {
+	s.denyMu.Lock()
+	defer s.denyMu.Unlock()
+	next, ok := s.denyNext[id]
+	return !ok || !time.Now().Before(next)
+}
+
+func (s *Server) noteDenyFail(id string) {
+	s.denyMu.Lock()
+	defer s.denyMu.Unlock()
+	if s.denyFails == nil {
+		s.denyFails = map[string]int{}
+		s.denyNext = map[string]time.Time{}
+	}
+	s.denyFails[id]++
+	shift := s.denyFails[id]
+	if shift > 5 {
+		shift = 5
+	}
+	wait := time.Second << shift
+	if wait > time.Minute {
+		wait = time.Minute
+	}
+	s.denyNext[id] = time.Now().Add(wait)
+}
+
+func (s *Server) clearDeny(id string) {
+	s.denyMu.Lock()
+	defer s.denyMu.Unlock()
+	delete(s.denyFails, id)
+	delete(s.denyNext, id)
 }
 
 func cliCard(body, id string) (cardView, bool) {
@@ -385,8 +621,12 @@ func cliCard(body, id string) (cardView, bool) {
 	tool := ""
 	approved := false
 	switch {
-	case strings.HasPrefix(body, "An approval was asked for ") && strings.Contains(body, "Cast CLI"):
-		tool = strings.TrimSuffix(strings.TrimPrefix(body, "An approval was asked for "), ". Answer it in the Cast CLI.")
+	case strings.HasPrefix(body, "An approval was asked"):
+		tool = "Approval"
+		rest := strings.TrimPrefix(body, "An approval was asked for ")
+		if rest != body {
+			tool = strings.TrimSuffix(rest, ". Answer it in the Cast CLI.")
+		}
 	case strings.HasPrefix(body, "An approval for ") && strings.Contains(body, " was "):
 		rest := strings.TrimPrefix(body, "An approval for ")
 		tool = rest
@@ -394,8 +634,9 @@ func cliCard(body, id string) (cardView, bool) {
 			tool = rest[:i]
 		}
 		approved = strings.Contains(body, "was approved")
-	case strings.Contains(body, "Cast CLI") && strings.Contains(body, "approval"):
+	case strings.HasPrefix(body, "An approval was "):
 		tool = "Approval"
+		approved = strings.Contains(body, "was approved")
 	default:
 		return cardView{}, false
 	}
