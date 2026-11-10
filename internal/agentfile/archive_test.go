@@ -108,7 +108,7 @@ func TestFetchRejectsARedirectOffGitHub(t *testing.T) {
 		http.Redirect(w, r, evil.URL+"/nope", http.StatusFound)
 	}))
 	defer src.Close()
-	_, err := Fetch(context.Background(), nil, src.URL, Repo{Owner: "acme", Name: "helper"})
+	_, _, err := Fetch(context.Background(), nil, src.URL, Repo{Owner: "acme", Name: "helper"})
 	if err == nil {
 		t.Fatal("followed a redirect off github")
 	}
@@ -278,7 +278,7 @@ func TestGitArchiveRoundTrip(t *testing.T) {
 		w.Write(raw)
 	}))
 	defer srv.Close()
-	body, err := Fetch(context.Background(), srv.Client(), srv.URL, Repo{Owner: "acme", Name: "helper", Ref: "HEAD"})
+	body, _, err := Fetch(context.Background(), srv.Client(), srv.URL, Repo{Owner: "acme", Name: "helper", Ref: "HEAD"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestResolveSlashedRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := Fetch(context.Background(), srv.Client(), srv.URL, repo)
+	body, _, err := Fetch(context.Background(), srv.Client(), srv.URL, repo)
 	if err == nil {
 		t.Fatal("archive was served")
 	}
@@ -325,9 +325,127 @@ func TestRedirectToHTTPIsRefused(t *testing.T) {
 		http.Redirect(w, r, "http://codeload.github.com/acme/helper/tar.gz/HEAD", http.StatusFound)
 	}))
 	defer src.Close()
-	_, err := Fetch(context.Background(), nil, src.URL, Repo{Owner: "acme", Name: "helper"})
+	_, _, err := Fetch(context.Background(), nil, src.URL, Repo{Owner: "acme", Name: "helper"})
 	if err == nil {
 		t.Fatal("followed an http redirect")
+	}
+}
+
+func TestInstructionsFileCannotBeASecret(t *testing.T) {
+	raw := tarFile(map[string]string{
+		"repo/agent.yaml":      "name: Atlas\nbrain:\n  instructions_file: .env\n",
+		"repo/.env":            "API_KEY=nested-token-value\n",
+		"repo/instructions.md": "should not win\n",
+	})
+	folder, err := ReadArchive(raw, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if folder.Instructions != "" || !folder.SecretInstructions || !strings.Contains(strings.Join(folder.Skipped, " "), ".env") {
+		t.Fatalf("%+v", folder)
+	}
+	if strings.Contains(folder.Instructions, "nested-token-value") {
+		t.Fatal(folder.Instructions)
+	}
+	key := tarFile(map[string]string{
+		"repo/agent.yaml":  "name: Atlas\nbrain:\n  instructions_file: keys/id_rsa\n",
+		"repo/keys/id_rsa": "private-key-material\n",
+	})
+	folder, err = ReadArchive(key, "")
+	if err != nil || folder.Instructions != "" || !folder.SecretInstructions {
+		t.Fatalf("%v %+v", err, folder)
+	}
+	bin := tarFile(map[string]string{
+		"repo/agent.yaml": "name: Atlas\nbrain:\n  instructions_file: notes.bin\n",
+	})
+	// Rebuild with a non-text body. tarFile writes strings, so add a NUL.
+	bin = tarFile(map[string]string{
+		"repo/agent.yaml": "name: Atlas\nbrain:\n  instructions_file: notes.bin\n",
+		"repo/notes.bin":  "hello\x00world",
+	})
+	folder, err = ReadArchive(bin, "")
+	if err != nil || folder.Instructions != "" || !folder.BinaryInstructions {
+		t.Fatalf("%v %+v", err, folder)
+	}
+	names := tarFile(map[string]string{
+		"repo/agent.yaml":          "name: Atlas\n",
+		"repo/instructions.md":     "ok\n",
+		"repo/.git-credentials":    "secret\n",
+		"repo/.aws/credentials":    "secret\n",
+		"repo/.docker/config.json": "secret\n",
+	})
+	folder, err = ReadArchive(names, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(folder.Skipped, " ")
+	for _, name := range []string{".git-credentials", ".aws/credentials", ".docker/config.json"} {
+		if !strings.Contains(got, name) {
+			t.Fatalf("missing %s in %s", name, got)
+		}
+	}
+}
+
+func TestTreeBranchSkipsTheRefsAPI(t *testing.T) {
+	var refs int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "matching-refs") {
+			refs++
+			http.NotFound(w, r)
+			return
+		}
+		if !strings.Contains(r.URL.Path, "/acme/helper/tar.gz/main") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(tarFile(map[string]string{
+			"helper-main/agents/docs/agent.yaml":      "name: Remote\n",
+			"helper-main/agents/docs/instructions.md": "From the branch.\n",
+		}))
+	}))
+	defer srv.Close()
+	repo, err := ParseGitHub("https://github.com/acme/helper/tree/main/agents/docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, resolved, err := Fetch(context.Background(), srv.Client(), srv.URL, repo)
+	if err != nil || resolved.Ref != "main" || resolved.Subpath != "agents/docs" || refs != 0 {
+		t.Fatalf("refs %d %+v %v", refs, resolved, err)
+	}
+	folder, err := ReadArchive(body, resolved.Subpath)
+	if err != nil || !strings.Contains(folder.Instructions, "From the branch.") {
+		t.Fatalf("%v %+v", err, folder)
+	}
+}
+
+func TestRateLimitMessage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte("rate limit"))
+	}))
+	defer srv.Close()
+	_, _, err := Fetch(context.Background(), srv.Client(), srv.URL, Repo{Owner: "acme", Name: "helper"})
+	if !IsRateLimit(err) {
+		t.Fatal(err)
+	}
+}
+
+func TestRefsLookupsAreCached(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"ref":"refs/heads/feature/x"}]`))
+	}))
+	defer srv.Close()
+	repo := Repo{Owner: "cache", Name: "helper", Unresolved: []string{"feature", "x", "agents"}}
+	first, err := resolveRef(context.Background(), srv.Client(), srv.URL, repo)
+	second, err2 := resolveRef(context.Background(), srv.Client(), srv.URL, repo)
+	if err != nil || err2 != nil || first.Ref != "feature/x" || second.Ref != "feature/x" {
+		t.Fatalf("%+v %+v %v %v", first, second, err, err2)
+	}
+	if hits != 2 {
+		t.Fatalf("hits %d", hits)
 	}
 }
 

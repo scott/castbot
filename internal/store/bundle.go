@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
+	"time"
 
 	"github.com/scott/castbot/internal/bundle"
 )
@@ -75,12 +76,92 @@ func (s *Store) SetPendingBundle(ctx context.Context, userID, agentID, version s
 	return err
 }
 
-// ClearPendingBundle forgets a pending reload after it succeeded.
-func (s *Store) ClearPendingBundle(ctx context.Context, userID, agentID string) error {
+// ClearPendingBundle forgets a pending reload after that version succeeded.
+// A newer save that landed while the reload was in flight stays pending.
+func (s *Store) ClearPendingBundle(ctx context.Context, userID, agentID, version string) error {
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE agents SET pending_bundle = '' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID)
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return ErrInvalid
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE agents SET pending_bundle = '' WHERE id = ? AND user_id = ? AND pending_bundle = ? AND deleted_at IS NULL`, agentID, userID, version)
+	return err
+}
+
+// KeptYAML is the unowned agent.yaml stored on the agent row.
+func (s *Store) KeptYAML(ctx context.Context, userID, agentID string) (string, error) {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return "", err
+	}
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT kept_yaml FROM agents WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID).Scan(&raw)
+	if err != nil {
+		return "", scanErr(err)
+	}
+	return raw, nil
+}
+
+// SetKeptYAML stores the unowned agent.yaml on the caller's agent.
+func (s *Store) SetKeptYAML(ctx context.Context, userID, agentID, raw string) error {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return err
+	}
+	if len(raw) > 64<<10 {
+		return ErrInvalid
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE agents SET kept_yaml = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, raw, agentID, userID)
+	return err
+}
+
+// PutImportDraft stores a short-lived copy of the unowned agent.yaml.
+// agentID is empty until the agent exists. The form posts the id only.
+func (s *Store) PutImportDraft(ctx context.Context, userID, agentID, raw string) (string, error) {
+	if len(raw) > 64<<10 {
+		return "", ErrInvalid
+	}
+	user, err := s.GetUser(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if agentID != "" {
+		if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+			return "", err
+		}
+	}
+	id, err := newID()
+	if err != nil {
+		return "", err
+	}
+	stamp := s.stamp(s.Now())
+	expires := s.stamp(s.Now().Add(time.Hour))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO import_drafts(id, workspace_id, user_id, agent_id, kept_yaml, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, user.WorkspaceID, userID, agentID, raw, expires, stamp)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// ImportDraft returns one unexpired draft owned by the caller for this agent.
+func (s *Store) ImportDraft(ctx context.Context, userID, agentID, id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", ErrNotFound
+	}
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT kept_yaml FROM import_drafts WHERE id = ? AND user_id = ? AND agent_id = ? AND expires_at > ?`,
+		id, userID, agentID, s.stamp(s.Now())).Scan(&raw)
+	if err != nil {
+		return "", scanErr(err)
+	}
+	return raw, nil
+}
+
+// DeleteImportDraft removes one of the caller's drafts.
+func (s *Store) DeleteImportDraft(ctx context.Context, userID, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM import_drafts WHERE id = ? AND user_id = ?`, id, userID)
 	return err
 }
 

@@ -26,11 +26,12 @@ type agentForm struct {
 	SectionErr, ModelErr          string
 	InstructionsErr, ToolErr      string
 	AvatarErr, ImportErr, SaveErr string
-	Notice, ToolNote, Kept        string
+	Notice, ToolNote, DraftID     string
 	Sections                      []sectionView
 	Models                        []string
 	Tools                         []toolField
-	Skipped, LeftOut              []string
+	Skipped, LeftOut, Removed     []string
+	KeptLines                     []castcfg.KeptItem
 	HasAvatar, Editing            bool
 	AgentID                       string
 }
@@ -117,11 +118,14 @@ func (s *Server) formFromAgent(ctx context.Context, user store.User, agent store
 	spec, err := castcfg.ParseYAML(bundle.YAML)
 	if err != nil {
 		f.Instructions = bundle.Instructions
+		if msg := yamlErr(err); msg != "" {
+			f.SaveErr = msg
+		}
 		return f, nil
 	}
 	f.Instructions = bundle.Instructions
 	f.Version = spec.Version
-	f.Kept = string(spec.Kept)
+	f.KeptLines = castcfg.SummarizeKept(spec.Kept)
 	if f.Model == "" {
 		f.Model = spec.Model
 	}
@@ -209,6 +213,10 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 		return
 	}
 	f, spec, avatar, mime, good := s.readForm(r, base)
+	if err := s.bindKept(r.Context(), user.ID, "", &f, &spec); err != nil {
+		f.SaveErr = keptErr(err)
+		good = false
+	}
 	if !good {
 		s.showForm(w, r, user, f, http.StatusBadRequest)
 		return
@@ -231,8 +239,17 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 		return
 	}
 	if _, err := s.storeBundle(r.Context(), user.ID, agent.ID, spec); err != nil {
+		if errors.Is(err, errFormMismatch) {
+			f.SaveErr = "The agent file does not match this form."
+			s.showForm(w, r, user, f, http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
+	}
+	_ = s.store.SetKeptYAML(r.Context(), user.ID, agent.ID, string(spec.Kept))
+	if f.DraftID != "" {
+		_ = s.store.DeleteImportDraft(r.Context(), user.ID, f.DraftID)
 	}
 	if len(avatar) > 0 {
 		if err := s.store.PutAvatar(r.Context(), user.ID, agent.ID, mime, avatar); err != nil {
@@ -258,6 +275,10 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f, spec, avatar, mime, good := s.readForm(r, base)
+	if err := s.bindKept(r.Context(), user.ID, agent.ID, &f, &spec); err != nil {
+		f.SaveErr = keptErr(err)
+		good = false
+	}
 	if !good {
 		s.showForm(w, r, user, f, http.StatusBadRequest)
 		return
@@ -280,8 +301,17 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	version, err := s.storeBundle(r.Context(), user.ID, agent.ID, spec)
 	if err != nil {
+		if errors.Is(err, errFormMismatch) {
+			f.SaveErr = "The agent file does not match this form."
+			s.showForm(w, r, user, f, http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
+	}
+	_ = s.store.SetKeptYAML(r.Context(), user.ID, agent.ID, string(spec.Kept))
+	if f.DraftID != "" {
+		_ = s.store.DeleteImportDraft(r.Context(), user.ID, f.DraftID)
 	}
 	if len(avatar) > 0 {
 		if err := s.store.PutAvatar(r.Context(), user.ID, agent.ID, mime, avatar); err != nil {
@@ -360,12 +390,15 @@ func (s *Server) reviewImport(w http.ResponseWriter, r *http.Request, user store
 		s.mu.Lock()
 		baseURL, client := s.gitBase, s.gitHTTP
 		s.mu.Unlock()
-		raw, err = agentfile.Fetch(r.Context(), client, baseURL, repo)
+		var resolved agentfile.Repo
+		raw, resolved, err = agentfile.Fetch(r.Context(), client, baseURL, repo)
 		if err != nil {
 			if agentfile.IsPrivate(err) {
 				f.ImportErr = "Private repositories are out of scope. Use a public github.com URL."
 			} else if agentfile.IsOversize(err) {
 				f.ImportErr = "That archive is too large."
+			} else if agentfile.IsRateLimit(err) {
+				f.ImportErr = "GitHub is rate limiting imports, try again later or add ?ref="
 			} else if strings.Contains(err.Error(), "slash") {
 				f.ImportErr = "A branch name with a slash needs ?ref= on the URL."
 			} else {
@@ -375,6 +408,7 @@ func (s *Server) reviewImport(w http.ResponseWriter, r *http.Request, user store
 			s.showForm(w, r, user, f, http.StatusBadRequest)
 			return
 		}
+		repo = resolved
 		folder, err = agentfile.ReadArchive(raw, repo.Subpath)
 	} else {
 		folder, err = agentfile.ReadArchive(raw, "")
@@ -388,6 +422,9 @@ func (s *Server) reviewImport(w http.ResponseWriter, r *http.Request, user store
 	spec, err := castcfg.ParseYAML(folder.YAML)
 	if err != nil {
 		f.ImportErr = "agent.yaml could not be read."
+		if msg := yamlErr(err); msg != "" {
+			f.ImportErr = msg
+		}
 		f.keepModel()
 		s.showForm(w, r, user, f, http.StatusBadRequest)
 		return
@@ -402,16 +439,31 @@ func (s *Server) reviewImport(w http.ResponseWriter, r *http.Request, user store
 	f.Tools = toolFields(selectedTools(spec))
 	f.Skipped = folder.Skipped
 	f.LeftOut = folder.LeftOut
+	f.Removed = spec.Removed
 	if note := unknownTools(spec); note != "" {
 		f.ToolNote = note
 	}
-	f.Kept = string(spec.Kept)
-	if folder.MissingInstructions {
-		if folder.InstructionsFile != "" && !strings.Contains(folder.InstructionsFile, "..") && !strings.Contains(folder.InstructionsFile, "\\") {
-			f.InstructionsErr = "The instructions file " + folder.InstructionsFile + " was not in the folder."
-		} else {
-			f.InstructionsErr = "That instructions file is not allowed."
-		}
+	f.KeptLines = castcfg.SummarizeKept(spec.Kept)
+	draftAgent := ""
+	if f.Editing {
+		draftAgent = f.AgentID
+	}
+	draftID, derr := s.store.PutImportDraft(r.Context(), user.ID, draftAgent, string(spec.Kept))
+	if derr != nil {
+		f.ImportErr = "That agent file is too large."
+		f.keepModel()
+		s.showForm(w, r, user, f, http.StatusBadRequest)
+		return
+	}
+	f.DraftID = draftID
+	if folder.SecretInstructions {
+		f.Instructions = ""
+		f.InstructionsErr = instructionsProblem(folder.InstructionsFile, "was skipped because it can hold secrets")
+	} else if folder.BinaryInstructions {
+		f.Instructions = ""
+		f.InstructionsErr = instructionsProblem(folder.InstructionsFile, "is not text")
+	} else if folder.MissingInstructions {
+		f.InstructionsErr = instructionsProblem(folder.InstructionsFile, "was not in the folder")
 	}
 	if f.Model != "" && !castcfg.KnownModel(f.Model) {
 		f.ModelErr = "That model is not in the provider manifest."
@@ -472,7 +524,9 @@ func unknownTools(spec castcfg.Spec) string {
 }
 
 func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec, []byte, string, bool) {
-	f.Kept = r.FormValue("kept")
+	if id := strings.TrimSpace(r.FormValue("draft")); draftID(id) {
+		f.DraftID = id
+	}
 	f.Name = strings.TrimSpace(r.FormValue("name"))
 	f.Title = strings.TrimSpace(r.FormValue("title"))
 	f.SectionID = strings.TrimSpace(r.FormValue("section"))
@@ -542,7 +596,6 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 	spec := castcfg.Spec{
 		Name: f.Name, Title: f.Title, Version: safeVersion(f.Version),
 		Model: f.Model, Instructions: f.Instructions, Permissions: map[string]string{},
-		Kept: []byte(f.Kept),
 	}
 	for _, tool := range f.Tools {
 		if !tool.On {
@@ -604,10 +657,122 @@ func safeVersion(v string) string {
 	return v
 }
 
+var errFormMismatch = errors.New("rendered agent does not match the form")
+
+func draftID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for _, c := range id {
+		switch {
+		case c >= '0' && c <= '9':
+		case c >= 'a' && c <= 'f':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func yamlErr(err error) string {
+	var dup *castcfg.DuplicateKeyError
+	if errors.As(err, &dup) {
+		key := dup.Key
+		if key == "" || len(key) > 80 || strings.ContainsAny(key, "\r\n<>\"") {
+			return "agent.yaml has a duplicate key."
+		}
+		return "agent.yaml has the key " + key + " more than once."
+	}
+	if errors.Is(err, castcfg.ErrTooLarge) {
+		return "That agent file is too large."
+	}
+	return ""
+}
+
+func keptErr(err error) string {
+	if msg := yamlErr(err); msg != "" {
+		return msg
+	}
+	if errors.Is(err, errDraftExpired) {
+		return "That import expired. Review the import again."
+	}
+	return "The agent file could not be read."
+}
+
+var errDraftExpired = errors.New("import draft expired")
+
+func instructionsProblem(name, why string) string {
+	if name == "" || strings.Contains(name, "..") || strings.Contains(name, "\\") || strings.Contains(name, "/") && strings.HasPrefix(name, "/") || strings.ContainsAny(name, "\r\n<>") {
+		return "That instructions file is not allowed."
+	}
+	return "The instructions file " + name + " " + why + "."
+}
+
+func (s *Server) bindKept(ctx context.Context, userID, agentID string, f *agentForm, spec *castcfg.Spec) error {
+	raw := ""
+	if f.DraftID != "" {
+		got, err := s.store.ImportDraft(ctx, userID, agentID, f.DraftID)
+		if errors.Is(err, store.ErrNotFound) {
+			return errDraftExpired
+		}
+		if err != nil {
+			return err
+		}
+		raw = got
+	} else if agentID != "" {
+		got, err := s.store.KeptYAML(ctx, userID, agentID)
+		if err != nil {
+			return err
+		}
+		if got == "" {
+			bundle, berr := s.store.LatestBundle(ctx, userID, agentID)
+			if berr == nil {
+				parsed, perr := castcfg.ParseYAML(bundle.YAML)
+				if perr != nil {
+					return perr
+				}
+				got = string(parsed.Kept)
+			} else if !errors.Is(berr, store.ErrNotFound) {
+				return berr
+			}
+		}
+		raw = got
+	}
+	if strings.TrimSpace(raw) != "" {
+		parsed, err := castcfg.ParseYAML(raw)
+		if err != nil {
+			return err
+		}
+		spec.Kept = parsed.Kept
+		if len(f.Removed) == 0 {
+			f.Removed = parsed.Removed
+		}
+	}
+	f.KeptLines = castcfg.SummarizeKept(spec.Kept)
+	return nil
+}
+
 func (s *Server) storeBundle(ctx context.Context, userID, agentID string, spec castcfg.Spec) (string, error) {
 	raw, err := castcfg.RenderYAML(spec)
 	if err != nil {
 		return "", err
+	}
+	parsed, err := castcfg.ParseYAML(string(raw))
+	if err != nil {
+		return "", err
+	}
+	if !castcfg.Agree(spec, parsed) || !castcfg.KnownModel(spec.Model) {
+		return "", errFormMismatch
+	}
+	for _, name := range parsed.Tools {
+		if !castcfg.KnownTool(name) {
+			return "", errFormMismatch
+		}
+	}
+	for _, level := range parsed.Permissions {
+		if _, ok := castcfg.NormalizeLevel(level); !ok {
+			return "", errFormMismatch
+		}
 	}
 	version := strings.TrimSpace(spec.Version)
 	if version == "" {
@@ -654,12 +819,21 @@ func (s *Server) applyBundle(ctx context.Context, userID string, agent store.Age
 	if err := s.store.SetPendingBundle(ctx, userID, agent.ID, version); err != nil {
 		return "", err
 	}
-	if err := s.applyPending(ctx, userID, agent.ID); err != nil {
+	if err := s.runReload(ctx, userID, agent.ID); err != nil {
 		return "", err
 	}
 	left, err := s.store.PendingBundle(ctx, userID, agent.ID)
 	if err != nil {
 		return "", err
+	}
+	if left != "" && left != version {
+		if err := s.runReload(ctx, userID, agent.ID); err != nil {
+			return "", err
+		}
+		left, err = s.store.PendingBundle(ctx, userID, agent.ID)
+		if err != nil {
+			return "", err
+		}
 	}
 	if left != "" {
 		return "starting", nil

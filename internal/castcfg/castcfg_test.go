@@ -2,6 +2,7 @@ package castcfg
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -105,5 +106,53 @@ func TestRenderKeepsKeysTheFormDoesNotOwn(t *testing.T) {
 	}
 	if strings.Contains(text, "super-secret-value") || strings.Contains(text, "API_KEY") {
 		t.Fatalf("secret returned\n%s", text)
+	}
+}
+
+func TestDuplicateKeysAreRejected(t *testing.T) {
+	raw := "name: Atlas\nharness:\n  permissions:\n    bash: ask\nharness:\n  permissions:\n    bash: always-allow\n"
+	_, err := ParseYAML(raw)
+	var dup *DuplicateKeyError
+	if !errors.As(err, &dup) || dup.Key != "harness" {
+		t.Fatalf("%v", err)
+	}
+	quoted := "name: Atlas\nharness:\n  permissions:\n    bash: ask\n\"harness\":\n  permissions:\n    bash: always-allow\n"
+	_, err = ParseYAML(quoted)
+	if !errors.As(err, &dup) || dup.Key != "harness" {
+		t.Fatalf("quoted %v", err)
+	}
+}
+
+func TestNestedSecretsAreDropped(t *testing.T) {
+	raw := "name: Atlas\nbrain:\n  model: openrouter/not-real\ntools:\n  mcp:\n    demo:\n      command: helper\n      env:\n        GITHUB_TOKEN: nested-token-value\n        SAFE: vault:GITHUB_TOKEN\nruntime:\n  image: local\n  env:\n    API_KEY: nested-api-key-value\nskills:\n  - review\n"
+	spec, err := ParseYAML(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(spec.Kept)
+	if strings.Contains(text, "nested-token-value") || strings.Contains(text, "nested-api-key-value") {
+		t.Fatalf("kept a nested secret\n%s", text)
+	}
+	if !strings.Contains(text, "vault:GITHUB_TOKEN") || !strings.Contains(text, "helper") || !strings.Contains(text, "review") {
+		t.Fatalf("dropped a vault reference or a command\n%s", text)
+	}
+	out, err := RenderYAML(Spec{
+		Name: "Atlas", Title: "Helper", Version: "1", Model: spec.Model,
+		Tools: []string{"read"}, Permissions: map[string]string{"read": "always-allow"},
+		Kept: spec.Kept,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "nested-token-value") || strings.Contains(string(out), "nested-api-key-value") {
+		t.Fatalf("render kept a nested secret\n%s", out)
+	}
+	lines := SummarizeKept(spec.Kept)
+	joined := ""
+	for _, line := range lines {
+		joined += line.Label + " " + line.Value + "\n"
+	}
+	if !strings.Contains(joined, "Skills") || !strings.Contains(joined, "review") || !strings.Contains(joined, "helper") || strings.Contains(joined, "nested-token-value") {
+		t.Fatalf("summary %s", joined)
 	}
 }

@@ -262,7 +262,7 @@
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="form" value="agent">
 <input type="hidden" name="version" value="{{.AgentForm.Version}}">
-<textarea class="vh" name="kept" tabindex="-1" aria-hidden="true">{{.AgentForm.Kept}}</textarea>
+<input type="hidden" name="draft" value="{{.AgentForm.DraftID}}">
 <div class="na-form">
 {{if .AgentForm.Notice}}<div class="banner ok" role="status"><span class="grow">{{.AgentForm.Notice}}</span></div>{{end}}
 {{if .AgentForm.SaveErr}}<div class="banner err" role="alert"><span class="grow">{{.AgentForm.SaveErr}}</span></div>{{end}}
@@ -274,6 +274,7 @@
 <div class="field"><span class="lab">GitHub URL <span class="opt">optional</span></span><div class="inp{{if .AgentForm.ImportErr}} bad{{end}}"><input name="github" value="{{.AgentForm.GitHub}}" placeholder="https://github.com/owner/repo" aria-label="GitHub URL" autocapitalize="off" spellcheck="false"></div><p class="help">A branch name with a slash needs ?ref=branch/name.</p></div>
 <button class="btn sm" type="submit" formaction="{{.AgentForm.ImportAction}}">Review import</button>
 {{if .AgentForm.Skipped}}<div><span class="lab">Skipped files</span><ul class="skip">{{range .AgentForm.Skipped}}<li>{{.}}</li>{{end}}</ul><p class="fineprint">These files can hold secrets, so they were not added.</p></div>{{end}}
+{{if .AgentForm.Removed}}<div><span class="lab">Removed secret values</span><ul class="skip">{{range .AgentForm.Removed}}<li>{{.}}</li>{{end}}</ul><p class="fineprint">Secret values were removed. A vault reference can stay.</p></div>{{end}}
 {{if .AgentForm.LeftOut}}<p class="fineprint">Other files were left out. The saved agent keeps the instructions and the agent file only.</p>{{end}}
 {{if .AgentForm.ToolNote}}<p class="fineprint">{{.AgentForm.ToolNote}}</p>{{end}}
 </section>
@@ -303,6 +304,7 @@
 <h3>Review</h3>
 {{if .AgentForm.HasAvatar}}<img class="av lg" src="/agents/{{.AgentForm.AgentID}}/avatar" alt="">{{end}}
 <div class="kv"><div class="k">Name</div><div>{{if .AgentForm.Name}}{{.AgentForm.Name}}{{else}}Not set{{end}}</div><div class="k">Title</div><div>{{if .AgentForm.Title}}{{.AgentForm.Title}}{{else}}Not set{{end}}</div><div class="k">Model</div><div>{{if .AgentForm.Model}}{{.AgentForm.Model}}{{else}}Not set{{end}}</div></div>
+{{if .AgentForm.KeptLines}}<div class="kept"><span class="lab">Kept from the agent file</span>{{range .AgentForm.KeptLines}}<p class="fineprint"><b>{{.Label}}.</b> {{.Value}}</p>{{end}}<p class="fineprint">These are read only. Saving keeps them.</p></div>{{end}}
 <p class="fineprint">Saving updates this account only. A running machine is reloaded. A paused machine stays paused.</p>
 </aside>
 </form>

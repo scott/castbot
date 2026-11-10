@@ -29,6 +29,12 @@ type Fake struct {
 	// RejectAddress means a published hostname failed the edge check.
 	// An empty address without this flag is still unpublished.
 	RejectAddress bool
+	// ReloadWait blocks Reload until it is closed or the context ends.
+	ReloadWait <-chan struct{}
+	// ReloadStarted is signaled when Reload begins. Tests use a buffer of 1.
+	ReloadStarted chan struct{}
+	// ReloadErr is returned after ReloadWait, when one is set.
+	ReloadErr error
 }
 
 // NewFake returns an empty host.
@@ -37,6 +43,13 @@ func NewFake() *Fake {
 }
 
 // SetForce makes Status report one state. Tests use it for the machine page.
+// SetReloadWait holds Reload until the channel is closed. Nil releases the next call.
+func (f *Fake) SetReloadWait(wait <-chan struct{}) {
+	f.mu.Lock()
+	f.ReloadWait = wait
+	f.mu.Unlock()
+}
+
 func (f *Fake) SetForce(state string) {
 	f.mu.Lock()
 	f.ForceState = state
@@ -205,11 +218,30 @@ func (f *Fake) GetFile(context.Context, string, string, string) (io.ReadCloser, 
 	return io.NopCloser(strings.NewReader("ok")), nil
 }
 
-// Reload counts an edge call.
-func (f *Fake) Reload(context.Context, string, string) error {
+// Reload counts an edge call. A test can hold it in ReloadWait.
+func (f *Fake) Reload(ctx context.Context, _, _ string) error {
+	f.mu.Lock()
+	wait := f.ReloadWait
+	started := f.ReloadStarted
+	reloadErr := f.ReloadErr
+	f.mu.Unlock()
+	if started != nil {
+		select {
+		case started <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if wait != nil {
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	f.edge()
 	f.note("reload")
-	return nil
+	return reloadErr
 }
 
 // List returns the machines this fake currently holds.

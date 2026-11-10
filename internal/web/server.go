@@ -61,6 +61,10 @@ type Server struct {
 	prov      sync.WaitGroup
 	gitBase   string
 	gitHTTP   *http.Client
+
+	reloadMu sync.Mutex
+	reloads  map[string]*reloadGate
+	reloadWG sync.WaitGroup
 }
 
 // guest is one local castlet the control plane can proxy files through.
@@ -115,6 +119,7 @@ func (s *Server) Close() {
 	done := make(chan struct{})
 	go func() {
 		s.prov.Wait()
+		s.reloadWG.Wait()
 		close(done)
 	}()
 	select {

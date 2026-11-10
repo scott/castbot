@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,7 +29,7 @@ func TestWALAndOwnerColumns(t *testing.T) {
 	if mode != "wal" {
 		t.Fatalf("journal %s", mode)
 	}
-	tables := []string{"credentials", "sessions", "sections", "agents", "threads", "messages", "login_challenges", "trusted_devices", "runs", "agent_bundles", "agent_tokens", "secret_fixtures", "agent_secret_grants", "agent_vms", "user_quotas", "agent_avatars"}
+	tables := []string{"credentials", "sessions", "sections", "agents", "threads", "messages", "login_challenges", "trusted_devices", "runs", "agent_bundles", "agent_tokens", "secret_fixtures", "agent_secret_grants", "agent_vms", "user_quotas", "agent_avatars", "import_drafts"}
 	for _, table := range tables {
 		rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
 		if err != nil {
@@ -252,6 +253,69 @@ func TestFailureHints(t *testing.T) {
 		if att.Status != "fail" || att.TriesLeft != left {
 			t.Fatalf("try %d status %s left %d", i+1, att.Status, att.TriesLeft)
 		}
+	}
+}
+
+func TestClearPendingKeepsANewerVersion(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	user := makeUser(t, s, "pending@example.com", "Pending")
+	sec, err := s.SystemSection(ctx, user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := s.CreateAgent(ctx, user.ID, AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPendingBundle(ctx, user.ID, agent.ID, "version-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPendingBundle(ctx, user.ID, agent.ID, "version-b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearPendingBundle(ctx, user.ID, agent.ID, "version-a"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.PendingBundle(ctx, user.ID, agent.ID)
+	if err != nil || got != "version-b" {
+		t.Fatalf("pending %q %v", got, err)
+	}
+	if err := s.ClearPendingBundle(ctx, user.ID, agent.ID, "version-b"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.PendingBundle(ctx, user.ID, agent.ID)
+	if err != nil || got != "" {
+		t.Fatalf("cleared %q %v", got, err)
+	}
+}
+
+func TestImportDraftIsScoped(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	a := makeUser(t, s, "draft-a@example.com", "A")
+	b := makeUser(t, s, "draft-b@example.com", "B")
+	sec, err := s.SystemSection(ctx, a.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := s.CreateAgent(ctx, a.ID, AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.PutImportDraft(ctx, a.ID, agent.ID, "skills:\n  - review\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportDraft(ctx, b.ID, agent.ID, id); err != ErrNotFound {
+		t.Fatalf("other user %v", err)
+	}
+	if _, err := s.ImportDraft(ctx, a.ID, "", id); err != ErrNotFound {
+		t.Fatalf("other agent %v", err)
+	}
+	got, err := s.ImportDraft(ctx, a.ID, agent.ID, id)
+	if err != nil || !strings.Contains(got, "review") {
+		t.Fatalf("%q %v", got, err)
 	}
 }
 

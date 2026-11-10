@@ -43,7 +43,7 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 					endpoint = got.Endpoint
 				}
 			}
-			if err := s.applyPending(ctx, job.UserID, job.AgentID); err != nil {
+			if err := s.runReload(ctx, job.UserID, job.AgentID); err != nil {
 				return nil, err
 			}
 			endpoint, token, err = s.store.VMCredentials(ctx, job.UserID, job.AgentID)
@@ -363,7 +363,7 @@ func (s *Server) machineAction(w http.ResponseWriter, r *http.Request, kind stri
 		return
 	}
 	if kind != "pause" && got.State == "running" {
-		if err := s.applyPending(r.Context(), user.ID, agent.ID); err != nil {
+		if err := s.runReload(r.Context(), user.ID, agent.ID); err != nil {
 			s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusBadGateway, "The machine woke, but the saved agent could not be reloaded.")
 			return
 		}
@@ -465,7 +465,7 @@ func (s *Server) applyPending(ctx context.Context, userID, agentID string) error
 	if err := h.Reload(rctx, endpoint, token); err != nil {
 		return err
 	}
-	return s.store.ClearPendingBundle(ctx, userID, agentID)
+	return s.store.ClearPendingBundle(ctx, userID, agentID, version)
 }
 
 func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Agent) machineView {
@@ -490,7 +490,9 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 				vm = fresh
 			}
 			if vm.State == "running" {
-				_ = s.applyPending(ctx, userID, agent.ID)
+				if pending, perr := s.store.PendingBundle(ctx, userID, agent.ID); perr == nil && pending != "" {
+					s.kickReload(userID, agent.ID)
+				}
 			}
 		}
 	}

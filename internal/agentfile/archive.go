@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"strings"
@@ -33,12 +34,15 @@ var (
 // Folder is the agent.yaml and instructions from an upload.
 // Skipped names the files that were left out because they can hold secrets.
 // MissingInstructions is set when brain.instructions_file names a file
-// that is not in the folder.
+// that is not in the folder. SecretInstructions means that file was a
+// secret and was not read. BinaryInstructions means it was not text.
 type Folder struct {
 	YAML                string
 	Instructions        string
 	InstructionsFile    string
 	MissingInstructions bool
+	SecretInstructions  bool
+	BinaryInstructions  bool
 	Skipped             []string
 	LeftOut             []string
 }
@@ -232,22 +236,32 @@ func folderFrom(files map[string][]byte, subpath string) (Folder, error) {
 			inst = dir + "/" + rel
 		}
 	}
-	if relErr != nil {
+	switch {
+	case relErr != nil || (dir != "" && !under(inst, dir)):
 		folder.MissingInstructions = true
-	} else if body, ok := files[inst]; ok {
-		folder.Instructions = string(body)
-	} else if rel != "instructions.md" {
+	case secretName(inst) || secretName(rel):
 		folder.MissingInstructions = true
+		folder.SecretInstructions = true
+		folder.Instructions = ""
+		folder.Skipped = append(folder.Skipped, inst)
+	case files[inst] == nil && rel != "instructions.md":
+		folder.MissingInstructions = true
+	case files[inst] != nil && !textBody(files[inst]):
+		folder.MissingInstructions = true
+		folder.BinaryInstructions = true
+		folder.Instructions = ""
+	default:
+		folder.Instructions = string(files[inst])
 	}
 	for name := range files {
-		if !under(name, dir) {
-			continue
-		}
 		if name == yamlPath || name == inst {
 			continue
 		}
 		if secretName(name) {
 			folder.Skipped = append(folder.Skipped, name)
+			continue
+		}
+		if !under(name, dir) {
 			continue
 		}
 		folder.LeftOut = append(folder.LeftOut, name)
@@ -310,8 +324,26 @@ func under(name, dir string) bool {
 	return name == dir || strings.HasPrefix(name, dir+"/")
 }
 
+func textBody(body []byte) bool {
+	if len(body) > maxFile || bytes.IndexByte(body, 0) >= 0 {
+		return false
+	}
+	ctype := http.DetectContentType(body)
+	return strings.HasPrefix(ctype, "text/")
+}
+
 func secretName(name string) bool {
-	base := strings.ToLower(path.Base(name))
+	low := strings.ToLower(strings.ReplaceAll(name, "\\", "/"))
+	base := strings.ToLower(path.Base(low))
+	if base == ".git-credentials" || strings.HasSuffix(low, "/.git-credentials") || low == ".git-credentials" {
+		return true
+	}
+	if low == ".aws/credentials" || strings.HasSuffix(low, "/.aws/credentials") {
+		return true
+	}
+	if low == ".docker/config.json" || strings.HasSuffix(low, "/.docker/config.json") {
+		return true
+	}
 	if base == ".env" || base == ".envrc" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".env") {
 		return true
 	}

@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/png"
 	"mime/multipart"
@@ -11,7 +12,9 @@ import (
 	"net/textproto"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"archive/tar"
 	"compress/gzip"
@@ -429,6 +432,326 @@ func onlyAgent(t *testing.T, h *harness, userID string) store.Agent {
 		t.Fatalf("agents %d %v", len(list), err)
 	}
 	return list[0]
+}
+
+func TestDuplicateHarnessIsRejected(t *testing.T) {
+	ip := "203.0.113.188:9"
+	h := newHarness(t)
+	user, secret := h.account("dup@example.com", "Dup Owner", "correct-horse-1")
+	h.login("dup@example.com", "correct-horse-1", secret, ip, false)
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := firstModel(t)
+	raw := "name: Atlas\nbrain:\n  model: " + model + "\n  instructions_file: instructions.md\ntools:\n  builtin: [bash]\nharness:\n  permissions:\n    bash: ask\n    git_push: ask\nharness:\n  permissions:\n    bash: always-allow\n    git_push: always-allow\n"
+	archive := testTarGz(map[string]string{
+		"docs/agent.yaml":      raw,
+		"docs/instructions.md": "Be concise.\n",
+	})
+	fields := map[string][]string{"form": {"agent"}, "section": {sec.ID}}
+	code, body, _ := h.send(http.MethodPost, "/new-agent/import", ip, fields, map[string][]byte{"archive": archive})
+	if code != http.StatusBadRequest || !strings.Contains(body, "the key harness more than once") {
+		t.Fatalf("duplicate %d %s", code, snippet(body))
+	}
+	list, err := h.st.ListAgents(context.Background(), user.ID)
+	if err != nil || len(list) != 0 {
+		t.Fatalf("agent was created %d %v", len(list), err)
+	}
+}
+
+func TestSecretInstructionsAreSkipped(t *testing.T) {
+	ip := "203.0.113.195:9"
+	h := newHarness(t)
+	user, secret := h.account("inst@example.com", "Inst Owner", "correct-horse-1")
+	h.login("inst@example.com", "correct-horse-1", secret, ip, false)
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := testTarGz(map[string]string{
+		"docs/agent.yaml": "name: Atlas\nbrain:\n  instructions_file: .env\n",
+		"docs/.env":       "API_KEY=nested-token-value\n",
+	})
+	code, body, _ := h.send(http.MethodPost, "/new-agent/import", ip, map[string][]string{"form": {"agent"}, "section": {sec.ID}}, map[string][]byte{"archive": archive})
+	if code != 200 || strings.Contains(body, "nested-token-value") || !strings.Contains(body, "was skipped because it can hold secrets") || !strings.Contains(body, ".env") {
+		t.Fatalf("instructions %d %s", code, snippet(body))
+	}
+}
+
+func TestNestedSecretsStayOffThePageAndTheBundle(t *testing.T) {
+	ip := "203.0.113.189:9"
+	h := newHarness(t)
+	user, secret := h.account("nested@example.com", "Nested Owner", "correct-horse-1")
+	h.login("nested@example.com", "correct-horse-1", secret, ip, false)
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := firstModel(t)
+	token := "nested-token-value"
+	yaml := "name: Atlas\ndescription: Helper\nbrain:\n  model: " + model + "\n  instructions_file: instructions.md\ntools:\n  builtin: [read]\n  mcp:\n    demo:\n      command: helper\n      env:\n        GITHUB_TOKEN: " + token + "\nruntime:\n  image: local\n  env:\n    API_KEY: " + token + "\nskills:\n  - review\n"
+	archive := testTarGz(map[string]string{
+		"docs/agent.yaml":      yaml,
+		"docs/instructions.md": "Be concise.\n",
+	})
+	fields := map[string][]string{"form": {"agent"}, "section": {sec.ID}}
+	code, body, _ := h.send(http.MethodPost, "/new-agent/import", ip, fields, map[string][]byte{"archive": archive})
+	if code != 200 || strings.Contains(body, token) || !strings.Contains(body, "helper") || !strings.Contains(body, "review") || !strings.Contains(body, "MCP demo") {
+		t.Fatalf("review leaked or hid the kept keys %d %s", code, snippet(body))
+	}
+	draft := draftValue(body)
+	kept, err := h.st.ImportDraft(context.Background(), user.ID, "", draft)
+	if err != nil || strings.Contains(kept, token) || !strings.Contains(kept, "review") {
+		t.Fatalf("draft %v %s", err, kept)
+	}
+	fields = map[string][]string{
+		"form": {"agent"}, "name": {"Atlas"}, "title": {"Helper"}, "section": {sec.ID},
+		"model": {model}, "instructions": {"Be concise."}, "draft": {draft},
+		"tool": {"read"}, "perm_read": {"always-allow"},
+		"kept": {"brain:\n  model: openrouter/not/in/manifest\ntools:\n  builtin: [not_a_tool]\n"},
+	}
+	code, body, hdr := h.send(http.MethodPost, "/new-agent", ip, fields, nil)
+	if code != http.StatusSeeOther {
+		t.Fatalf("save %d %s", code, snippet(body))
+	}
+	agent := onlyAgent(t, h, user.ID)
+	bundle, err := h.st.LatestBundle(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := h.st.KeptYAML(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, page, _ := h.do(http.MethodGet, hdr.Get("Location"), "", ip, nil)
+	if code != 200 || strings.Contains(bundle.YAML, token) || strings.Contains(stored, token) || strings.Contains(page, token) || strings.Contains(bundle.YAML, "not_a_tool") || strings.Contains(bundle.YAML, "not/in/manifest") {
+		t.Fatalf("saved secret or tamper\n%s\n%s", bundle.YAML, stored)
+	}
+	if !strings.Contains(bundle.YAML, model) || !strings.Contains(bundle.YAML, "review") || !strings.Contains(bundle.YAML, "helper") {
+		t.Fatalf("dropped the form or the kept command\n%s", bundle.YAML)
+	}
+}
+
+func TestTamperedPostCannotAddAModelOrTool(t *testing.T) {
+	ip := "203.0.113.191:9"
+	h := newHarness(t)
+	user, secret := h.account("tamper@example.com", "Tamper Owner", "correct-horse-1")
+	h.login("tamper@example.com", "correct-horse-1", secret, ip, false)
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := firstModel(t)
+	fields := map[string][]string{
+		"form": {"agent"}, "name": {"Atlas"}, "title": {"Helper"}, "section": {sec.ID},
+		"model": {model}, "instructions": {"Be concise."},
+		"tool": {"bash"}, "perm_bash": {"ask"},
+		"kept": {"brain:\n  model: openrouter/not/in/manifest\ntools:\n  builtin: [not_a_tool]\nharness:\n  permissions:\n    bash: always-allow\n"},
+	}
+	code, body, _ := h.send(http.MethodPost, "/new-agent", ip, fields, nil)
+	if code != http.StatusSeeOther {
+		t.Fatalf("create %d %s", code, snippet(body))
+	}
+	agent := onlyAgent(t, h, user.ID)
+	bundle, err := h.st.LatestBundle(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(bundle.YAML, "not_a_tool") || strings.Contains(bundle.YAML, "not/in/manifest") || strings.Contains(bundle.YAML, "always-allow") || !strings.Contains(bundle.YAML, "bash: ask") || !strings.Contains(bundle.YAML, model) {
+		t.Fatalf("tampered yaml\n%s", bundle.YAML)
+	}
+}
+
+func TestPendingReloadDoesNotBlockAndKeepsANewerSave(t *testing.T) {
+	ip := "203.0.113.192:9"
+	h, fake, agent := machineUser(t, ip)
+	model := firstModel(t)
+	if _, err := h.st.PutBundle(context.Background(), agent.UserID, agent.ID, "1", "name: Atlas\nbrain:\n  model: "+model+"\n  instructions_file: instructions.md\ntools:\n  builtin: []\n", "Be concise."); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
+		t.Fatal(code)
+	}
+	waitMachine(t, h, agent, ip, "Pause")
+	plain, err := h.st.IssueBootstrap(context.Background(), agent.UserID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := h.st.ExchangeBootstrap(context.Background(), agent.ID, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SaveVMToken(context.Background(), agent.ID, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SetPendingBundle(context.Background(), agent.UserID, agent.ID, "version-a"); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{}, 4)
+	hold := make(chan struct{})
+	fake.ReloadStarted = started
+	fake.SetReloadWait(hold)
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+		}()
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reload did not start")
+	}
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("page loads waited for reload")
+	}
+	select {
+	case <-started:
+		t.Fatal("a second reload started")
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := h.st.SetPendingBundle(context.Background(), agent.UserID, agent.ID, "version-b"); err != nil {
+		t.Fatal(err)
+	}
+	close(hold)
+	fake.SetReloadWait(nil)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, err := h.st.PendingBundle(context.Background(), agent.UserID, agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got == "version-b" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pending %s", got)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine/wake", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
+		t.Fatal(code)
+	}
+	got, err := h.st.PendingBundle(context.Background(), agent.UserID, agent.ID)
+	if err != nil || got != "" {
+		t.Fatalf("after wake %q %v", got, err)
+	}
+	calls, _ := fake.Snapshot()
+	n := 0
+	for _, call := range calls {
+		if call == "reload" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("reloads %d %v", n, calls)
+	}
+}
+
+func TestFailedReloadBacksOff(t *testing.T) {
+	ip := "203.0.113.193:9"
+	h, fake, agent := machineUser(t, ip)
+	model := firstModel(t)
+	if _, err := h.st.PutBundle(context.Background(), agent.UserID, agent.ID, "1", "name: Atlas\nbrain:\n  model: "+model+"\n  instructions_file: instructions.md\ntools:\n  builtin: []\n", "Be concise."); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
+		t.Fatal(code)
+	}
+	waitMachine(t, h, agent, ip, "Pause")
+	plain, err := h.st.IssueBootstrap(context.Background(), agent.UserID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := h.st.ExchangeBootstrap(context.Background(), agent.ID, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SaveVMToken(context.Background(), agent.ID, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SetPendingBundle(context.Background(), agent.UserID, agent.ID, "version-a"); err != nil {
+		t.Fatal(err)
+	}
+	fake.ReloadErr = errors.New("reload failed")
+	if code, _, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil); code != 200 {
+		t.Fatal(code)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		calls, _ := fake.Snapshot()
+		n := 0
+		for _, call := range calls {
+			if call == "reload" {
+				n++
+			}
+		}
+		if n >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reload did not run")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if code, _, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil); code != 200 {
+		t.Fatal(code)
+	}
+	time.Sleep(80 * time.Millisecond)
+	calls, _ := fake.Snapshot()
+	n := 0
+	for _, call := range calls {
+		if call == "reload" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("backoff did not hold %d %v", n, calls)
+	}
+}
+
+func TestGitHubRateLimitIsExplained(t *testing.T) {
+	ip := "203.0.113.194:9"
+	h := newHarness(t)
+	_, secret := h.account("rate@example.com", "Rate Owner", "correct-horse-1")
+	h.login("rate@example.com", "correct-horse-1", secret, ip, false)
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("API rate limit exceeded"))
+	}))
+	t.Cleanup(gh.Close)
+	h.srv.SetGitHub(gh.URL, gh.Client())
+	code, body, _ := h.send(http.MethodPost, "/new-agent/import", ip, map[string][]string{
+		"form": {"agent"}, "github": {"https://github.com/acme/helper"},
+	}, nil)
+	if code != http.StatusBadRequest || !strings.Contains(body, "GitHub is rate limiting imports, try again later or add ?ref=") {
+		t.Fatalf("rate %d %s", code, snippet(body))
+	}
+}
+
+func draftValue(body string) string {
+	const needle = `name="draft" value="`
+	i := strings.Index(body, needle)
+	if i < 0 {
+		return ""
+	}
+	rest := body[i+len(needle):]
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		return ""
+	}
+	return rest[:j]
 }
 
 func countCall(before, after []string, name string) int {
