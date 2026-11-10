@@ -24,6 +24,7 @@ go.work.sum
 /data/
 .env
 .env.*
+castbot.env
 *.key
 *.pem
 
