@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"strings"
 	"sync"
 	"syscall"
@@ -29,13 +30,16 @@ const (
 	// the process stops while a reply is still running.
 	Interrupted = "The reply was interrupted."
 
-	// retryBudget is the total time spent waiting out 502, 503, 504, and
-	// connection refused. It stays under the runtime's 120s resume TTL.
+	// retryBudget is the total time spent waiting out a transient open:
+	// 502, 503, 504, connection refused, connection reset, a dial timeout,
+	// or a response-header timeout. It stays under the runtime's 120s resume TTL.
 	retryBudget = 100 * time.Second
 	retryMin    = 250 * time.Millisecond
 	retryMax    = 8 * time.Second
-	// resumeLimit matches the runtime client's extra connections after a
-	// stream that advertised a cast-stream marker.
+	// resumeLimit is how many resumes in a row may deliver no new data
+	// events. The next empty resume fails the run. A read that advances
+	// the offset clears the count, so a long healthy reply can be cut
+	// many times.
 	resumeLimit = 8
 )
 
@@ -155,6 +159,7 @@ func (r *Runner) execute(job Job) {
 			return
 		}
 		log.Printf("run %s did not start", job.RunID)
+		r.fail(job, Stopped, 0)
 		return
 	}
 	r.Hub.Notify(job.RunID)
@@ -197,6 +202,7 @@ func (r *Runner) execute(job Job) {
 			continue
 		}
 		attempt = 0
+		before := offset
 		done, marked, rpc, err := r.read(stream, job, &offset, &text, sawMarker)
 		if marked {
 			sawMarker = true
@@ -224,11 +230,17 @@ func (r *Runner) execute(job Job) {
 		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 			log.Printf("run %s: stream cut", job.RunID)
 		}
-		if !sawMarker || resumes >= resumeLimit {
+		// A read that stored new data events clears the empty streak.
+		// Only resumes that deliver no new bytes count toward the cap.
+		if offset > before {
+			resumes = 0
+		} else {
+			resumes++
+		}
+		if !sawMarker || resumes > resumeLimit {
 			r.fail(job, Interrupted, offset)
 			return
 		}
-		resumes++
 		if !sleep(r.ctx, 10*time.Millisecond) {
 			r.fail(job, Interrupted, offset)
 			return
@@ -370,7 +382,14 @@ func transient(err error) bool {
 	if errors.As(err, &status) {
 		return status.Code == 502 || status.Code == 503 || status.Code == 504
 	}
-	return errors.Is(err, syscall.ECONNREFUSED)
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 func giveUp(offset int) string {

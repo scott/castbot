@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -501,6 +503,227 @@ func TestHistoryIsSentOnce(t *testing.T) {
 	if !saw {
 		t.Fatal("first open did not send history")
 	}
+}
+
+func TestManyCutsStayByteIdentical(t *testing.T) {
+	msg := "hello there"
+	want := runtime.EchoText("echo", msg)
+	parts := splitEven(want, 25)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		id, offset := requestCursor(r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl, _ := w.(http.Flusher)
+		_, _ = fmt.Fprintf(w, ": cast-stream %s\n\n", id)
+		if fl != nil {
+			fl.Flush()
+		}
+		if offset < 0 || offset >= len(parts) {
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			return
+		}
+		_, _ = io.WriteString(w, textFrame(parts[offset]))
+		if fl != nil {
+			fl.Flush()
+		}
+		if offset == len(parts)-1 {
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		}
+	}))
+	t.Cleanup(srv.Close)
+	h := newHarnessWith(t, runtime.NewHTTP(srv.URL))
+	ip := "203.0.113.241:9"
+	user, secret := h.account("cuts@example.com", "Cuts", "correct-horse-1")
+	h.login("cuts@example.com", "correct-horse-1", secret, ip, false)
+	agent := h.newAgent(ip, "Atlas")
+	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {msg}}), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 {
+		t.Fatal(code, body)
+	}
+	runID := runIDFrom(t, body)
+	row := waitRun(t, h, user.ID, runID, "done", 10*time.Second)
+	if hits.Load() != int32(len(parts)) {
+		t.Fatalf("connections %d", hits.Load())
+	}
+	if row.Error != "" {
+		t.Fatal(row.Error)
+	}
+	assertAgentBody(t, h, user.ID, agent.ID, want)
+	if joinedText(t, h, user.ID, runID) != want {
+		t.Fatal("joined text mismatch")
+	}
+	page := h.poll(ip, "/agents/"+agent.ID, "You said: hello there")
+	if strings.Count(page, "You said: hello there") != 1 {
+		t.Fatalf("page duplicated the reply")
+	}
+}
+
+func TestNineEmptyResumesFail(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		id := requestStreamID(r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, ": cast-stream %s\n\n", id)
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}))
+	t.Cleanup(srv.Close)
+	h := newHarnessWith(t, runtime.NewHTTP(srv.URL))
+	ip := "203.0.113.242:9"
+	user, secret := h.account("empty@example.com", "Empty", "correct-horse-1")
+	h.login("empty@example.com", "correct-horse-1", secret, ip, false)
+	agent := h.newAgent(ip, "Atlas")
+	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {"hello there"}}), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 {
+		t.Fatal(code, body)
+	}
+	runID := runIDFrom(t, body)
+	row := waitRun(t, h, user.ID, runID, "failed", 5*time.Second)
+	if row.Error != run.Interrupted {
+		t.Fatalf("error %q", row.Error)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if hits.Load() != 9 {
+		t.Fatalf("connections %d", hits.Load())
+	}
+	if joinedText(t, h, user.ID, runID) != "" {
+		t.Fatal("empty resumes stored text")
+	}
+	page := h.poll(ip, "/agents/"+agent.ID, run.Interrupted)
+	if !strings.Contains(page, ">Retry<") {
+		t.Fatalf("page: %s", page)
+	}
+}
+
+func TestResetAndTimeoutsStillDeliver(t *testing.T) {
+	echo := runtime.NewEcho(runtime.EchoOptions{Name: "echo"})
+	t.Cleanup(echo.Close)
+	up := httptest.NewServer(echo)
+	t.Cleanup(up.Close)
+	client := &seqClient{
+		errs: []error{
+			&url.Error{Op: "read", URL: up.URL, Err: &net.OpError{Op: "read", Err: syscall.ECONNRESET}},
+			&url.Error{Op: "dial", URL: up.URL, Err: netTimeout{"dial timeout"}},
+			&url.Error{Op: "Get", URL: up.URL, Err: netTimeout{"timeout awaiting response headers"}},
+		},
+		next: runtime.NewHTTP(up.URL),
+	}
+	h := newHarnessWith(t, client)
+	msg := "hello there"
+	user, agent, page := postAndWait(t, h, "reset@example.com", "203.0.113.243:9", msg, "You said: hello there", 15*time.Second)
+	if client.i.Load() < 4 {
+		t.Fatalf("opens %d", client.i.Load())
+	}
+	assertAgentBody(t, h, user.ID, agent.ID, runtime.EchoText("echo", msg))
+	if strings.Count(page, "You said: hello there") != 1 {
+		t.Fatalf("page: %s", page)
+	}
+}
+
+func TestQueuedRunIsNotInterruptedBeforeStart(t *testing.T) {
+	h := newHarness(t)
+	ip := "203.0.113.244:9"
+	user, secret := h.account("queued@example.com", "Queued", "correct-horse-1")
+	h.login("queued@example.com", "correct-horse-1", secret, ip, false)
+	agent := h.newAgent(ip, "Atlas")
+	threads, err := h.st.ListThreadsByAgent(context.Background(), user.ID, agent.ID)
+	if err != nil || len(threads) == 0 {
+		t.Fatal(err)
+	}
+	row, err := h.st.CreateRun(context.Background(), user.ID, threads[0].ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := httptest.NewServer(h.srv.Handler())
+	t.Cleanup(live.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, live.URL+"/runs/"+row.ID+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range h.cookieList() {
+		req.AddCookie(c)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+	got, err := h.st.GetRun(context.Background(), user.ID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "queued" || got.Error != "" {
+		t.Fatalf("queued run became %s %q", got.Status, got.Error)
+	}
+}
+
+type seqClient struct {
+	errs []error
+	next runtime.Client
+	i    atomic.Int32
+}
+
+func (s *seqClient) Open(ctx context.Context, req runtime.Send) (runtime.Stream, error) {
+	n := int(s.i.Add(1)) - 1
+	if n < len(s.errs) {
+		return nil, s.errs[n]
+	}
+	return s.next.Open(ctx, req)
+}
+
+type netTimeout struct{ msg string }
+
+func (e netTimeout) Error() string   { return e.msg }
+func (e netTimeout) Timeout() bool   { return true }
+func (e netTimeout) Temporary() bool { return true }
+
+func requestStreamID(r *http.Request) string {
+	id, _ := requestCursor(r)
+	return id
+}
+
+func requestCursor(r *http.Request) (string, int) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return "", 0
+	}
+	var msg struct {
+		Params struct {
+			Metadata struct {
+				StreamID string `json:"streamId"`
+				Offset   int    `json:"streamOffset"`
+			} `json:"metadata"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(raw, &msg) != nil {
+		return "", 0
+	}
+	return msg.Params.Metadata.StreamID, msg.Params.Metadata.Offset
+}
+
+func splitEven(s string, n int) []string {
+	if n < 1 || len(s) == 0 {
+		return []string{s}
+	}
+	if n > len(s) {
+		n = len(s)
+	}
+	parts := make([]string, 0, n)
+	start := 0
+	for i := 0; i < n; i++ {
+		end := start + (len(s)-start)/(n-i)
+		parts = append(parts, s[start:end])
+		start = end
+	}
+	return parts
 }
 
 func postAndWait(t *testing.T, h *harness, email, ip, msg, needle string, d time.Duration) (store.User, store.Agent, string) {

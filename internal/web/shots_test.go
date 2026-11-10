@@ -22,8 +22,12 @@ import (
 )
 
 func TestShots(t *testing.T) {
+	chrome := "/usr/bin/google-chrome"
+	if p := os.Getenv("CASTBOT_CHROME"); p != "" {
+		chrome = p
+	}
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath("/usr/bin/google-chrome"),
+		chromedp.ExecPath(chrome),
 		chromedp.Flag("headless", "new"),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),

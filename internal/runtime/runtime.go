@@ -10,9 +10,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+const (
+	// HistoryTurns is the newest transcript entries sent on a first open.
+	HistoryTurns = 50
+	// HistoryBytes is the cap on the role and text of those entries.
+	// The smaller of this and HistoryTurns wins.
+	HistoryBytes = 100 << 10
 )
 
 // Turn is one saved transcript entry. Cast reads role and text.
@@ -25,6 +36,8 @@ type Turn struct {
 // Offset is the count of data events already consumed. Keepalive comments
 // do not count. SessionID is the thread id and StreamID is the run id.
 // History is the earlier transcript and is sent only on the first open.
+// CapHistory keeps the last HistoryTurns entries or about 100 KB,
+// whichever is smaller.
 type Send struct {
 	SessionID string
 	StreamID  string
@@ -62,6 +75,40 @@ type Client interface {
 	Open(ctx context.Context, req Send) (Stream, error)
 }
 
+// CapHistory keeps the newest turns that fit HistoryTurns and HistoryBytes.
+// A single turn longer than the byte cap is cut to its newest bytes.
+func CapHistory(in []Turn) []Turn {
+	if len(in) == 0 {
+		return nil
+	}
+	if len(in) > HistoryTurns {
+		in = in[len(in)-HistoryTurns:]
+	}
+	turns := append([]Turn(nil), in...)
+	n := 0
+	for _, turn := range turns {
+		n += len(turn.Role) + len(turn.Text)
+	}
+	for len(turns) > 1 && n > HistoryBytes {
+		n -= len(turns[0].Role) + len(turns[0].Text)
+		turns = turns[1:]
+	}
+	if len(turns) == 1 {
+		room := HistoryBytes - len(turns[0].Role)
+		if room < 0 {
+			room = 0
+		}
+		if len(turns[0].Text) > room {
+			text := turns[0].Text[len(turns[0].Text)-room:]
+			for len(text) > 0 && !utf8.ValidString(text) {
+				text = text[1:]
+			}
+			turns[0].Text = text
+		}
+	}
+	return turns
+}
+
 // HTTPClient is a Cast A2A client over HTTP.
 type HTTPClient struct {
 	base   string
@@ -73,9 +120,12 @@ func NewHTTP(base string) *HTTPClient {
 	return &HTTPClient{
 		base: strings.TrimRight(base, "/"),
 		client: &http.Client{Transport: &http.Transport{
-			DisableKeepAlives:  true,
-			DisableCompression: true,
-			Proxy:              http.ProxyFromEnvironment,
+			DisableKeepAlives:     true,
+			DisableCompression:    true,
+			Proxy:                 http.ProxyFromEnvironment,
+			ResponseHeaderTimeout: 30 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 		}},
 	}
 }
@@ -87,9 +137,10 @@ func (c *HTTPClient) Open(ctx context.Context, req Send) (Stream, error) {
 		"streamId":     req.StreamID,
 		"streamOffset": req.Offset,
 	}
-	if req.Offset == 0 && len(req.History) > 0 {
-		turns := make([]map[string]string, 0, len(req.History))
-		for _, turn := range req.History {
+	history := CapHistory(req.History)
+	if req.Offset == 0 && len(history) > 0 {
+		turns := make([]map[string]string, 0, len(history))
+		for _, turn := range history {
 			turns = append(turns, map[string]string{"role": turn.Role, "text": turn.Text})
 		}
 		meta["history"] = turns

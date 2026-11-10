@@ -19,6 +19,9 @@ func runJob(userID, threadID, agentID, runID, text string, history []runtime.Tur
 	return run.Job{UserID: userID, ThreadID: threadID, AgentID: agentID, RunID: runID, Text: text, History: history}
 }
 
+// priorTurns is the transcript before this user message.
+// The runtime receives the newest 50 turns, or about 100 KB of role
+// plus text, whichever is smaller. Older turns are left out.
 func (s *Server) priorTurns(ctx context.Context, userID, threadID, skip string) []runtime.Turn {
 	msgs, err := s.store.ListMessages(ctx, userID, threadID)
 	if err != nil {
@@ -31,7 +34,7 @@ func (s *Server) priorTurns(ctx context.Context, userID, threadID, skip string) 
 		}
 		out = append(out, runtime.Turn{Role: msg.AuthorKind, Text: msg.Body})
 	}
-	return out
+	return runtime.CapHistory(out)
 }
 
 func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +159,11 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			flush()
 			return
 		}
-		if !runTerminal(current.Status) && !s.runs.Watching(current.ID) {
+		// A queued run is waiting for its goroutine. Start tracks the run
+		// before the response that names it, but a page read can still see
+		// the row in that gap. Failing it here would interrupt a brand-new
+		// run. A streaming run whose goroutine is gone still fails.
+		if !runTerminal(current.Status) && current.Status != "queued" && !s.runs.Watching(current.ID) {
 			if orphaned {
 				return
 			}
