@@ -10,7 +10,7 @@
 # 5fc2bdb46c4041831fc51c9f909d59e54f887d31:
 #   python -m cast.runtime --agent-path PATH --port PORT --host HOST
 
-FROM golang:1.22.2 AS gobuild
+FROM golang:1.27.4 AS gobuild
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
