@@ -162,7 +162,6 @@ func scrubScheme(s string, re *regexp.Regexp, label string) string {
 		for valStart > loc[0] && !shellSpace(s[valStart-1]) {
 			valStart--
 		}
-		end = cutRedirectFD(s, valStart, end)
 		if strings.Contains(s[valStart:end], "://") {
 			continue
 		}
@@ -172,27 +171,6 @@ func scrubScheme(s string, re *regexp.Regexp, label string) string {
 	}
 	b.WriteString(s[last:])
 	return b.String()
-}
-
-// cutRedirectFD leaves a file-descriptor digit run on the tail of `n>&` and `n<&`.
-// `echo Bearer x12>&1` keeps the `12`. A plain `>` redirect does not, so
-// `token=t1>f` still hides the whole value.
-func cutRedirectFD(s string, valStart, valEnd int) int {
-	if valEnd <= valStart || valEnd+1 >= len(s) {
-		return valEnd
-	}
-	redir := s[valEnd]
-	if (redir != '>' && redir != '<') || s[valEnd+1] != '&' {
-		return valEnd
-	}
-	i := valEnd
-	for i > valStart && s[i-1] >= '0' && s[i-1] <= '9' {
-		i--
-	}
-	if i == valEnd || i == valStart {
-		return valEnd
-	}
-	return i
 }
 
 func scrubString(s string) (string, bool) {
@@ -273,11 +251,7 @@ func takePassword(s, scheme string, i int) (string, int, bool) {
 		return scheme + "Hidden@", end + 1, true
 	}
 	if end > start && end < len(s) && shellStop(s[end]) && atSignBeforeSpace(s, end+1) {
-		cut := cutRedirectFD(s, start, end)
-		if cut == start {
-			cut = end
-		}
-		return scheme + "Hidden", cut, true
+		return scheme + "Hidden", end, true
 	}
 	return "", 0, false
 }
@@ -413,13 +387,6 @@ func replaceFlagValues(s string, re *regexp.Regexp, decide func(m []string, cmd 
 		if m == nil {
 			continue
 		}
-		end := loc[1]
-		val := m[len(m)-1]
-		valStart := end - len(val)
-		if cut := cutRedirectFD(s, valStart, end); cut != end {
-			m[len(m)-1] = s[valStart:cut]
-			end = cut
-		}
 		cmd := commandBefore(s, loc[0])
 		repl, ok := decide(m, cmd)
 		if !ok {
@@ -427,7 +394,7 @@ func replaceFlagValues(s string, re *regexp.Regexp, decide func(m []string, cmd 
 		}
 		b.WriteString(s[last:loc[0]])
 		b.WriteString(repl)
-		last = end
+		last = loc[1]
 	}
 	b.WriteString(s[last:])
 	return b.String()
@@ -532,7 +499,6 @@ func scrubLabeled(s string) string {
 			for vEnd < len(s) && !shellStop(s[vEnd]) {
 				vEnd++
 			}
-			vEnd = cutRedirectFD(s, vStart, vEnd)
 		}
 		if vEnd < i {
 			vEnd = i
