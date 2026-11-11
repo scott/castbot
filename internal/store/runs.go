@@ -467,9 +467,16 @@ func (s *Store) abandonApprovals(ctx context.Context, tx *sql.Tx, userID, runID,
 
 // DeferRestartLimit is how long a bundle or secret reload will wait after
 // the first time that reload had to wait. A pending web approval is never
-// forced: its own timeout ends that wait. Past the limit, with no pending
-// web approval, the restart proceeds.
+// forced: its own timeout ends that wait. A tool the user just approved is
+// never forced either, until its result arrives or the run ends. Past the
+// limit, with neither of those, the restart proceeds.
 const DeferRestartLimit = 15 * time.Minute
+
+// Deferral reasons that are never forced by DeferRestartLimit.
+const (
+	reasonPendingApproval = "pending approval"
+	reasonApprovedTool    = "approved tool running"
+)
 
 func restartKey(userID, agentID string) string {
 	return userID + "\x00" + agentID
@@ -509,7 +516,9 @@ func (s *Store) restartWantedAt(userID, agentID string) (time.Time, bool) {
 // restart the guest and drop the prompt. A brand new run with no offset
 // does not defer, so the next message can apply the change first.
 // The 15 minute bound starts at NoteRestartWanted, not at the run's start.
-// A pending web approval is never forced.
+// A pending web approval is never forced. An approved tool that is still
+// running in an open run is never forced: the run has had no event since
+// that approval's permission event, so the tool result has not arrived.
 // reason is why it is waiting, or "bound:" plus that reason when the wait
 // has passed DeferRestartLimit and the restart should proceed.
 func (s *Store) DeferGuestRestart(ctx context.Context, userID, agentID, runID string) (bool, string, error) {
@@ -520,7 +529,7 @@ func (s *Store) DeferGuestRestart(ctx context.Context, userID, agentID, runID st
 	if err != nil || reason == "" {
 		return false, "", err
 	}
-	if reason == "pending approval" {
+	if reason == reasonPendingApproval || reason == reasonApprovedTool {
 		return true, reason, nil
 	}
 	if at, ok := s.restartWantedAt(userID, agentID); ok && !s.Now().Before(at.Add(DeferRestartLimit)) {
@@ -547,7 +556,23 @@ func (s *Store) deferReason(ctx context.Context, userID, agentID, runID string) 
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MIN(a.created_at), '') FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id WHERE a.user_id = ? AND r.agent_id = ? AND a.status = 'pending' AND a.origin = 'web'`, userID, agentID).Scan(&created); err != nil {
 		return "", err
 	}
-	if err := consider("pending approval", created); err != nil {
+	if err := consider(reasonPendingApproval, created); err != nil {
+		return "", err
+	}
+	// An approved web tool call whose result has not arrived. The permission
+	// event is the last event of that run, so nothing after the approval has
+	// come back yet. Restarting the guest now would kill the tool.
+	var decided string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MIN(COALESCE(NULLIF(a.decided_at, ''), a.created_at)), '')
+FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id
+WHERE a.user_id = ? AND r.agent_id = ? AND a.status = 'approved' AND a.origin = 'web'
+  AND r.status IN ('streaming', 'waiting_approval')
+  AND NOT EXISTS (
+    SELECT 1 FROM run_events p JOIN run_events e ON e.run_id = p.run_id AND e.seq > p.seq
+    WHERE p.run_id = r.id AND p.kind = 'permission' AND json_extract(p.payload_json, '$.approvalId') = a.id)`, userID, agentID).Scan(&decided); err != nil {
+		return "", err
+	}
+	if err := consider(reasonApprovedTool, decided); err != nil {
 		return "", err
 	}
 	q := `SELECT COALESCE(MIN(started_at), '') FROM runs WHERE user_id = ? AND agent_id = ? AND status IN ('streaming', 'waiting_approval')`

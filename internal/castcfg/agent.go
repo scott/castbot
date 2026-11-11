@@ -432,7 +432,16 @@ func SecretKey(key string) bool { return secretKey(key) }
 
 func secretKey(key string) bool {
 	k := normalizeSecretKey(key)
-	if ordinaryKey(k) {
+	if k == "" {
+		return false
+	}
+	parts := strings.Split(k, "_")
+	// A trailing "keys" reads like "key", so api_keys matches api_key.
+	if len(parts) >= 2 && parts[len(parts)-1] == "keys" {
+		parts[len(parts)-1] = "key"
+		k = strings.Join(parts, "_")
+	}
+	if ordinaryKey(k, parts) {
 		return false
 	}
 	switch k {
@@ -443,14 +452,14 @@ func secretKey(key string) bool {
 		"auth", "pass", "jwt", "pat", "bearer", "basic_auth", "auth_header":
 		return true
 	}
-	parts := strings.Split(k, "_")
 	// Names that end in _key are secrets unless ordinaryKey allowed them.
 	if len(parts) >= 2 && parts[len(parts)-1] == "key" {
 		return true
 	}
 	for i, p := range parts {
 		switch p {
-		case "token", "tokens", "secret", "password", "passwd", "passphrase",
+		case "token", "tokens", "secret", "secrets", "password", "passwords",
+			"passwd", "passwds", "pass", "pw", "pwd", "passphrase",
 			"credential", "credentials", "auth", "jwt", "pat", "bearer":
 			return true
 		}
@@ -467,43 +476,101 @@ func secretKey(key string) bool {
 
 // ordinaryKey keeps names that only look like secrets.
 // Token counts stay visible. A short list of ordinary *_key names stays visible.
-// max_ and count do not keep max_secret or secret_count.
-func ordinaryKey(k string) bool {
+// Public keys stay visible. max_ and count do not keep max_secret or secret_count.
+func ordinaryKey(k string, parts []string) bool {
 	switch k {
-	case "tokens", "tokenizer", "num_tokens", "token_count",
-		"max_tokens", "max_output_tokens", "max_input_tokens",
-		"max_completion_tokens", "max_new_tokens",
-		"prompt_tokens", "completion_tokens", "input_tokens", "output_tokens",
-		"total_tokens",
+	case "tokens", "tokenizer",
 		"sort_key", "cache_key", "object_key", "partition_key", "primary_key",
-		"idempotency_key", "host_key", "public_key", "ssh_public_key":
+		"idempotency_key", "host_key", "public_key":
 		return true
+	}
+	if tokenCountKey(parts) {
+		return true
+	}
+	// A public key is not a secret, so client_public_key and ssh_public_key stay.
+	if n := len(parts); n >= 2 && parts[n-2] == "public" && parts[n-1] == "key" {
+		return true
+	}
+	// auth_mode and auth_type name a scheme, not a credential.
+	if len(parts) == 2 && parts[0] == "auth" {
+		switch parts[1] {
+		case "mode", "type", "method", "scheme", "kind", "provider", "required", "enabled":
+			return true
+		}
 	}
 	return false
 }
 
-// normalizeSecretKey folds camelCase and dashes so privateKey matches private_key.
-func normalizeSecretKey(key string) string {
-	key = strings.TrimSpace(key)
-	var b strings.Builder
-	prevLower := false
-	for _, r := range key {
-		switch {
-		case r >= 'A' && r <= 'Z':
-			if prevLower {
-				b.WriteByte('_')
-			}
-			b.WriteByte(byte(r - 'A' + 'a'))
-			prevLower = false
-		case r == '-':
-			b.WriteByte('_')
-			prevLower = false
+// tokenCountKey reports names built only from token-count words, such as
+// max_tokens, input_token_count, cached_tokens or max_tokens_to_sample.
+// Any other word (access, api, github, secret) keeps the name hidden.
+func tokenCountKey(parts []string) bool {
+	plural, single, count := false, false, false
+	for _, p := range parts {
+		switch p {
+		case "tokens":
+			plural = true
+		case "token":
+			single = true
+		case "count", "counts":
+			count = true
+		case "max", "min", "num", "total", "input", "output", "prompt", "completion",
+			"cached", "cache", "reasoning", "thinking", "new", "to", "sample", "read",
+			"write", "creation", "audio", "text", "image", "accepted", "rejected",
+			"per", "limit", "budget", "used", "remaining":
 		default:
-			b.WriteRune(r)
-			prevLower = r >= 'a' && r <= 'z'
+			return false
 		}
 	}
-	return b.String()
+	return plural || (single && count)
+}
+
+// normalizeSecretKey folds camelCase, acronyms, digits and dashes into
+// lower-case words joined by "_". privateKey becomes private_key, APIToken
+// becomes api_token, SSHKey becomes ssh_key and password2 becomes password_2.
+func normalizeSecretKey(key string) string {
+	rs := []rune(strings.TrimSpace(key))
+	var b strings.Builder
+	sep := func() {
+		s := b.String()
+		if s != "" && !strings.HasSuffix(s, "_") {
+			b.WriteByte('_')
+		}
+	}
+	isUpper := func(r rune) bool { return r >= 'A' && r <= 'Z' }
+	isLower := func(r rune) bool { return r >= 'a' && r <= 'z' }
+	isDigit := func(r rune) bool { return r >= '0' && r <= '9' }
+	for i, r := range rs {
+		var prev, next rune
+		if i > 0 {
+			prev = rs[i-1]
+		}
+		if i+1 < len(rs) {
+			next = rs[i+1]
+		}
+		switch {
+		case r == '-' || r == '_' || r == '.' || r == ' ':
+			sep()
+		case isUpper(r):
+			// Split lower-to-upper (apiKey), digit-to-upper (v2Key) and the end
+			// of an acronym run before a capitalised word (APIToken).
+			if isLower(prev) || isDigit(prev) || (isUpper(prev) && isLower(next)) {
+				sep()
+			}
+			b.WriteRune(r - 'A' + 'a')
+		case isDigit(r):
+			if i > 0 && !isDigit(prev) {
+				sep()
+			}
+			b.WriteRune(r)
+		default:
+			if isDigit(prev) && (isLower(r) || isUpper(r)) {
+				sep()
+			}
+			b.WriteRune(r)
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 func rejectAliases(n *yaml.Node) error {

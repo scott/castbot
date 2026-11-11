@@ -672,9 +672,22 @@ func TestSecretArgNamesStayHidden(t *testing.T) {
 		"jwt": "hid-jwt", "pat": "hid-pat", "bearer": "hid-bearerkey",
 		"basic_auth": "hid-basic", "auth_header": "hid-authh",
 		"max_secret": "hid-maxsec", "secret_count": "hid-seccount",
-		"note": "Bearer hid-token",
+		"note":     "Bearer hid-token",
+		"APIToken": "hid-apitok", "DBPassword": "hid-dbpw", "PGPassword": "hid-pgpw",
+		"JWTToken": "hid-jwttok", "apiKeys": "hid-apikeys", "api_keys": "hid-apikeys2",
+		"password2": "hid-pw2", "db_pass": "hid-dbpass", "DB_PASS": "hid-dbpassup",
+		"SSHKey": "hid-sshacr", "access_keys": "hid-acckeys",
+	}
+	plainArgs := map[string]string{
+		"partition_key": "show-partition", "input_token_count": "show-intok",
+		"max_tokens_to_sample": "show-maxsample", "cached_tokens": "show-cached",
+		"reasoning_tokens": "show-reasoning", "client_public_key": "show-clientpub",
+		"auth_mode": "show-authmode",
 	}
 	args := map[string]any{"command": "ls demo", "visible": "keep-me", "session": "work", "tokens": 512, "publicKey": "ssh-ed25519 AAAA demo", "ssh_public_key": "ssh-ed25519 AAAA demo", "token_count": 7}
+	for k, v := range plainArgs {
+		args[k] = v
+	}
 	for k, v := range secrets {
 		args[k] = v
 	}
@@ -737,6 +750,42 @@ func TestSecretArgNamesStayHidden(t *testing.T) {
 	for _, plain := range []string{"work", "512", "ssh-ed25519 AAAA demo", "Bearer Hidden"} {
 		if !strings.Contains(card, plain) {
 			t.Fatalf("card hid %s: %s", plain, card)
+		}
+	}
+	for name, body := range map[string]string{"page": page, "card": card, "sse": sse.String(), "run_events": runEv.String(), "arguments": ap.Arguments} {
+		for key, plain := range plainArgs {
+			if !strings.Contains(body, plain) {
+				t.Fatalf("%s hid ordinary %s", name, key)
+			}
+		}
+	}
+	// Approve so the decision audit carries the argument summary too.
+	if code, _, _ := h.do(http.MethodPost, "/runs/"+ap.RunID+"/approvals/"+ap.ID+"/approve", h.form(nil), ip, map[string]string{"HX-Request": "true"}); code != http.StatusOK {
+		t.Fatalf("approve %d", code)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		row, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if row.Status == "approved" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("approval status %s", row.Status)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	audits, err = h.st.ListAudit(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range audits {
+		for _, secret := range secrets {
+			if strings.Contains(a.Detail, secret) || strings.Contains(a.Action, secret) {
+				t.Fatalf("audit %s leaked %s", a.Action, secret)
+			}
 		}
 	}
 }

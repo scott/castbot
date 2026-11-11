@@ -261,3 +261,175 @@ func TestCLIDecisionPicksUpToolFromLaterPermission(t *testing.T) {
 		t.Fatalf("web thread copied %d messages", len(web))
 	}
 }
+
+func TestJournalDecisionIsScopedToCurrentMachine(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	owner := makeUser(t, s, "journal-vm-s07b@example.com", "Owner")
+	sec, err := s.CreateSection(ctx, owner.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := "example.invalid/castbot-runtime:s07b"
+	if _, err := s.BeginVM(ctx, owner.ID, agent.ID, "castbot-old", image); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.IngestJournal(ctx, owner.ID, agent.ID, []JournalEntry{
+		{Seq: 1, At: "2026-11-10T22:12:17Z", Caller: "control_plane", Kind: "decision", RequestID: "req-swap", Decision: "approved"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, found, err := s.JournalDecision(ctx, owner.ID, agent.ID, "req-swap"); err != nil || !found || got != "approved" {
+		t.Fatalf("old machine %q %v %v", got, found, err)
+	}
+	// Swap the machine. The old machine's decision must not match.
+	if err := s.ReleaseVM(ctx, owner.ID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginVM(ctx, owner.ID, agent.ID, "castbot-new", image); err != nil {
+		t.Fatal(err)
+	}
+	if got, found, err := s.JournalDecision(ctx, owner.ID, agent.ID, "req-swap"); err != nil || found {
+		t.Fatalf("new machine matched an old decision %q %v %v", got, found, err)
+	}
+	// The new machine's own journal still matches, even at the same seq.
+	if _, err := s.IngestJournal(ctx, owner.ID, agent.ID, []JournalEntry{
+		{Seq: 1, At: "2026-11-10T22:20:00Z", Caller: "control_plane", Kind: "decision", RequestID: "req-swap", Decision: "denied"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, found, err := s.JournalDecision(ctx, owner.ID, agent.ID, "req-swap"); err != nil || !found || got != "denied" {
+		t.Fatalf("new machine %q %v %v", got, found, err)
+	}
+}
+
+func TestDeferGuestRestartDoesNotForceApprovedTool(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		decision string
+		guarded  bool
+	}{
+		{"approved", "approved", true},
+		{"denied", "denied", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testStore(t)
+			ctx := context.Background()
+			start := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+			now := start
+			s.SetNow(func() time.Time { return now })
+			owner := makeUser(t, s, "bound-tool-"+tc.name+"@example.com", "Owner")
+			sec, err := s.CreateSection(ctx, owner.ID, "Work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			agent, thread, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := s.CreateRun(ctx, owner.ID, thread.ID, agent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.MarkStreaming(ctx, owner.ID, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.AppendRunEvent(ctx, owner.ID, run.ID, "text", `{"text":"hi"}`, 2); err != nil {
+				t.Fatal(err)
+			}
+			// The reload became wanted at start. The ask arrives 16 minutes
+			// later, past the bound, and the user answers it right away.
+			s.NoteRestartWanted(owner.ID, agent.ID)
+			now = start.Add(16 * time.Minute)
+			ap, err := s.RecordPermission(ctx, owner.ID, run.ID, json.RawMessage(`{"id":"req-tool","tool":"bash","arguments":{"command":"make deploy"}}`), now.Add(time.Hour), 3)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, claimed, err := s.ClaimDecision(ctx, owner.ID, ap.ID, run.ID, tc.decision, owner.ID); err != nil || !claimed {
+				t.Fatalf("claim %v %v", claimed, err)
+			}
+			if err := s.MarkSent(ctx, owner.ID, ap.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.ResumeAfterApproval(ctx, owner.ID, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			for _, step := range []time.Duration{4 * time.Second, DeferRestartLimit, 3 * time.Hour} {
+				now = start.Add(16*time.Minute + step)
+				for _, except := range []string{run.ID, ""} {
+					wait, reason, err := s.DeferGuestRestart(ctx, owner.ID, agent.ID, except)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if tc.guarded && (!wait || reason != "approved tool running") {
+						t.Fatalf("+%s except=%q forced a running approved tool: %v %s", step, except, wait, reason)
+					}
+					if !tc.guarded && (wait || !strings.HasPrefix(reason, "bound:")) {
+						t.Fatalf("+%s except=%q denied tool should follow the bound: %v %s", step, except, wait, reason)
+					}
+				}
+			}
+			if !tc.guarded {
+				return
+			}
+			// The tool result arrives. The run is idle in its turn again, so the
+			// 15 minute bound applies and the restart may proceed.
+			if _, err := s.AppendRunEvent(ctx, owner.ID, run.ID, "text", `{"text":"deployed"}`, 4); err != nil {
+				t.Fatal(err)
+			}
+			wait, reason, err := s.DeferGuestRestart(ctx, owner.ID, agent.ID, run.ID)
+			if err != nil || wait || reason != "bound:this run has already started" {
+				t.Fatalf("after the tool result %v %s %v", wait, reason, err)
+			}
+		})
+	}
+}
+
+func TestDeferGuestRestartApprovedToolEndsWithRun(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	start := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	now := start
+	s.SetNow(func() time.Time { return now })
+	owner := makeUser(t, s, "bound-tool-end@example.com", "Owner")
+	sec, err := s.CreateSection(ctx, owner.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, thread, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := s.CreateRun(ctx, owner.ID, thread.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkStreaming(ctx, owner.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	s.NoteRestartWanted(owner.ID, agent.ID)
+	ap, err := s.RecordPermission(ctx, owner.ID, run.ID, json.RawMessage(`{"id":"req-end","tool":"bash","arguments":{"command":"ls"}}`), now.Add(time.Hour), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed, err := s.ClaimDecision(ctx, owner.ID, ap.ID, run.ID, "approved", owner.ID); err != nil || !claimed {
+		t.Fatalf("claim %v %v", claimed, err)
+	}
+	if err := s.ResumeAfterApproval(ctx, owner.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	now = start.Add(DeferRestartLimit + time.Minute)
+	if wait, reason, err := s.DeferGuestRestart(ctx, owner.ID, agent.ID, ""); err != nil || !wait || reason != "approved tool running" {
+		t.Fatalf("running tool %v %s %v", wait, reason, err)
+	}
+	if _, err := s.FailRun(ctx, owner.ID, run.ID, "The reply was interrupted.", 1); err != nil {
+		t.Fatal(err)
+	}
+	if wait, reason, err := s.DeferGuestRestart(ctx, owner.ID, agent.ID, ""); err != nil || wait || reason != "" {
+		t.Fatalf("after the run ended %v %s %v", wait, reason, err)
+	}
+}

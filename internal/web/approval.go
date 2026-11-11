@@ -198,41 +198,38 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 	if err != nil {
 		return err
 	}
-	// A decision the castlet journal already recorded was delivered. Audit that
-	// outcome instead of marking the row inactive when the prompt is gone.
-	if !row.Sent {
-		s.pullJournalBestEffort(ctx, user.ID, runRow.AgentID)
-		if err := s.confirmJournaled(ctx, runRow, row); err != nil {
-			if !errors.Is(err, errNoJournalDecision) {
-				return err
-			}
-		} else {
-			return nil
-		}
-	}
+	allow := row.Status == "approved"
 	// A failed or finished run must not be approved. Deny if the prompt is
 	// still live, then mark the row inactive with no approved audit.
-	if runTerminal(runRow.Status) && row.Status == "approved" {
-		return s.settleLostClaim(ctx, user, runRow, row, true)
-	}
-	allow := row.Status == "approved"
-	action := "approval.denied"
-	if allow {
-		action = "approval.approved"
-	}
+	terminalApprove := runTerminal(runRow.Status) && allow
 	if !row.Sent {
-		postErr := s.postPermission(ctx, user, runRow, row.RequestID, allow, false)
+		// Always re-post first. castlet journals a decision before it forwards
+		// it, so a journal row alone does not prove the runtime got it. A
+		// second post that finds no pending prompt is harmless.
+		postErr := s.postPermission(ctx, user, runRow, row.RequestID, allow && !terminalApprove, false)
 		if lostPermission(postErr) {
-			if err := s.confirmJournaled(ctx, runRow, row); err != nil && !errors.Is(err, errNoJournalDecision) {
-				return err
-			} else if err == nil {
+			// The prompt is gone. Only now does the journal decide between an
+			// earlier delivery (audit it) and a lost prompt (inactive).
+			s.pullJournalBestEffort(ctx, user.ID, runRow.AgentID)
+			if err := s.confirmJournaled(ctx, runRow, row); err == nil {
 				return nil
+			} else if !errors.Is(err, errNoJournalDecision) {
+				return err
 			}
 			return s.settleLostClaim(ctx, user, runRow, row, false)
 		}
 		if postErr != nil {
 			return postErr
 		}
+		if terminalApprove {
+			return s.settleLostClaim(ctx, user, runRow, row, false)
+		}
+	} else if terminalApprove {
+		return s.settleLostClaim(ctx, user, runRow, row, false)
+	}
+	action := "approval.denied"
+	if allow {
+		action = "approval.approved"
 	}
 	if err := s.store.WriteDecisionAudit(ctx, row.UserID, row.ID, action, "user", row.DecidedBy); err != nil {
 		return err
@@ -273,23 +270,27 @@ func (s *Server) pullJournalBestEffort(ctx context.Context, userID, agentID stri
 	s.pullJournal(ctx, userID, agentID, endpoint, token)
 }
 
-// confirmJournaled writes the audit row for a decision the journal already
-// recorded. errNoJournalDecision means the journal has no approved or denied
-// row for this request, so the caller keeps the lost-prompt path.
+// confirmJournaled writes the audit row for a claim whose re-post found no
+// pending prompt but whose request the castlet journal shows as decided.
+// errNoJournalDecision means the journal has no approved or denied row for
+// this request on the agent's current machine, so the caller marks it
+// inactive. The audit always follows the row's own status. A journal that
+// disagrees (for example a CLI answer to the same request) is logged and
+// does not overwrite the row.
 func (s *Server) confirmJournaled(ctx context.Context, runRow store.Run, row store.Approval) error {
 	decision, found, err := s.store.JournalDecision(ctx, row.UserID, runRow.AgentID, row.RequestID)
 	if err != nil {
 		return err
 	}
-	action := ""
-	switch decision {
-	case "approved":
-		action = "approval.approved"
-	case "denied":
-		action = "approval.denied"
-	}
-	if !found || action == "" {
+	if !found || (decision != "approved" && decision != "denied") {
 		return errNoJournalDecision
+	}
+	action := "approval.denied"
+	if row.Status == "approved" {
+		action = "approval.approved"
+	}
+	if decision != row.Status {
+		s.logger().Warn("approval journal mismatch", "approval_id", row.ID, "run_id", row.RunID, "row_status", row.Status, "journal_decision", decision)
 	}
 	if err := s.store.WriteDecisionAudit(ctx, row.UserID, row.ID, action, "user", row.DecidedBy); err != nil {
 		return err

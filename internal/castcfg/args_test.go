@@ -52,8 +52,8 @@ func TestScrubJSONDropsCamelCaseAndBearer(t *testing.T) {
 }
 
 func TestScrubJSONOrdinaryNamesStay(t *testing.T) {
-	ordinary := []string{"command", "path", "content", "url", "query", "description", "timeout", "cwd", "session", "sessionId", "sessionName", "author", "keyboard", "key", "keys", "monkey", "objectKey", "primaryKey", "partitionKey", "cacheKey", "publicKey", "ssh_public_key", "sshPublicKey", "hostKey", "sortKey", "idempotencyKey", "tokens", "tokenizer", "num_tokens", "maxTokens", "max_tokens", "token_count", "secretary", "passage", "bypass", "cookieName", "environment", "authorName", "file_path", "old_string", "new_string", "pattern", "glob"}
-	hidden := []string{"env", "headers", "auth", "pass", "ssh_key", "sshKey", "signing_key", "signingKey", "encryption_key", "encryptionKey", "master_key", "masterKey", "aws_key", "awsKey", "stripe_key", "stripeKey", "license_key", "licenseKey", "jwt", "pat", "bearer", "basic_auth", "basicAuth", "auth_header", "authHeader", "max_secret", "maxSecret", "secret_count", "secretCount"}
+	ordinary := []string{"command", "path", "content", "url", "query", "description", "timeout", "cwd", "session", "sessionId", "sessionName", "author", "keyboard", "key", "keys", "monkey", "objectKey", "primaryKey", "partitionKey", "cacheKey", "publicKey", "ssh_public_key", "sshPublicKey", "hostKey", "sortKey", "idempotencyKey", "tokens", "tokenizer", "num_tokens", "maxTokens", "max_tokens", "token_count", "secretary", "passage", "bypass", "cookieName", "environment", "authorName", "file_path", "old_string", "new_string", "pattern", "glob", "partition_key", "patch", "key_id", "keyName", "input_token_count", "inputTokenCount", "max_tokens_to_sample", "cached_tokens", "reasoning_tokens", "reasoningTokens", "client_public_key", "clientPublicKey", "auth_mode", "authMode", "public_keys", "sort_keys"}
+	hidden := []string{"env", "headers", "auth", "pass", "ssh_key", "sshKey", "signing_key", "signingKey", "encryption_key", "encryptionKey", "master_key", "masterKey", "aws_key", "awsKey", "stripe_key", "stripeKey", "license_key", "licenseKey", "jwt", "pat", "bearer", "basic_auth", "basicAuth", "auth_header", "authHeader", "max_secret", "maxSecret", "secret_count", "secretCount", "APIToken", "DBPassword", "PGPassword", "JWTToken", "apiKeys", "api_keys", "password2", "db_pass", "DB_PASS", "SSHKey", "access_keys", "APIKey", "GitHubPAT", "db_passwords", "app_secrets", "auth_code", "access_tokens", "github_token", "max_token_secret"}
 	var buf strings.Builder
 	buf.WriteByte('{')
 	for i, key := range append(append([]string{}, ordinary...), hidden...) {
@@ -116,5 +116,25 @@ func TestScrubJSONKeepsOrder(t *testing.T) {
 	}
 	if string(clean) != `{"b":1,"a":2}` {
 		t.Fatalf("order %s", clean)
+	}
+}
+
+func TestSecretKeyNormalizesAcronymsAndDigits(t *testing.T) {
+	cases := map[string]string{
+		"APIToken":   "api_token",
+		"DBPassword": "db_password",
+		"JWTToken":   "jwt_token",
+		"SSHKey":     "ssh_key",
+		"password2":  "password_2",
+		"apiKeys":    "api_keys",
+		"X-Api-Key":  "x_api_key",
+		"GitHubPAT":  "git_hub_pat",
+		"sessionId":  "session_id",
+		"DB_PASS":    "db_pass",
+	}
+	for in, want := range cases {
+		if got := normalizeSecretKey(in); got != want {
+			t.Errorf("normalizeSecretKey(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

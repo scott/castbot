@@ -236,17 +236,20 @@ func (s *Store) RevokeCLIToken(ctx context.Context, userID, agentID, tokenID str
 }
 
 // JournalDecision is the latest decision the castlet journal stored for one
-// request. found is false when that request has no decision row yet.
+// request on the agent's current machine. Rows are matched on agent_vm_id, so
+// a replaced machine never matches a decision an earlier machine journaled.
+// found is false when that request has no decision row yet.
 func (s *Store) JournalDecision(ctx context.Context, userID, agentID, requestID string) (string, bool, error) {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		return "", false, nil
 	}
-	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+	key, err := s.agentVMKey(ctx, userID, agentID)
+	if err != nil {
 		return "", false, err
 	}
 	var decision string
-	err := s.db.QueryRowContext(ctx, `SELECT decision FROM journal_entries WHERE user_id = ? AND agent_id = ? AND request_id = ? AND kind = 'decision' AND decision != '' ORDER BY seq DESC LIMIT 1`, userID, agentID, requestID).Scan(&decision)
+	err = s.db.QueryRowContext(ctx, `SELECT decision FROM journal_entries WHERE agent_vm_id = ? AND user_id = ? AND agent_id = ? AND request_id = ? AND kind = 'decision' AND decision != '' ORDER BY seq DESC LIMIT 1`, key, userID, agentID, requestID).Scan(&decision)
 	if err == sql.ErrNoRows {
 		return "", false, nil
 	}
