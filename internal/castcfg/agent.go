@@ -515,7 +515,8 @@ func passIsSecret(parts []string, i int) bool {
 	if i+1 < end {
 		switch parts[i+1] {
 		case "rate", "rates", "count", "counts", "through", "thru", "fail", "fails",
-			"failed", "number", "num", "index", "idx", "ratio", "percent", "pct",
+			"failed", "number", "num", "label", "labels", "name", "names",
+			"index", "idx", "ratio", "percent", "pct",
 			"total", "threshold", "status", "result", "results", "time", "duration":
 			return false
 		}

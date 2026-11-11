@@ -20,11 +20,22 @@ const (
 	decisionTimeout = 45 * time.Second
 	denyTimeout     = 15 * time.Second
 	confirmGrace    = 30 * time.Second
+	// journalPullLimit is how many failed journal pulls recovery allows
+	// before it marks the approval inactive and stops retrying.
+	journalPullLimit = 5
+	// lostApprovalNotice is the run failure when the prompt is gone.
+	lostApprovalNotice = "The approval request was lost. Send the message again."
 )
 
 var errMachinePaused = errors.New("machine is paused")
 
 var errNoJournalDecision = errors.New("no journaled decision")
+
+var errNoMachine = errors.New("no live machine")
+
+// errPauseHold means the post is waiting for the machine to be observed running.
+// It is not a failure and it does not schedule a backoff retry.
+var errPauseHold = errors.New("waiting for the machine to run")
 
 func approvalWaitFromEnv() time.Duration {
 	raw := strings.TrimSpace(os.Getenv("CASTBOT_APPROVAL_TIMEOUT"))
@@ -63,6 +74,7 @@ func (s *Server) approvalTimeout() time.Duration {
 
 func (s *Server) expireLoop() {
 	s.recoverDecisions(context.Background(), 0)
+	_, _ = s.store.SweepOrphanCLIDecisions(context.Background())
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
@@ -70,9 +82,13 @@ func (s *Server) expireLoop() {
 		case <-s.base.Done():
 			return
 		case <-tick.C:
+			if s.sweepPause.Load() {
+				continue
+			}
 			// Mark expirations even while a post is still running, so a slow
 			// or unreachable guest cannot hold the next deadline back.
 			_, _ = s.store.ExpireDue(s.base)
+			_, _ = s.store.SweepOrphanCLIDecisions(s.base)
 			s.kickApprovalFollowUp()
 		}
 	}
@@ -120,6 +136,12 @@ func (s *Server) postDenials(ctx context.Context, rows []store.Approval, resume 
 		if ctx.Err() != nil || s.base.Err() != nil {
 			return
 		}
+		if skip, err := s.releasePaused(ctx, row); err != nil || skip {
+			if err != nil {
+				return
+			}
+			continue
+		}
 		if !s.denyReady(row.ID) || !s.markBusy(row.ID) {
 			continue
 		}
@@ -127,11 +149,7 @@ func (s *Server) postDenials(ctx context.Context, rows []store.Approval, resume 
 		err := s.deliverDenial(callCtx, row, resume)
 		cancel()
 		s.clearBusy(row.ID)
-		if err != nil {
-			s.noteDenyFail(row.ID)
-		} else {
-			s.clearDeny(row.ID)
-		}
+		s.finishFollowUp(row.ID, err)
 		// One post per call. The next tick takes the next row, so a slow
 		// guest cannot hold every other denial behind it.
 		return
@@ -148,6 +166,14 @@ func (s *Server) deliverDenial(ctx context.Context, row store.Approval, resume b
 		return err
 	}
 	postErr := s.postPermission(ctx, user, runRow, row.RequestID, false, false)
+	if errors.Is(postErr, errMachinePaused) {
+		s.notePaused(ctx, row)
+		return errPauseHold
+	}
+	if errors.Is(postErr, errNoMachine) {
+		_, err := s.store.MarkNoMachine(ctx, row.UserID, row.ID)
+		return err
+	}
 	if postErr != nil && !lostPermission(postErr) {
 		return postErr
 	}
@@ -173,6 +199,12 @@ func (s *Server) recoverDecisions(ctx context.Context, grace time.Duration) {
 		if ctx.Err() != nil || s.base.Err() != nil {
 			return
 		}
+		if skip, err := s.releasePaused(ctx, row); err != nil || skip {
+			if err != nil {
+				return
+			}
+			continue
+		}
 		if !s.denyReady(row.ID) || !s.markBusy(row.ID) {
 			continue
 		}
@@ -180,11 +212,7 @@ func (s *Server) recoverDecisions(ctx context.Context, grace time.Duration) {
 		err := s.confirmClaim(callCtx, row)
 		cancel()
 		s.clearBusy(row.ID)
-		if err != nil {
-			s.noteDenyFail(row.ID)
-		} else {
-			s.clearDeny(row.ID)
-		}
+		s.finishFollowUp(row.ID, err)
 		return
 	}
 }
@@ -207,14 +235,40 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 		// including the re-post below. So note what the journal held for this
 		// request before posting, and decide only from that if the prompt is
 		// gone. A journal row read back after the post may be our own.
-		s.pullJournalBestEffort(ctx, user.ID, runRow.AgentID)
-		prior, priorFound, err := s.store.JournalDecision(ctx, row.UserID, runRow.AgentID, row.RequestID)
+		// A failed pull is retried. Recovery does not decide from a partial read.
+		if err := s.pullJournalBestEffort(ctx, user.ID, runRow.AgentID); err != nil {
+			n := s.noteJournalPull(row.ID)
+			if n >= journalPullLimit {
+				s.logger().Warn("approval journal pull gave up", "approval_id", row.ID, "attempts", n)
+				s.clearJournalPull(row.ID)
+				if _, err := s.store.MarkInactive(ctx, row.UserID, row.ID, "system", "system:journal"); err != nil {
+					return err
+				}
+				s.runs.Hub.Notify(row.RunID)
+				return nil
+			}
+			return err
+		}
+		s.clearJournalPull(row.ID)
+		seq, err := s.recoverSnapshot(ctx, row)
+		if err != nil {
+			return err
+		}
+		prior, priorFound, err := s.store.JournalDecisionBefore(ctx, row.UserID, runRow.AgentID, row.RequestID, seq)
 		if err != nil {
 			return err
 		}
 		// Always re-post. A journal row alone does not prove the runtime got
 		// the decision. A second post that finds no pending prompt is harmless.
 		postErr := s.postPermission(ctx, user, runRow, row.RequestID, allow && !terminalApprove, false)
+		if errors.Is(postErr, errMachinePaused) {
+			s.notePaused(ctx, row)
+			return errPauseHold
+		}
+		if errors.Is(postErr, errNoMachine) {
+			_, err := s.store.MarkNoMachine(ctx, row.UserID, row.ID)
+			return err
+		}
 		if lostPermission(postErr) {
 			// A run that failed or stopped is never audited as approved, even
 			// if an earlier approve was journaled. It ends inactive.
@@ -268,8 +322,21 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 func (s *Server) settleLostClaim(ctx context.Context, user store.User, runRow store.Run, row store.Approval, deny bool) error {
 	if deny && !row.Sent {
 		postErr := s.postPermission(ctx, user, runRow, row.RequestID, false, false)
+		if errors.Is(postErr, errMachinePaused) {
+			s.notePaused(ctx, row)
+			return errPauseHold
+		}
+		if errors.Is(postErr, errNoMachine) {
+			_, err := s.store.MarkNoMachine(ctx, row.UserID, row.ID)
+			return err
+		}
 		if postErr != nil && !lostPermission(postErr) {
 			return postErr
+		}
+	}
+	if !runTerminal(runRow.Status) {
+		if _, err := s.store.FailRun(ctx, row.UserID, runRow.ID, lostApprovalNotice, runRow.StreamOffset); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
 		}
 	}
 	if _, err := s.store.MarkInactive(ctx, row.UserID, row.ID, "user", row.DecidedBy); err != nil {
@@ -279,14 +346,45 @@ func (s *Server) settleLostClaim(ctx context.Context, user store.User, runRow st
 	return nil
 }
 
+// recoverSnapshot is the journal max sequence stored before the first
+// recovery post. Later posts from this process are above it and are not
+// treated as a decision the runtime already accepted.
+func (s *Server) recoverSnapshot(ctx context.Context, row store.Approval) (int, error) {
+	if row.RecoverSet {
+		return row.RecoverSeq, nil
+	}
+	current, err := s.store.GetApproval(ctx, row.UserID, row.ID)
+	if err != nil {
+		return 0, err
+	}
+	if current.RecoverSet {
+		return current.RecoverSeq, nil
+	}
+	seq, err := s.store.JournalCursor(ctx, row.UserID, row.AgentID)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.store.SnapshotRecoverSeq(ctx, row.UserID, row.ID, seq); err != nil {
+		return 0, err
+	}
+	return seq, nil
+}
+
 // pullJournalBestEffort refreshes the stored castlet journal when this agent
 // has a machine. A missing machine leaves the rows already on disk.
-func (s *Server) pullJournalBestEffort(ctx context.Context, userID, agentID string) {
+// A pull that fails returns the error so recovery can retry it.
+func (s *Server) pullJournalBestEffort(ctx context.Context, userID, agentID string) error {
 	endpoint, token, err := s.store.VMCredentials(ctx, userID, agentID)
-	if err != nil || endpoint == "" || token == "" {
-		return
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
 	}
-	s.pullJournal(ctx, userID, agentID, endpoint, token)
+	if endpoint == "" || token == "" {
+		return nil
+	}
+	return s.pullJournal(ctx, userID, agentID, endpoint, token)
 }
 
 // confirmJournaled writes the audit row for a claim whose re-post found no
@@ -406,6 +504,16 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, allow bool) {
 	}
 	defer s.clearBusy(row.ID)
 	if err := s.postPermission(ctx, user, runRow, row.RequestID, allow, true); err != nil {
+		if errors.Is(err, errNoMachine) {
+			next, merr := s.store.MarkNoMachine(ctx, user.ID, row.ID)
+			if merr != nil {
+				s.writeCard(w, user, row, from(r).CSRF)
+				return
+			}
+			s.runs.Hub.Notify(runRow.ID)
+			s.writeCard(w, user, next, from(r).CSRF)
+			return
+		}
 		if lostPermission(err) {
 			next, merr := s.store.MarkInactive(ctx, user.ID, row.ID, "user", user.ID)
 			if merr != nil {
@@ -471,9 +579,10 @@ func (s *Server) postPermission(ctx context.Context, user store.User, runRow sto
 		if err == nil {
 			return s.postMachine(ctx, h, user.ID, runRow.AgentID, vm, requestID, allow, wake)
 		}
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return err
+		if errors.Is(err, store.ErrNotFound) {
+			return errNoMachine
 		}
+		return err
 	}
 	responder, ok := client.(permissionResponder)
 	if !ok || responder == nil {
@@ -741,6 +850,89 @@ func (s *Server) clearDeny(id string) {
 	defer s.denyMu.Unlock()
 	delete(s.denyFails, id)
 	delete(s.denyNext, id)
+}
+
+func (s *Server) finishFollowUp(id string, err error) {
+	if errors.Is(err, errPauseHold) {
+		s.clearDeny(id)
+		return
+	}
+	if err != nil {
+		s.noteDenyFail(id)
+		return
+	}
+	s.clearDeny(id)
+	s.clearPaused(id)
+	s.clearJournalPull(id)
+}
+
+// releasePaused reports whether this approval is waiting for a paused
+// machine to be observed running. A machine that is running again is
+// released for one post. A missing machine row is marked inactive.
+func (s *Server) releasePaused(ctx context.Context, row store.Approval) (bool, error) {
+	gen, held := s.pausedGen(row.ID)
+	if !held {
+		return false, nil
+	}
+	vm, err := s.store.LiveVM(ctx, row.UserID, row.AgentID)
+	if errors.Is(err, store.ErrNotFound) {
+		s.clearPaused(row.ID)
+		if _, merr := s.store.MarkNoMachine(ctx, row.UserID, row.ID); merr != nil {
+			return false, merr
+		}
+		return true, nil
+	}
+	if err != nil {
+		return true, nil
+	}
+	if vm.State == "running" && vm.StateGen != gen {
+		s.clearPaused(row.ID)
+		return false, nil
+	}
+	return true, nil
+}
+
+func (s *Server) notePaused(ctx context.Context, row store.Approval) {
+	vm, err := s.store.LiveVM(ctx, row.UserID, row.AgentID)
+	gen := int64(0)
+	if err == nil {
+		gen = vm.StateGen
+	}
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	if s.pauseGen == nil {
+		s.pauseGen = map[string]int64{}
+	}
+	s.pauseGen[row.ID] = gen
+}
+
+func (s *Server) pausedGen(id string) (int64, bool) {
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	gen, ok := s.pauseGen[id]
+	return gen, ok
+}
+
+func (s *Server) clearPaused(id string) {
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	delete(s.pauseGen, id)
+}
+
+func (s *Server) noteJournalPull(id string) int {
+	s.journalMu.Lock()
+	defer s.journalMu.Unlock()
+	if s.journalFail == nil {
+		s.journalFail = map[string]int{}
+	}
+	s.journalFail[id]++
+	return s.journalFail[id]
+}
+
+func (s *Server) clearJournalPull(id string) {
+	s.journalMu.Lock()
+	defer s.journalMu.Unlock()
+	delete(s.journalFail, id)
 }
 
 func cliCard(body, id string) (cardView, bool) {

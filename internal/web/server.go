@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/scott/castbot/internal/host"
@@ -86,6 +87,17 @@ type Server struct {
 	denyMu      sync.Mutex
 	denyNext    map[string]time.Time
 	denyFails   map[string]int
+	journalMu   sync.Mutex
+	journalFail map[string]int
+	pauseMu     sync.Mutex
+	pauseGen    map[string]int64
+	sweepPause  atomic.Bool
+}
+
+// pauseSweeps stops the background approval ticker. Tests call the follow-up
+// methods themselves so a tick cannot post between assertions.
+func (s *Server) pauseSweeps() {
+	s.sweepPause.Store(true)
 }
 
 // guest is one local castlet the control plane can proxy files through.

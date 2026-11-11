@@ -243,6 +243,7 @@ CREATE TABLE IF NOT EXISTS agent_vms (
   last_wake_at TEXT,
   created_running_at TEXT,
   observe_boot INTEGER NOT NULL DEFAULT 1,
+  state_gen INTEGER NOT NULL DEFAULT 0,
   deleted_at TEXT
 );
 
@@ -437,10 +438,28 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 		}
 	}
 	// Version 12 is the real runtime. Approvals are version 13.
+	// Version 14 is the S07c carry-forward columns.
 	if err := s.migrateApprovals(); err != nil {
 		return err
 	}
+	if err := s.migrateV14(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// migrateV14 adds the machine state generation and the approval journal
+// snapshot. vm_replacements and agent token revoke stay out of this
+// version. Those belong to Replace machine.
+func (s *Store) migrateV14() error {
+	if err := s.ensureColumn("agent_vms", "state_gen", `ALTER TABLE agent_vms ADD COLUMN state_gen INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("approvals", "recover_seq", `ALTER TABLE approvals ADD COLUMN recover_seq INTEGER`); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (14) ON CONFLICT(version) DO NOTHING`)
+	return err
 }
 
 // allowRetried rebuilds runs when an older file still has the status check

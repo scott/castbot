@@ -65,6 +65,9 @@ func serve(args []string) {
 	defer stopRuntime()
 	app := web.New(st, cfg.SessionKey, client)
 	defer app.Close()
+	if err := app.RewriteLegacySecretFP(context.Background()); err != nil {
+		log.Fatal(err)
+	}
 	app.SetDevEcho(cfg.DevEcho)
 	if cfg.RuntimeURL != "" {
 		app.SetExplicitRuntime(true)

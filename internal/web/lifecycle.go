@@ -221,7 +221,7 @@ func (s *Server) reconcileOnce(ctx context.Context) error {
 		if !ok || got.State != "paused" {
 			continue
 		}
-		changed, err := s.store.MarkPausedIfUnchanged(ctx, row.UserID, row.AgentID, row.MicroVMID, row.LastWake, got.Endpoint)
+		changed, err := s.store.MarkPausedIfUnchanged(ctx, row.UserID, row.AgentID, row.MicroVMID, row.StateGen, got.Endpoint)
 		if err != nil {
 			return err
 		}

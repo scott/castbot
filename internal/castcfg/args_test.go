@@ -25,13 +25,13 @@ func TestScrubJSONDropsSecretKeys(t *testing.T) {
 }
 
 func TestScrubJSONDropsCamelCaseAndBearer(t *testing.T) {
-	raw := json.RawMessage(`{"command":"ls","privateKey":"pk-demo","accessKey":"ak-demo","sessionKey":"sk-demo","cookie":"ck-demo","passphrase":"pp-demo","auth":"au-demo","pass":"pw-demo","pwd":"pd-demo","note":"Bearer demo-token","max_tokens":4,"visible":"keep-me"}`)
+	raw := json.RawMessage(`{"command":"ls","privateKey":"pk-demo","accessKey":"ak-demo","sessionKey":"sk-demo","cookie":"ck-demo","passphrase":"pp-demo","auth":"au-demo","pass":"pw-demo","pwd":"pd-demo","note":"Bearer sk-live-1234567890abcd","max_tokens":4,"visible":"keep-me"}`)
 	clean, redacted, err := ScrubJSON(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(clean)
-	for _, secret := range []string{"pk-demo", "ak-demo", "sk-demo", "ck-demo", "pp-demo", "pd-demo", "demo-token"} {
+	for _, secret := range []string{"pk-demo", "ak-demo", "sk-demo", "ck-demo", "pp-demo", "pd-demo", "sk-live-1234567890abcd"} {
 		if strings.Contains(text, secret) {
 			t.Fatalf("secret %s survived in %s", secret, text)
 		}
@@ -46,13 +46,13 @@ func TestScrubJSONDropsCamelCaseAndBearer(t *testing.T) {
 			t.Fatalf("showed %s in %s", gone, text)
 		}
 	}
-	if strings.Join(redacted, ",") != "privateKey,accessKey,sessionKey,cookie,passphrase,auth,pass,pwd" {
+	if strings.Join(redacted, ",") != "privateKey,accessKey,sessionKey,cookie,passphrase,auth,pass,pwd,note" {
 		t.Fatalf("redacted %#v", redacted)
 	}
 }
 
 func TestScrubJSONOrdinaryNamesStay(t *testing.T) {
-	ordinary := []string{"command", "path", "content", "url", "query", "description", "timeout", "cwd", "session", "sessionId", "sessionName", "author", "keyboard", "key", "keys", "monkey", "objectKey", "primaryKey", "partitionKey", "cacheKey", "publicKey", "ssh_public_key", "sshPublicKey", "hostKey", "sortKey", "idempotencyKey", "tokens", "tokenizer", "num_tokens", "maxTokens", "max_tokens", "token_count", "secretary", "passage", "bypass", "cookieName", "environment", "authorName", "file_path", "old_string", "new_string", "pattern", "glob", "partition_key", "patch", "key_id", "keyName", "input_token_count", "inputTokenCount", "max_tokens_to_sample", "cached_tokens", "reasoning_tokens", "reasoningTokens", "client_public_key", "clientPublicKey", "auth_mode", "authMode", "public_keys", "sort_keys", "pass_rate", "first_pass", "pass_count", "passCount", "last_pass", "cookie_domain", "max_new_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "budget_tokens", "public_key_pem", "cache_key_v2", "key_2", "key_id_2", "authorization_url", "compass", "sha256", "s3_bucket", "pass_through", "pass_fail", "tokens_per_second", "tokensPerSecond", "output_tokens_per_second", "tokens_per_minute"}
+	ordinary := []string{"command", "path", "content", "url", "query", "description", "timeout", "cwd", "session", "sessionId", "sessionName", "author", "keyboard", "key", "keys", "monkey", "objectKey", "primaryKey", "partitionKey", "cacheKey", "publicKey", "ssh_public_key", "sshPublicKey", "hostKey", "sortKey", "idempotencyKey", "tokens", "tokenizer", "num_tokens", "maxTokens", "max_tokens", "token_count", "secretary", "passage", "bypass", "cookieName", "environment", "authorName", "file_path", "old_string", "new_string", "pattern", "glob", "partition_key", "patch", "key_id", "keyName", "input_token_count", "inputTokenCount", "max_tokens_to_sample", "cached_tokens", "reasoning_tokens", "reasoningTokens", "client_public_key", "clientPublicKey", "auth_mode", "authMode", "public_keys", "sort_keys", "pass_rate", "first_pass", "pass_count", "passCount", "last_pass", "pass_number", "pass_label", "pass_name", "cookie_domain", "max_new_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "budget_tokens", "public_key_pem", "cache_key_v2", "key_2", "key_id_2", "authorization_url", "compass", "sha256", "s3_bucket", "pass_through", "pass_fail", "tokens_per_second", "tokensPerSecond", "output_tokens_per_second", "tokens_per_minute"}
 	hidden := []string{"env", "headers", "auth", "pass", "ssh_key", "sshKey", "signing_key", "signingKey", "encryption_key", "encryptionKey", "master_key", "masterKey", "aws_key", "awsKey", "stripe_key", "stripeKey", "license_key", "licenseKey", "jwt", "pat", "bearer", "basic_auth", "basicAuth", "auth_header", "authHeader", "max_secret", "maxSecret", "secret_count", "secretCount", "APIToken", "DBPassword", "PGPassword", "JWTToken", "apiKeys", "api_keys", "password2", "db_pass", "DB_PASS", "SSHKey", "access_keys", "APIKey", "GitHubPAT", "db_passwords", "app_secrets", "auth_code", "access_tokens", "github_token", "max_token_secret", "secret_public_key", "private_public_key", "password_public_key", "read_tokens", "write_tokens", "new_tokens", "ssh_key2", "signing_key_v2", "signing_key_b64", "encryption_key_hex", "aws_key_1", "stripe_key_live", "deploy_key_pem", "signingKeyBase64", "sshKey2", "cookies", "session_cookie", "set-cookie", "Set-Cookie", "cookie_value", "pass_word", "passWord", "user_pass", "db_pass_hash", "authorization_code", "client_assertion", "admin_pass2", "DB_PASS2", "dbPass2", "db_pass_old", "db_pass_prod", "smtp_pass_live", "user_pass_v2", "mysqlPassProd", "pass_env", "pass_b64", "test_pass", "pass_2", "second_tokens", "tokens_second"}
 	var buf strings.Builder
 	buf.WriteByte('{')
@@ -93,10 +93,10 @@ func TestScrubJSONBearerInsideStrings(t *testing.T) {
 	cases := []struct {
 		in, secret, kept string
 	}{
-		{`{"command":"echo 'Bearer sk-live-1' done"}`, "sk-live-1", "echo 'Bearer Hidden' done"},
-		{`{"args":["-H","Bearer sk-live-2"]}`, "sk-live-2", `"Bearer Hidden"`},
-		{`{"note":"bearer sk-live-3"}`, "sk-live-3", `"Bearer Hidden"`},
-		{`{"nested":{"cmd":["ok","Bearer sk-live-4"]}}`, "sk-live-4", `"ok"`},
+		{`{"command":"echo 'Bearer sk-live-1234567890abcd' done"}`, "sk-live-1234567890abcd", "echo 'Bearer Hidden' done"},
+		{`{"args":["-H","Bearer sk-live-1234567890abce"]}`, "sk-live-1234567890abce", `"Bearer Hidden"`},
+		{`{"note":"bearer sk-live-1234567890abcf"}`, "sk-live-1234567890abcf", `"Bearer Hidden"`},
+		{`{"nested":{"cmd":["ok","Bearer sk-live-1234567890abd0"]}}`, "sk-live-1234567890abd0", `"ok"`},
 	}
 	for _, tc := range cases {
 		clean, _, err := ScrubJSON(json.RawMessage(tc.in))
@@ -136,5 +136,88 @@ func TestSecretKeyNormalizesAcronymsAndDigits(t *testing.T) {
 		if got := normalizeSecretKey(in); got != want {
 			t.Errorf("normalizeSecretKey(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestScrubJSONValueSecrets(t *testing.T) {
+	curl := "curl -u alice:s3cret https://example.com/x"         // gitleaks:allow
+	curlLong := "curl --user alice:s3cret https://example.com/x" // gitleaks:allow
+	in := `{
+		"note": "Use a bearer token",
+		"header": "Bearer sk-live-1234567890abcd",
+		"basic": "Basic dXNlcjpwYXNz",
+		"basic_prose": "Basic information",
+		"curl": "` + curl + `",
+		"curl_long": "` + curlLong + `",
+		"url": "https://alice:s3cret@example.com/x",
+		"query": "https://example.com/cb?token=sekret123&ok=1",
+		"address": "https://example.com/cb?api_key=sekret123",
+		"export": "export API_KEY=sekret123",
+		"assign": "PASSWORD=sekret123",
+		"count": "max_tokens=16",
+		"plain": "monkey=keep"
+	}`
+	clean, redacted, err := ScrubJSON(json.RawMessage(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(clean, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["note"] != "Use a bearer token" {
+		t.Fatalf("prose %q", got["note"])
+	}
+	if got["header"] != "Bearer Hidden" {
+		t.Fatalf("bearer %q", got["header"])
+	}
+	if got["basic"] != "Basic Hidden" {
+		t.Fatalf("basic %q", got["basic"])
+	}
+	if got["basic_prose"] != "Basic information" {
+		t.Fatalf("basic prose %q", got["basic_prose"])
+	}
+	if got["curl"] != "curl -u Hidden https://example.com/x" {
+		t.Fatalf("curl %q", got["curl"])
+	}
+	if got["curl_long"] != "curl --user Hidden https://example.com/x" {
+		t.Fatalf("curl long %q", got["curl_long"])
+	}
+	if got["url"] != "https://Hidden@example.com/x" {
+		t.Fatalf("url %q", got["url"])
+	}
+	if got["query"] != "https://example.com/cb?token=Hidden&ok=1" {
+		t.Fatalf("query %q", got["query"])
+	}
+	if got["address"] != "https://example.com/cb?api_key=Hidden" {
+		t.Fatalf("query key %q", got["address"])
+	}
+	if got["export"] != "export API_KEY=Hidden" {
+		t.Fatalf("export %q", got["export"])
+	}
+	if got["assign"] != "PASSWORD=Hidden" {
+		t.Fatalf("assign %q", got["assign"])
+	}
+	if got["count"] != "max_tokens=16" || got["plain"] != "monkey=keep" {
+		t.Fatalf("ordinary values changed %q %q", got["count"], got["plain"])
+	}
+	want := map[string]bool{
+		"header": true, "basic": true, "curl": true, "curl_long": true,
+		"url": true, "query": true, "address": true, "export": true, "assign": true,
+	}
+	if len(redacted) != len(want) {
+		t.Fatalf("redacted %v", redacted)
+	}
+	for _, path := range redacted {
+		if path == "note" || path == "basic_prose" || path == "count" || path == "plain" {
+			t.Fatalf("redacted ordinary field %s", path)
+		}
+		if !want[path] {
+			t.Fatalf("unexpected redacted %s", path)
+		}
+		delete(want, path)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing redacted %v", want)
 	}
 }

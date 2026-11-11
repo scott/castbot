@@ -182,24 +182,29 @@ func s07Live(t *testing.T, name string, quiet time.Duration) *liveRig {
 	}
 	protected := map[string]host.Machine{}
 	for _, vm := range before {
-		if strings.HasPrefix(vm.Name, "castbot-s07-test-") {
+		if testMachineName(vm.Name) {
 			continue
 		}
 		protected[vm.ID] = vm
 	}
-	for _, vm := range before {
-		if strings.HasPrefix(vm.Name, "castbot-s07-test-") {
-			if err := deleteS07(client, vm.ID); err != nil {
-				t.Fatal(err)
-			}
-		}
+	if err := sweepThrowawayMachines(ctx, client); err != nil {
+		t.Fatal(err)
 	}
 	rig := &liveRig{client: client, fetches: &atomic.Int32{}}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		if err := sweepThrowawayMachines(cctx, client); err != nil {
+			t.Errorf("throwaway cleanup: %v", err)
+		}
+	})
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sig
-		_ = deleteS07(client, rig.created())
+		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_ = sweepThrowawayMachines(cctx, client)
+		cancel()
 		os.Exit(1)
 	}()
 	done := make(chan struct{})
@@ -213,7 +218,9 @@ func s07Live(t *testing.T, name string, quiet time.Duration) *liveRig {
 			defer timer.Stop()
 			select {
 			case <-timer.C:
-				_ = deleteS07(client, rig.created())
+				cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				_ = sweepThrowawayMachines(cctx, client)
+				cancel()
 			case <-done:
 			}
 		}()
@@ -312,6 +319,11 @@ func s07Live(t *testing.T, name string, quiet time.Duration) *liveRig {
 		if err := deleteS07(client, id); err != nil {
 			t.Errorf("cleanup: %v", err)
 		}
+		sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 45*time.Second)
+		if err := sweepThrowawayMachines(sweepCtx, client); err != nil {
+			t.Errorf("throwaway cleanup: %v", err)
+		}
+		sweepCancel()
 		if id != "" {
 			waitCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			_ = client.WaitGone(waitCtx, id)
@@ -375,8 +387,8 @@ func deleteS07(m *host.MicroVM, id string) error {
 		}
 		return err
 	}
-	if !strings.HasPrefix(got.Name, "castbot-s07-test-") {
-		return errors.New("refusing to delete a machine outside castbot-s07-test")
+	if !testMachineName(got.Name) {
+		return errors.New("refusing to delete a machine outside the test prefix")
 	}
 	if err := host.GuardDelete(got); err != nil {
 		return err

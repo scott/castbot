@@ -87,7 +87,9 @@ func New(opt Options) (*MicroVM, error) {
 		addressFor: addressFor,
 		insecure:   opt.InsecureEdge,
 		edge: &http.Client{
-			Timeout: 20 * time.Second,
+			// Approve waits up to the 45s decision deadline. A shorter
+			// client timeout would cut that call off.
+			Timeout: 45 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},

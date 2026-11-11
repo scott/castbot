@@ -135,10 +135,12 @@ func NewHTTP(base string) *HTTPClient {
 	return &HTTPClient{
 		base: strings.TrimRight(base, "/"),
 		client: &http.Client{Transport: &http.Transport{
-			DisableKeepAlives:     true,
-			DisableCompression:    true,
-			Proxy:                 http.ProxyFromEnvironment,
-			ResponseHeaderTimeout: 30 * time.Second,
+			DisableKeepAlives:  true,
+			DisableCompression: true,
+			Proxy:              http.ProxyFromEnvironment,
+			// Approve waits up to the 45s decision deadline. A shorter
+			// header timeout would cut that call off.
+			ResponseHeaderTimeout: 45 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 		}},

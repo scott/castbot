@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -284,29 +285,36 @@ func (s *Server) pushCLITokens(ctx context.Context, userID, agentID string) stri
 	return ""
 }
 
-func (s *Server) pullJournal(ctx context.Context, userID, agentID, endpoint, token string) {
+func (s *Server) pullJournal(ctx context.Context, userID, agentID, endpoint, token string) error {
 	s.mu.Lock()
 	var h host.AgentHost
 	h = s.machine
 	s.mu.Unlock()
 	if h == nil || endpoint == "" || token == "" {
-		return
+		return nil
 	}
 	after, err := s.store.JournalCursor(ctx, userID, agentID)
 	if err != nil {
-		return
+		return err
 	}
 	raw, err := h.PullJournal(ctx, endpoint, token, after)
-	if err != nil || len(raw) == 0 {
-		return
+	if err != nil {
+		return err
+	}
+	if len(raw) == 0 {
+		return nil
 	}
 	var body struct {
 		Entries []store.JournalEntry `json:"entries"`
 	}
-	if json.Unmarshal(raw, &body) != nil || len(body.Entries) == 0 {
-		return
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return errors.New("journal pull was not readable")
 	}
-	_, _ = s.store.IngestJournal(ctx, userID, agentID, body.Entries)
+	if len(body.Entries) == 0 {
+		return nil
+	}
+	_, err = s.store.IngestJournal(ctx, userID, agentID, body.Entries)
+	return err
 }
 
 func (s *Server) pickThread(r *http.Request, userID, agentID string) (store.Thread, error) {

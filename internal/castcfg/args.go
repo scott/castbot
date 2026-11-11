@@ -35,23 +35,115 @@ func scrubJSON(raw json.RawMessage, path string, redacted *[]string) (json.RawMe
 	case '[':
 		return scrubArray(raw, path, redacted)
 	default:
-		return scrubScalar(raw)
+		return scrubScalar(raw, path, redacted)
 	}
 }
 
 var errBadJSON = errors.New("bad json")
 
-var bearerToken = regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]+`)
+var (
+	bearerValue = regexp.MustCompile(`(?i)\bbearer\s+([A-Za-z0-9._~+/=-]{16,})`)
+	basicValue  = regexp.MustCompile(`(?i)\bbasic\s+([A-Za-z0-9+/=]+)`)
+	curlUser    = regexp.MustCompile(`(?i)(^|[\s])(--user|-u)(=|\s+)(\S+)`)
+	urlUserinfo = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)([^\s/@]+):([^\s/@]+)@`)
+	querySecret = regexp.MustCompile(`(?i)([?&](?:access_token|api_key|password|secret|token|key)=)([^&#\s]*)`)
+	assignment  = regexp.MustCompile(`(?:^|[\s;])((?i:export[ \t]+)?)([A-Za-z_][A-Za-z0-9_]*)=([^\s;&]+)`)
+)
 
-// scrubBearer replaces bearer tokens inside a string and keeps the rest.
-func scrubBearer(s string) (string, bool) {
-	if !bearerToken.MatchString(s) {
-		return s, false
-	}
-	return bearerToken.ReplaceAllString(s, "Bearer Hidden"), true
+// scrubString hides credential values inside a string and keeps the rest.
+// A bearer word is a secret only when the value looks like a token.
+func scrubString(s string) (string, bool) {
+	next := scrubBearer(s)
+	next = scrubBasic(next)
+	next = curlUser.ReplaceAllString(next, `${1}${2}${3}Hidden`)
+	next = urlUserinfo.ReplaceAllString(next, `${1}Hidden@`)
+	next = querySecret.ReplaceAllString(next, `${1}Hidden`)
+	next = scrubAssignments(next)
+	return next, next != s
 }
 
-func scrubScalar(raw json.RawMessage) (json.RawMessage, error) {
+func scrubBearer(s string) string {
+	return bearerValue.ReplaceAllStringFunc(s, func(m string) string {
+		sub := bearerValue.FindStringSubmatch(m)
+		if len(sub) < 2 || !tokenLike(sub[1]) {
+			return m
+		}
+		return "Bearer Hidden"
+	})
+}
+
+// tokenLike reports a bearer value that is long and not a plain word.
+func tokenLike(s string) bool {
+	if len(s) < 16 {
+		return false
+	}
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
+			return true
+		}
+	}
+	return false
+}
+
+func scrubBasic(s string) string {
+	return basicValue.ReplaceAllStringFunc(s, func(m string) string {
+		sub := basicValue.FindStringSubmatch(m)
+		if len(sub) < 2 || !basicCredential(sub[1]) {
+			return m
+		}
+		return "Basic Hidden"
+	})
+}
+
+func basicCredential(s string) bool {
+	if len(s) < 8 {
+		return false
+	}
+	var digit, symbol, upper, lower bool
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+			digit = true
+		case r == '+' || r == '/' || r == '=':
+			symbol = true
+		case r >= 'A' && r <= 'Z':
+			upper = true
+		case r >= 'a' && r <= 'z':
+			lower = true
+		default:
+			return false
+		}
+	}
+	if digit || symbol {
+		return true
+	}
+	return len(s) >= 12 && upper && lower
+}
+
+func scrubAssignments(s string) string {
+	locs := assignment.FindAllStringSubmatchIndex(s, -1)
+	if len(locs) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, loc := range locs {
+		name := s[loc[4]:loc[5]]
+		if !SecretKey(name) {
+			continue
+		}
+		b.WriteString(s[last:loc[6]])
+		b.WriteString("Hidden")
+		last = loc[7]
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+func scrubScalar(raw json.RawMessage, path string, redacted *[]string) (json.RawMessage, error) {
 	raw = bytes.TrimSpace(raw)
 	if !json.Valid(raw) {
 		return nil, errBadJSON
@@ -63,9 +155,12 @@ func scrubScalar(raw json.RawMessage) (json.RawMessage, error) {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return nil, err
 	}
-	cleaned, ok := scrubBearer(s)
+	cleaned, ok := scrubString(s)
 	if !ok {
 		return raw, nil
+	}
+	if path != "" {
+		*redacted = append(*redacted, path)
 	}
 	b, err := json.Marshal(cleaned)
 	if err != nil {
