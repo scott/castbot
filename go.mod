@@ -2,6 +2,8 @@ module github.com/scott/castbot
 
 go 1.22.2
 
+toolchain go1.27.4
+
 require (
 	github.com/chromedp/cdproto v0.0.0-20240801214329-3f85d328b335
 	github.com/chromedp/chromedp v0.10.0
