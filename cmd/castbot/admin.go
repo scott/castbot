@@ -86,7 +86,7 @@ func adminReplace(args []string) int {
 	}
 	cfg, st := openStore()
 	defer st.Close()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := interruptContext()
 	defer stop()
 	agent, err := st.AgentByIDOrSlug(ctx, fs.Arg(0))
 	if err != nil {
@@ -179,6 +179,10 @@ func runReplace(ctx context.Context, st *store.Store, h host.AgentHost, opt repl
 	}
 	fmt.Fprintln(os.Stderr, "replace failed")
 	return 1
+}
+
+func interruptContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 func confirmAgentName(in io.Reader, out io.Writer, name string) bool {

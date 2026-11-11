@@ -249,8 +249,10 @@ func (s *Server) replaceHistory(ctx context.Context, user store.User, agentID st
 		return nil
 	}
 	actor, class := "", ""
+	cleanup := false
 	if row, err := s.store.LatestReplacement(ctx, user.ID, agentID); err == nil {
 		actor, class = row.Actor, row.Class
+		cleanup = row.CleanupPending
 	}
 	var out []histItem
 	for i := len(events) - 1; i >= 0; i-- {
@@ -268,6 +270,9 @@ func (s *Server) replaceHistory(ctx context.Context, user store.User, agentID st
 		}
 		if ev.Kind == store.EventReplaceFailed && class != "" {
 			text = "Replace failed at " + class + ", new machine deleted"
+			if cleanup {
+				text = "Replace failed at " + class
+			}
 		}
 		if text == "" {
 			continue

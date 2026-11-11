@@ -258,6 +258,54 @@ func waitReplace(t *testing.T, h *harness, agent store.Agent, ip, needle string)
 	t.Fatalf("timed out waiting for %s\n%s", needle, last)
 }
 
+func TestReplaceCleanupDoesNotLockTheAgent(t *testing.T) {
+	ip := "203.0.113.81:9"
+	h := newHarness(t)
+	fake := host.NewFake()
+	h.srv.SetHost(fake, "example.invalid/castbot-runtime:ff6d7ea", "https://castbot.example")
+	user, secret := h.account("cleanup-replace@example.com", "Ada", "correct-horse-1")
+	h.login("cleanup-replace@example.com", "correct-horse-1", secret, ip, false)
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, thread, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Docs helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.BeginVM(context.Background(), user.ID, agent.ID, "castbot-old", "example.invalid/castbot-runtime:7b5e414"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.FinishVM(context.Background(), user.ID, agent.ID, "vm-old", "https://old.example", "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	fake.Machines["vm-old"] = host.Machine{ID: "vm-old", State: "running", Endpoint: "https://old.example", Tags: []string{"castbot-agent:" + agent.ID, "castbot"}}
+	row, _, err := h.st.BeginReplacement(context.Background(), user.ID, agent.ID, "web:Ada", "example.invalid/castbot-runtime:ff6d7ea", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.MarkCleanupPending(context.Background(), user.ID, row.ID, "copy", "copy"); err != nil {
+		t.Fatal(err)
+	}
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	if code != 200 || strings.Contains(body, "Replacing") || strings.Contains(body, "cleanup pending") || strings.Contains(body, "This machine is being replaced.") || strings.Contains(body, "A replacement is already running.") {
+		t.Fatalf("locked page %d", code)
+	}
+	if !strings.Contains(body, "The machine was not replaced.") {
+		t.Fatal("failure banner missing")
+	}
+	code, body, _ = h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {"hi"}, "thread": {thread.ID}}), ip, nil)
+	if code == http.StatusConflict && strings.Contains(body, "This machine is being replaced.") {
+		t.Fatalf("message still locked")
+	}
+	for _, path := range []string{"/machine/pause", "/machine/wake"} {
+		code, body, _ = h.do(http.MethodPost, "/agents/"+agent.ID+path, h.form(url.Values{}), ip, nil)
+		if code == http.StatusConflict && strings.Contains(body, "This machine is being replaced.") {
+			t.Fatalf("%s still locked", path)
+		}
+	}
+}
+
 func httptestReq(t *testing.T, method, path, token string) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(`{"entries":[]}`))

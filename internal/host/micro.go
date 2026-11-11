@@ -641,8 +641,7 @@ func (m *MicroVM) Health(ctx context.Context, endpoint, agentToken string) (stri
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+agentToken)
-	req.Header.Set("X-Cast-Authorization", "Bearer "+agentToken)
+	m.edgeAuth(req, agentToken)
 	resp, err := m.streamClient().Do(req)
 	if err != nil {
 		return "", ErrGuestWait
@@ -764,8 +763,7 @@ func (m *MicroVM) streamOpen(ctx context.Context, method, target, agentToken str
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+agentToken)
-	req.Header.Set("X-Cast-Authorization", "Bearer "+agentToken)
+	m.edgeAuth(req, agentToken)
 	resp, err := m.streamClient().Do(req)
 	if err != nil {
 		return nil, err
@@ -786,8 +784,7 @@ func (m *MicroVM) streamSend(ctx context.Context, method, target, agentToken str
 	if err != nil {
 		return 0, err
 	}
-	req.Header.Set("Authorization", "Bearer "+agentToken)
-	req.Header.Set("X-Cast-Authorization", "Bearer "+agentToken)
+	m.edgeAuth(req, agentToken)
 	resp, err := m.streamClient().Do(req)
 	if err != nil {
 		return 0, err

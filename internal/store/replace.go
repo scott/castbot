@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 )
@@ -37,6 +38,10 @@ type Replacement struct {
 	FileBytes      int64
 	DeletePending  bool
 	CleanupPending bool
+	CleanupSince   string
+	CleanupAfter   string
+	CleanupWaitMS  int
+	CleanupAlerted bool
 	CreatedAt      string
 	UpdatedAt      string
 	FinishedAt     string
@@ -94,6 +99,10 @@ func (s *Store) migrateReplace() error {
   file_bytes INTEGER NOT NULL DEFAULT 0,
   delete_pending INTEGER NOT NULL DEFAULT 0,
   cleanup_pending INTEGER NOT NULL DEFAULT 0,
+  cleanup_since TEXT NOT NULL DEFAULT '',
+  cleanup_after TEXT NOT NULL DEFAULT '',
+  cleanup_wait_ms INTEGER NOT NULL DEFAULT 0,
+  cleanup_alerted INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   finished_at TEXT
@@ -107,6 +116,18 @@ func (s *Store) migrateReplace() error {
 		return err
 	}
 	if err := s.ensureColumn("vm_replacements", "cleanup_pending", `ALTER TABLE vm_replacements ADD COLUMN cleanup_pending INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("vm_replacements", "cleanup_since", `ALTER TABLE vm_replacements ADD COLUMN cleanup_since TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("vm_replacements", "cleanup_after", `ALTER TABLE vm_replacements ADD COLUMN cleanup_after TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("vm_replacements", "cleanup_wait_ms", `ALTER TABLE vm_replacements ADD COLUMN cleanup_wait_ms INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("vm_replacements", "cleanup_alerted", `ALTER TABLE vm_replacements ADD COLUMN cleanup_alerted INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
 	// The staged agent token is plaintext until the switch copies it onto agent_vms.
@@ -262,12 +283,12 @@ WHERE a.user_id = ? AND r.agent_id = ? AND (a.status = 'pending' OR (a.sent = 0 
 
 func scanReplacement(row interface{ Scan(...any) error }) (Replacement, error) {
 	var r Replacement
-	var noCopy, woke, pending, cleanup int
+	var noCopy, woke, pending, cleanup, alerted int
 	var finished sql.NullString
 	err := row.Scan(&r.ID, &r.WorkspaceID, &r.UserID, &r.AgentID, &r.State, &r.Step, &r.Class,
 		&r.OldVMID, &r.OldMicro, &r.OldImage, &r.OldState, &r.NewVMID, &r.NewMicro, &r.NewEndpoint, &r.NewTokenHash,
 		&r.NewImage, &r.NewName, &r.Actor, &noCopy, &woke, &r.MemoryBytes, &r.FilesDone, &r.FilesTotal, &r.FileBytes,
-		&pending, &cleanup, &r.CreatedAt, &r.UpdatedAt, &finished)
+		&pending, &cleanup, &r.CleanupSince, &r.CleanupAfter, &r.CleanupWaitMS, &alerted, &r.CreatedAt, &r.UpdatedAt, &finished)
 	if err != nil {
 		return Replacement{}, scanErr(err)
 	}
@@ -275,6 +296,7 @@ func scanReplacement(row interface{ Scan(...any) error }) (Replacement, error) {
 	r.Woke = woke != 0
 	r.DeletePending = pending != 0
 	r.CleanupPending = cleanup != 0
+	r.CleanupAlerted = alerted != 0
 	r.FinishedAt = finished.String
 	return r, nil
 }
@@ -282,7 +304,8 @@ func scanReplacement(row interface{ Scan(...any) error }) (Replacement, error) {
 const replSelect = `SELECT id, workspace_id, user_id, agent_id, state, step, error_class,
   old_vm_id, old_microvm_id, old_image, old_state, new_vm_id, new_microvm_id, new_endpoint, new_token_hash,
   new_image, new_name, actor, no_copy, woke, memory_bytes, files_done, files_total,   file_bytes,
-  delete_pending, cleanup_pending, created_at, updated_at, finished_at FROM vm_replacements`
+  delete_pending, cleanup_pending, cleanup_since, cleanup_after, cleanup_wait_ms, cleanup_alerted,
+  created_at, updated_at, finished_at FROM vm_replacements`
 
 // GetReplacement returns one replacement owned by the caller.
 func (s *Store) GetReplacement(ctx context.Context, userID, id string) (Replacement, error) {
@@ -347,6 +370,9 @@ func (s *Store) SetReplacementStep(ctx context.Context, userID, id, step string)
 	step = strings.TrimSpace(step)
 	if step == "" {
 		return ErrInvalid
+	}
+	if s.stepUpdateBlocked(step) {
+		return errors.New("database is locked")
 	}
 	res, err := s.db.ExecContext(ctx, `UPDATE vm_replacements SET step = ?, updated_at = ? WHERE id = ? AND user_id = ? AND state = 'running'`,
 		step, s.stamp(s.Now()), id, userID)
@@ -418,9 +444,14 @@ WHERE id = ? AND user_id = ? AND state = 'running' AND step NOT IN ('switched', 
 	return tx.Commit()
 }
 
-// MarkCleanupPending leaves a pre-switch replace running so recovery can retry the new machine.
-// The token bound to the new row is revoked. The row is not marked failed while that machine may still exist.
-func (s *Store) MarkCleanupPending(ctx context.Context, userID, id string) error {
+// MarkCleanupPending records a failed replace whose new machine still needs to be deleted.
+// The replace is failed, so the agent stays usable. The token bound to the new row is revoked.
+func (s *Store) MarkCleanupPending(ctx context.Context, userID, id, step, class string) error {
+	step = strings.TrimSpace(step)
+	class = strings.TrimSpace(class)
+	if step == "" || class == "" {
+		return ErrInvalid
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -430,15 +461,105 @@ func (s *Store) MarkCleanupPending(ctx context.Context, userID, id string) error
 	if err != nil {
 		return err
 	}
-	stamp := s.stamp(s.Now())
+	now := s.Now()
+	stamp := s.stamp(now)
+	after := s.stamp(now.Add(time.Minute))
 	if err := revokeBound(ctx, tx, userID, row.AgentID, row.NewVMID, stamp); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE vm_replacements SET cleanup_pending = 1, updated_at = ? WHERE id = ? AND user_id = ? AND state = 'running'`,
-		stamp, id, userID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE vm_replacements SET state = 'failed', step = ?, error_class = ?,
+cleanup_pending = 1, cleanup_since = ?, cleanup_after = ?, cleanup_wait_ms = ?, cleanup_alerted = 0,
+finished_at = ?, updated_at = ?
+WHERE id = ? AND user_id = ? AND state = 'running'`,
+		step, class, stamp, after, int(time.Minute/time.Millisecond), stamp, stamp, id, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM vm_replacement_tokens WHERE replacement_id = ? AND user_id = ?`, id, userID); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// ClearCleanup marks a leftover machine as gone.
+func (s *Store) ClearCleanup(ctx context.Context, userID, id string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE vm_replacements SET cleanup_pending = 0, updated_at = ? WHERE id = ? AND user_id = ? AND cleanup_pending = 1`,
+		s.stamp(s.Now()), id, userID)
+	if err != nil {
+		return err
+	}
+	return rowsAffected(res)
+}
+
+// BumpCleanupWait doubles the wait after a failed delete, up to one hour.
+func (s *Store) BumpCleanupWait(ctx context.Context, userID, id string) error {
+	var wait int
+	err := s.db.QueryRowContext(ctx, `SELECT cleanup_wait_ms FROM vm_replacements WHERE id = ? AND user_id = ? AND cleanup_pending = 1`, id, userID).Scan(&wait)
+	if err != nil {
+		return scanErr(err)
+	}
+	if wait < int(time.Minute/time.Millisecond) {
+		wait = int(time.Minute / time.Millisecond)
+	}
+	wait *= 2
+	if wait > int(time.Hour/time.Millisecond) {
+		wait = int(time.Hour / time.Millisecond)
+	}
+	now := s.Now()
+	res, err := s.db.ExecContext(ctx, `UPDATE vm_replacements SET cleanup_wait_ms = ?, cleanup_after = ?, updated_at = ? WHERE id = ? AND user_id = ? AND cleanup_pending = 1`,
+		wait, s.stamp(now.Add(time.Duration(wait)*time.Millisecond)), s.stamp(now), id, userID)
+	if err != nil {
+		return err
+	}
+	return rowsAffected(res)
+}
+
+// DueCleanups lists leftover machines whose retry time has arrived and that are still inside 24 hours.
+func (s *Store) DueCleanups(ctx context.Context) ([]Replacement, error) {
+	now := s.Now()
+	rows, err := s.db.QueryContext(ctx, replSelect+` WHERE cleanup_pending = 1 AND cleanup_alerted = 0 AND cleanup_after <= ? AND cleanup_since > ? ORDER BY cleanup_since`,
+		s.stamp(now), s.stamp(now.Add(-24*time.Hour)))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Replacement
+	for rows.Next() {
+		row, err := scanReplacement(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// ExpiredCleanups lists leftover machines whose 24 hour retry window has ended and that have not been reported.
+func (s *Store) ExpiredCleanups(ctx context.Context) ([]Replacement, error) {
+	rows, err := s.db.QueryContext(ctx, replSelect+` WHERE cleanup_pending = 1 AND cleanup_alerted = 0 AND cleanup_since != '' AND cleanup_since <= ? ORDER BY cleanup_since`,
+		s.stamp(s.Now().Add(-24*time.Hour)))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Replacement
+	for rows.Next() {
+		row, err := scanReplacement(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// MarkCleanupAlerted records that the 24 hour cleanup window was reported once.
+func (s *Store) MarkCleanupAlerted(ctx context.Context, userID, id string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE vm_replacements SET cleanup_alerted = 1, updated_at = ? WHERE id = ? AND user_id = ? AND cleanup_pending = 1 AND cleanup_alerted = 0`,
+		s.stamp(s.Now()), id, userID)
+	if err != nil {
+		return err
+	}
+	return rowsAffected(res)
 }
 
 // TouchReplacement records that the owner process is still working.
@@ -451,7 +572,7 @@ func (s *Store) TouchReplacement(ctx context.Context, userID, id string) error {
 // CleanupPending reports a pre-switch replace whose new machine still needs to be deleted.
 func (s *Store) CleanupPending(ctx context.Context, userID, agentID string) (bool, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vm_replacements WHERE user_id = ? AND agent_id = ? AND state = 'running' AND cleanup_pending = 1`,
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vm_replacements WHERE user_id = ? AND agent_id = ? AND cleanup_pending = 1`,
 		userID, agentID).Scan(&n)
 	return n > 0, err
 }

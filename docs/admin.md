@@ -10,7 +10,7 @@ The server must be up before a command that can change a machine. `castbot admin
 castbot admin machines
 ```
 
-One line per live machine: agent name, state, image tag, and `update available` when that tag differs from `CASTBOT_IMAGE`. A line also says `cleanup pending` when a new machine from a failed replace still needs to be deleted. This command does not call the machine API.
+One line per live machine: agent name, state, image tag, and `update available` when that tag differs from `CASTBOT_IMAGE`. A line also says `cleanup pending` when a leftover machine from a failed replace still needs to be deleted. castbot retries that delete after one minute, then doubles the wait up to one hour, and stops after 24 hours. The line stays. The agent can be used while that cleanup is pending. This command does not call the machine API.
 
 ## replace-machine
 

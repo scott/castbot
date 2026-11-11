@@ -24,6 +24,7 @@ const (
 	EventReplaceFailed   = "replace_failed"
 	EventReplaceNoCopy   = "replace_no_copy"
 	EventReplaceDelete   = "replace_delete_pending"
+	EventReplaceCleanup  = "replace_cleanup_stopped"
 )
 
 // VMEvent is one durable machine timing row.

@@ -82,6 +82,8 @@ type Options struct {
 	NoCopy    bool
 	DataDir   string
 	BootWait  time.Duration
+	// BeatEvery is how often a live replace updates its row. Zero uses 30 seconds.
+	BeatEvery time.Duration
 	// HaltAt stops after that step and leaves the row for Recover.
 	// Steps: lock, create, boot, read_old, copy, verify, switch, delete.
 	HaltAt   string
@@ -210,7 +212,11 @@ func Run(ctx context.Context, st *store.Store, h host.AgentHost, opt Options) (R
 	_ = st.AddVMEventFor(ctx, opt.UserID, opt.AgentID, row.OldVMID, store.EventReplaceRequest, 0)
 	_ = st.WriteMachineAudit(ctx, opt.UserID, opt.ActorKind, opt.ActorID, "machine.replace_requested", opt.AgentID, ImageTag(vm.Image), ImageTag(opt.Image), opt.Actor)
 	stopBeat := make(chan struct{})
-	go heartbeat(stopBeat, st, opt.UserID, row.ID)
+	every := opt.BeatEvery
+	if every <= 0 {
+		every = beatEvery
+	}
+	go heartbeat(stopBeat, st, opt.UserID, row.ID, every)
 	defer close(stopBeat)
 	if opt.HaltAt == "lock" {
 		return res, ErrHalted
@@ -306,6 +312,7 @@ func (r *runner) run() (Result, error) {
 		}
 	}
 	version, _ := r.healthy(r.row.NewEndpoint, r.token)
+	r.pushCLI()
 	if err := r.restPause(); err != nil {
 		return r.res, err
 	}
@@ -323,7 +330,6 @@ func (r *runner) run() (Result, error) {
 	}
 	pending := r.deleteOld()
 	r.res.DeletePending = pending
-	r.pushCLI()
 	if err := r.st.FinishReplacement(r.ctx, r.opt.UserID, r.row.ID, pending); err != nil {
 		return r.res, err
 	}
@@ -540,8 +546,8 @@ func (r *runner) deleteOld() bool {
 }
 
 func (r *runner) pushCLI() {
-	endpoint, token, err := r.st.VMCredentials(r.ctx, r.opt.UserID, r.opt.AgentID)
-	if err != nil || endpoint == "" || token == "" {
+	endpoint, token := r.row.NewEndpoint, r.token
+	if endpoint == "" || token == "" {
 		return
 	}
 	hashes, err := r.st.ListCLITokenHashes(r.ctx, r.opt.UserID, r.opt.AgentID)
@@ -611,7 +617,12 @@ func (r *runner) rollback(step, class string) {
 	}
 	ok, gone := removeNewMachine(ctx, r.h, r.row.NewMicro, r.opt.AgentID, host.ReplaceTag(r.row.ID))
 	if !ok && !gone {
-		_ = r.st.MarkCleanupPending(ctx, r.opt.UserID, r.row.ID)
+		if err := r.st.MarkCleanupPending(ctx, r.opt.UserID, r.row.ID, step, class); err != nil {
+			r.opt.Logger.Info("replace cleanup row", "agent", r.opt.AgentID, "class", class)
+			return
+		}
+		_ = r.st.AddVMEventFor(ctx, r.opt.UserID, r.opt.AgentID, r.row.OldVMID, store.EventReplaceFailed, 0)
+		_ = r.st.WriteMachineAudit(ctx, r.opt.UserID, r.opt.ActorKind, r.opt.ActorID, "machine.replace_failed", r.opt.AgentID, ImageTag(r.vm.Image), ImageTag(r.opt.Image), r.opt.Actor)
 		return
 	}
 	if err := r.st.FailReplacement(ctx, r.opt.UserID, r.row.ID, step, class); err != nil {
@@ -622,8 +633,8 @@ func (r *runner) rollback(step, class string) {
 	_ = r.st.WriteMachineAudit(ctx, r.opt.UserID, r.opt.ActorKind, r.opt.ActorID, "machine.replace_failed", r.opt.AgentID, ImageTag(r.vm.Image), ImageTag(r.opt.Image), r.opt.Actor)
 }
 
-func heartbeat(stop <-chan struct{}, st *store.Store, userID, id string) {
-	tick := time.NewTicker(beatEvery)
+func heartbeat(stop <-chan struct{}, st *store.Store, userID, id string, every time.Duration) {
+	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
 		select {
@@ -917,6 +928,9 @@ func Recover(ctx context.Context, st *store.Store, h host.AgentHost) error {
 	if err := recoverRows(ctx, st, h, rows); err != nil {
 		return err
 	}
+	if err := RetryCleanups(ctx, st, h); err != nil {
+		return err
+	}
 	return RetryDeletes(ctx, st, h)
 }
 
@@ -942,6 +956,9 @@ func RecoverStale(ctx context.Context, st *store.Store, h host.AgentHost, stale 
 	if err := recoverRows(ctx, st, h, due); err != nil {
 		return err
 	}
+	if err := RetryCleanups(ctx, st, h); err != nil {
+		return err
+	}
 	return RetryDeletes(ctx, st, h)
 }
 
@@ -955,9 +972,12 @@ func recoverRows(ctx context.Context, st *store.Store, h host.AgentHost, rows []
 		}
 		ok, gone := removeNewMachine(ctx, h, row.NewMicro, row.AgentID, host.ReplaceTag(row.ID))
 		if !ok && !gone {
-			if err := st.MarkCleanupPending(ctx, row.UserID, row.ID); err != nil {
+			if err := st.MarkCleanupPending(ctx, row.UserID, row.ID, row.Step, classForStep(row.Step)); err != nil {
 				return err
 			}
+			_ = st.AddVMEventFor(ctx, row.UserID, row.AgentID, row.OldVMID, store.EventReplaceFailed, 0)
+			kind, id := auditActor(row)
+			_ = st.WriteMachineAudit(ctx, row.UserID, kind, id, "machine.replace_failed", row.AgentID, ImageTag(row.OldImage), ImageTag(row.NewImage), row.Actor)
 			continue
 		}
 		class := classForStep(row.Step)
@@ -1036,13 +1056,53 @@ func deleteMachine(ctx context.Context, h host.AgentHost, id, agentID, extraTag 
 }
 
 func removeNewMachine(ctx context.Context, h host.AgentHost, id, agentID, tag string) (ok, gone bool) {
-	if id != "" {
-		ok, gone = deleteMachine(ctx, h, id, agentID, tag)
-		if ok || gone {
-			return
-		}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return deleteByTag(ctx, h, tag)
 	}
-	return deleteByTag(ctx, h, tag)
+	m, err := h.Status(ctx, id)
+	if err != nil {
+		if errors.Is(err, host.ErrNotSupported) || isMissing(err) {
+			return false, true
+		}
+		return deleteByTag(ctx, h, tag)
+	}
+	if m.ID != id {
+		return false, false
+	}
+	return deleteMachine(ctx, h, id, agentID, tag)
+}
+
+// RetryCleanups retries leftover machines on a per-row backoff and stops after 24 hours.
+func RetryCleanups(ctx context.Context, st *store.Store, h host.AgentHost) error {
+	if st == nil || h == nil {
+		return nil
+	}
+	expired, err := st.ExpiredCleanups(ctx)
+	if err != nil {
+		return err
+	}
+	for _, row := range expired {
+		if err := st.MarkCleanupAlerted(ctx, row.UserID, row.ID); err != nil {
+			continue
+		}
+		_ = st.AddVMEventFor(ctx, row.UserID, row.AgentID, row.OldVMID, store.EventReplaceCleanup, 0)
+		kind, id := auditActor(row)
+		_ = st.WriteMachineAudit(ctx, row.UserID, kind, id, "machine.replace_cleanup_stopped", row.AgentID, ImageTag(row.OldImage), ImageTag(row.NewImage), row.Actor)
+	}
+	due, err := st.DueCleanups(ctx)
+	if err != nil {
+		return err
+	}
+	for _, row := range due {
+		ok, gone := removeNewMachine(ctx, h, row.NewMicro, row.AgentID, host.ReplaceTag(row.ID))
+		if ok || gone {
+			_ = st.ClearCleanup(ctx, row.UserID, row.ID)
+			continue
+		}
+		_ = st.BumpCleanupWait(ctx, row.UserID, row.ID)
+	}
+	return nil
 }
 
 func deleteByTag(ctx context.Context, h host.AgentHost, tag string) (ok, gone bool) {

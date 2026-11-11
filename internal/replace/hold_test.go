@@ -17,11 +17,7 @@ import (
 func TestReplacePostSwitchStepFailureKeepsLiveMachine(t *testing.T) {
 	r := newRig(t, "running")
 	ctx := context.Background()
-	_, err := r.st.ProbeDB().Exec(`CREATE TRIGGER probe_fail BEFORE UPDATE OF step ON vm_replacements
-WHEN NEW.step = 'delete' BEGIN SELECT RAISE(ABORT, 'database is locked'); END`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	r.st.FailStepUpdate("delete")
 	if _, err := Run(ctx, r.st, r.fake, r.opt(t.TempDir())); err != nil {
 		t.Fatal(err)
 	}
@@ -31,9 +27,6 @@ WHEN NEW.step = 'delete' BEGIN SELECT RAISE(ABORT, 'database is locked'); END`)
 	}
 	if _, ok := r.fake.Machines[live.MicroVMID]; !ok {
 		t.Fatalf("live machine %s deleted after the switch", live.MicroVMID)
-	}
-	if _, err := r.st.ProbeDB().Exec(`DROP TRIGGER probe_fail`); err != nil {
-		t.Fatal(err)
 	}
 	if err := Recover(ctx, r.st, r.fake); err != nil {
 		t.Fatal(err)
@@ -62,13 +55,19 @@ func TestReplaceRollbackDeleteFailureStaysRetryable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.State == "failed" {
-		t.Fatal("marked failed while the new machine may still exist")
+	if row.State != "failed" || !row.CleanupPending {
+		t.Fatalf("row %+v", row)
 	}
-	var pending int
-	if err := r.st.ProbeDB().QueryRow(`SELECT cleanup_pending FROM vm_replacements WHERE id = ?`, row.ID).Scan(&pending); err != nil || pending != 1 {
-		t.Fatalf("cleanup_pending %d %v", pending, err)
+	if _, err := r.st.ActiveReplacement(ctx, r.user.ID, r.agent.ID); err == nil {
+		t.Fatal("cleanup locked the agent")
 	}
+	if err := Recover(ctx, r.st, sticky); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.fake.Machines["vm-test"]; !ok {
+		t.Fatal("cleanup retried before its wait")
+	}
+	r.st.SetNow(func() time.Time { return time.Now().Add(time.Minute + time.Second) })
 	sticky.fail = false
 	if err := Recover(ctx, r.st, sticky); err != nil {
 		t.Fatal(err)
@@ -101,13 +100,17 @@ func TestReplaceRecoverRetriesAfterTransientStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.State == "failed" {
-		t.Fatal("marked failed while status was unavailable")
+	if row.State != "failed" || !row.CleanupPending {
+		t.Fatalf("row %+v", row)
+	}
+	if _, err := r.st.ActiveReplacement(ctx, r.user.ID, r.agent.ID); err == nil {
+		t.Fatal("cleanup locked the agent")
 	}
 	if _, ok := r.fake.Machines["vm-test"]; !ok {
 		t.Fatal("new machine dropped")
 	}
 	down.down = false
+	r.st.SetNow(func() time.Time { return time.Now().Add(time.Minute + time.Second) })
 	if err := Recover(ctx, r.st, down); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +190,7 @@ func TestReplaceLockPrecheckBlocksStreamingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.st.ProbeDB().Exec(`UPDATE runs SET status = 'streaming' WHERE id = ?`, run.ID); err != nil {
+	if err := r.st.MarkStreaming(ctx, r.user.ID, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, err = Run(ctx, r.st, r.fake, r.opt(t.TempDir()))
@@ -237,6 +240,8 @@ func TestReplaceStaleRecoveryLeavesALiveRun(t *testing.T) {
 	ctx := context.Background()
 	opt := r.opt(t.TempDir())
 	opt.HaltAt = "copy"
+	frozen := time.Now().Add(-time.Hour)
+	r.st.SetNow(func() time.Time { return frozen })
 	if _, err := Run(ctx, r.st, r.fake, opt); !errors.Is(err, ErrHalted) {
 		t.Fatal(err)
 	}
@@ -249,10 +254,7 @@ func TestReplaceStaleRecoveryLeavesALiveRun(t *testing.T) {
 	if _, ok := r.fake.Machines["vm-test"]; !ok {
 		t.Fatal("live replace was recovered")
 	}
-	old := time.Now().Add(-StaleAfter - time.Minute).UTC().Format(time.RFC3339)
-	if _, err := r.st.ProbeDB().Exec(`UPDATE vm_replacements SET updated_at = ?`, old); err != nil {
-		t.Fatal(err)
-	}
+	r.st.SetNow(func() time.Time { return time.Now() })
 	if err := RecoverStale(ctx, r.st, r.fake, StaleAfter); err != nil {
 		t.Fatal(err)
 	}
@@ -282,10 +284,14 @@ func TestReplaceStaleRecoveryRetriesFreshCleanup(t *testing.T) {
 		t.Fatal("cleanup dropped the new machine")
 	}
 	row, err := r.st.LatestReplacement(ctx, r.user.ID, r.agent.ID)
-	if err != nil || row.State != "running" || !row.CleanupPending {
+	if err != nil || row.State != "failed" || !row.CleanupPending {
 		t.Fatalf("row %+v %v", row, err)
 	}
+	if _, err := r.st.ActiveReplacement(ctx, r.user.ID, r.agent.ID); err == nil {
+		t.Fatal("cleanup locked the agent")
+	}
 	sticky.fail = false
+	r.st.SetNow(func() time.Time { return time.Now().Add(time.Minute + time.Second) })
 	if err := RecoverStale(ctx, r.st, sticky, StaleAfter); err != nil {
 		t.Fatal(err)
 	}
@@ -410,4 +416,188 @@ func tarBytes(name string, body []byte, mod time.Time) []byte {
 		return nil
 	}
 	return buf.Bytes()
+}
+
+type statusDown struct {
+	*host.Fake
+}
+
+func (s *statusDown) Status(context.Context, string) (host.Machine, error) {
+	return host.Machine{}, errors.New("status down")
+}
+
+func TestReplaceTagFallbackDeletesTheNewMachine(t *testing.T) {
+	r := newRig(t, "running")
+	ctx := context.Background()
+	opt := r.opt(t.TempDir())
+	opt.HaltAt = "copy"
+	if _, err := Run(ctx, r.st, r.fake, opt); !errors.Is(err, ErrHalted) {
+		t.Fatal(err)
+	}
+	if err := Recover(ctx, r.st, &statusDown{Fake: r.fake}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.fake.Machines["vm-test"]; ok {
+		t.Fatal("tag fallback left the new machine")
+	}
+	if _, ok := r.fake.Machines["vm-old"]; !ok {
+		t.Fatal("tag fallback deleted the old machine")
+	}
+}
+
+func TestReplaceHeartbeatTouchesTheRow(t *testing.T) {
+	r := newRig(t, "running")
+	ctx := context.Background()
+	release := make(chan struct{})
+	r.fake.CreateStarted = make(chan struct{})
+	r.fake.WaitCreate = release
+	opt := r.opt(t.TempDir())
+	opt.BeatEvery = 20 * time.Millisecond
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, r.st, r.fake, opt)
+		done <- err
+	}()
+	select {
+	case <-r.fake.CreateStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("create did not start")
+	}
+	row, err := r.st.LatestReplacement(ctx, r.user.ID, r.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := row.UpdatedAt
+	deadline := time.Now().Add(3 * time.Second)
+	moved := false
+	for time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+		row, err = r.st.LatestReplacement(ctx, r.user.ID, r.agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if row.UpdatedAt != start {
+			moved = true
+			break
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !moved {
+		t.Fatal("heartbeat did not touch the row")
+	}
+}
+
+func TestReplaceCleanupBackoffDoubles(t *testing.T) {
+	r := newRig(t, "running")
+	ctx := context.Background()
+	r.fake.FailClass = "copy"
+	sticky := &stickyDelete{Fake: r.fake, fail: true}
+	if _, err := Run(ctx, r.st, sticky, r.opt(t.TempDir())); err == nil {
+		t.Fatal("copy succeeded")
+	}
+	row, err := r.st.LatestReplacement(ctx, r.user.ID, r.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := time.Parse(time.RFC3339, row.CleanupAfter)
+	if err != nil || first.Before(time.Now().Add(50*time.Second)) {
+		t.Fatalf("first wait %s %v", row.CleanupAfter, err)
+	}
+	r.st.SetNow(func() time.Time { return time.Now().Add(time.Minute + time.Second) })
+	if err := Recover(ctx, r.st, sticky); err != nil {
+		t.Fatal(err)
+	}
+	row, err = r.st.LatestReplacement(ctx, r.user.ID, r.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := time.Parse(time.RFC3339, row.CleanupAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Sub(first) < 90*time.Second {
+		t.Fatalf("wait did not double: %s then %s", first, second)
+	}
+	r.st.SetNow(func() time.Time { return second.Add(-30 * time.Second) })
+	sticky.fail = false
+	if err := Recover(ctx, r.st, sticky); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.fake.Machines["vm-test"]; !ok {
+		t.Fatal("retried before the doubled wait")
+	}
+}
+
+type countDelete struct {
+	*host.Fake
+	n int
+}
+
+func (c *countDelete) Delete(ctx context.Context, id string) error {
+	c.n++
+	return errors.New("delete failed")
+}
+
+func TestReplaceCleanupStopsAfterADay(t *testing.T) {
+	r := newRig(t, "running")
+	ctx := context.Background()
+	r.fake.FailClass = "copy"
+	counter := &countDelete{Fake: r.fake}
+	if _, err := Run(ctx, r.st, counter, r.opt(t.TempDir())); err == nil {
+		t.Fatal("copy succeeded")
+	}
+	before := counter.n
+	if before == 0 {
+		t.Fatal("delete was not attempted")
+	}
+	r.st.SetNow(func() time.Time { return time.Now().Add(25 * time.Hour) })
+	if err := Recover(ctx, r.st, counter); err != nil {
+		t.Fatal(err)
+	}
+	if err := Recover(ctx, r.st, counter); err != nil {
+		t.Fatal(err)
+	}
+	if counter.n != before {
+		t.Fatalf("deletes %d after give-up, was %d", counter.n, before)
+	}
+	if _, ok := r.fake.Machines["vm-test"]; !ok {
+		t.Fatal("give-up deleted the machine")
+	}
+	row, err := r.st.LatestReplacement(ctx, r.user.ID, r.agent.ID)
+	if err != nil || !row.CleanupPending || !row.CleanupAlerted {
+		t.Fatalf("row %+v %v", row, err)
+	}
+	pending, err := r.st.CleanupPending(ctx, r.user.ID, r.agent.ID)
+	if err != nil || !pending {
+		t.Fatal("admin would hide the leftover machine")
+	}
+	events, err := r.st.ListVMEvents(ctx, r.user.ID, r.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := 0
+	for _, ev := range events {
+		if ev.Kind == store.EventReplaceCleanup {
+			stopped++
+		}
+	}
+	if stopped != 1 {
+		t.Fatalf("cleanup events %d", stopped)
+	}
+	actions, err := r.st.AuditActions(ctx, r.user.ID, r.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audits := 0
+	for _, action := range actions {
+		if action == "machine.replace_cleanup_stopped" {
+			audits++
+		}
+	}
+	if audits != 1 {
+		t.Fatalf("audit lines %d", audits)
+	}
 }

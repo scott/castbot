@@ -109,6 +109,25 @@ func (f *Fake) edge() {
 	f.mu.Unlock()
 }
 
+// resume models the edge: a request to a paused machine starts it again.
+func (f *Fake) resume(endpoint string) {
+	f.mu.Lock()
+	f.resumeLocked(endpoint)
+	f.mu.Unlock()
+}
+
+func (f *Fake) resumeLocked(endpoint string) {
+	if endpoint == "" {
+		return
+	}
+	for id, m := range f.Machines {
+		if m.Endpoint == endpoint && m.State == "paused" {
+			m.State = "running"
+			f.Machines[id] = m
+		}
+	}
+}
+
 // Create records the spec and returns a running machine.
 func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 	f.mu.Lock()
@@ -290,14 +309,16 @@ func (f *Fake) SeedDisk(endpoint string, memory []byte, files map[string][]byte)
 }
 
 // Probe counts an edge call and succeeds.
-func (f *Fake) Probe(context.Context, string, string) error {
+func (f *Fake) Probe(_ context.Context, endpoint, _ string) error {
+	f.resume(endpoint)
 	f.edge()
 	f.note("probe")
 	return nil
 }
 
 // Stream counts an edge call and returns the scripted frames, then [DONE].
-func (f *Fake) Stream(context.Context, string, string, runtime.Send) (runtime.Stream, error) {
+func (f *Fake) Stream(_ context.Context, endpoint, _ string, _ runtime.Send) (runtime.Stream, error) {
+	f.resume(endpoint)
 	f.edge()
 	f.mu.Lock()
 	frames := append([]runtime.Frame(nil), f.Frames...)
@@ -315,7 +336,8 @@ func (f *Fake) Decisions() (calls []string, approvals []ApprovalCall) {
 }
 
 // Approve counts an edge call and records the decision.
-func (f *Fake) Approve(_ context.Context, _, _, requestID string, allow bool) error {
+func (f *Fake) Approve(_ context.Context, endpoint, _, requestID string, allow bool) error {
+	f.resume(endpoint)
 	f.edge()
 	f.mu.Lock()
 	f.Calls = append(f.Calls, "approve")
@@ -332,14 +354,16 @@ func (f *Fake) Cancel(context.Context, string, string, string) error {
 }
 
 // PutFile counts an edge call.
-func (f *Fake) PutFile(context.Context, string, string, string, io.Reader) error {
+func (f *Fake) PutFile(_ context.Context, endpoint, _, _ string, _ io.Reader) error {
+	f.resume(endpoint)
 	f.edge()
 	f.note("put")
 	return nil
 }
 
 // GetFile counts an edge call.
-func (f *Fake) GetFile(context.Context, string, string, string) (io.ReadCloser, error) {
+func (f *Fake) GetFile(_ context.Context, endpoint, _, _ string) (io.ReadCloser, error) {
+	f.resume(endpoint)
 	f.edge()
 	f.note("get")
 	return io.NopCloser(strings.NewReader("ok")), nil
@@ -366,6 +390,7 @@ func (f *Fake) Reload(ctx context.Context, endpoint, _ string) error {
 			return ctx.Err()
 		}
 	}
+	f.resume(endpoint)
 	f.edge()
 	f.note("reload")
 	f.mu.Lock()
@@ -377,7 +402,8 @@ func (f *Fake) Reload(ctx context.Context, endpoint, _ string) error {
 }
 
 // PushCLI records a token-hash push. It counts as an edge call.
-func (f *Fake) PushCLI(_ context.Context, _, _ string, body []byte) error {
+func (f *Fake) PushCLI(_ context.Context, endpoint, _ string, body []byte) error {
+	f.resume(endpoint)
 	f.edge()
 	f.mu.Lock()
 	f.Pushed = append(f.Pushed, append([]byte(nil), body...))
@@ -387,7 +413,8 @@ func (f *Fake) PushCLI(_ context.Context, _, _ string, body []byte) error {
 }
 
 // PullJournal returns the scripted journal. It counts as an edge call.
-func (f *Fake) PullJournal(context.Context, string, string, int) ([]byte, error) {
+func (f *Fake) PullJournal(_ context.Context, endpoint, _ string, _ int) ([]byte, error) {
+	f.resume(endpoint)
 	f.edge()
 	f.mu.Lock()
 	body := append([]byte(nil), f.Journal...)
@@ -403,6 +430,7 @@ func (f *Fake) PullJournal(context.Context, string, string, int) ([]byte, error)
 func (f *Fake) Health(_ context.Context, endpoint, _ string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
 	f.Calls = append(f.Calls, "health")
 	if f.healthCalls == nil {
 		f.healthCalls = map[string]int{}
@@ -422,6 +450,7 @@ func (f *Fake) Health(_ context.Context, endpoint, _ string) (string, error) {
 func (f *Fake) ExportMemory(_ context.Context, endpoint, _ string) (io.ReadCloser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
 	f.Calls = append(f.Calls, "export-memory")
 	if f.FailClass == "read_old" && endpoint != f.createdEndpoint {
 		return nil, ErrGuest
@@ -442,6 +471,7 @@ func (f *Fake) ImportMemory(_ context.Context, endpoint, _ string, body io.Reade
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
 	f.Calls = append(f.Calls, "import-memory")
 	if f.FailClass == "copy" {
 		return ErrGuest
@@ -455,6 +485,7 @@ func (f *Fake) ImportMemory(_ context.Context, endpoint, _ string, body io.Reade
 func (f *Fake) ListWorkspace(_ context.Context, endpoint, _ string) ([]WorkspaceFile, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
 	f.Calls = append(f.Calls, "list-files")
 	if f.FailClass == "read_old" && endpoint != f.createdEndpoint {
 		return nil, ErrGuest
@@ -471,6 +502,7 @@ func (f *Fake) ListWorkspace(_ context.Context, endpoint, _ string) ([]Workspace
 func (f *Fake) ReadWorkspace(_ context.Context, endpoint, _, name string) (io.ReadCloser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
 	f.Calls = append(f.Calls, "read-file")
 	if f.FailClass == "read_old" && endpoint != f.createdEndpoint {
 		return nil, ErrGuest
@@ -491,6 +523,7 @@ func (f *Fake) WriteWorkspace(_ context.Context, endpoint, _, name string, body 
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
 	f.Calls = append(f.Calls, "write-file")
 	if f.FailClass == "copy" {
 		return ErrGuest

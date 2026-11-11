@@ -58,7 +58,7 @@ func TestAdminMachinesShowsCleanupPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.MarkCleanupPending(ctx, agent.UserID, row.ID); err != nil {
+	if err := st.MarkCleanupPending(ctx, agent.UserID, row.ID, "copy", "copy"); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
