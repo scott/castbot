@@ -501,15 +501,25 @@ func secretWord(p string) bool {
 }
 
 // passIsSecret reports whether the "pass" segment at i is a password.
-// db_pass, user_pass and DB_PASS end in it. pass_word, pass_phrase and
-// pass_hash name one. first_pass, pass_rate and pass_count do not.
+// Trailing version, number, encoding and environment words are dropped
+// first, so db_pass_prod reads as db_pass and pass_2 as pass. pass alone,
+// or at the end of a name (db_pass, user_pass, DB_PASS), is a password
+// unless an ordinal or step word comes before it (first_pass, last_pass).
+// Any word after it is a password too (pass_word, pass_env) unless it is a
+// known non-secret word (pass_rate, pass_count, pass_through).
 func passIsSecret(parts []string, i int) bool {
-	if i+1 < len(parts) {
+	end := len(parts)
+	for end > i+1 && keySuffix(parts[end-1]) {
+		end--
+	}
+	if i+1 < end {
 		switch parts[i+1] {
-		case "word", "words", "wd", "phrase", "key", "code", "hash", "value":
-			return true
+		case "rate", "rates", "count", "counts", "through", "thru", "fail", "fails",
+			"failed", "number", "num", "index", "idx", "ratio", "percent", "pct",
+			"total", "threshold", "status", "result", "results", "time", "duration":
+			return false
 		}
-		return false
+		return true
 	}
 	if i == 0 {
 		return true
@@ -517,7 +527,7 @@ func passIsSecret(parts []string, i int) bool {
 	switch parts[i-1] {
 	case "first", "second", "third", "last", "next", "final", "initial", "single",
 		"multi", "dry", "each", "every", "per", "one", "two", "render", "compile",
-		"build", "lint", "test", "tests", "check", "review", "by":
+		"build", "lint", "check", "review", "by":
 		return false
 	}
 	return true
@@ -606,11 +616,18 @@ func ordinaryKey(k string, parts []string) bool {
 // Any other word (access, api, github, secret) keeps the name hidden.
 // read, write and new are not enough on their own, so read_tokens,
 // write_tokens and new_tokens stay hidden while max_new_tokens and
-// cache_read_input_tokens show.
+// cache_read_input_tokens show. A rate such as tokens_per_second shows.
 func tokenCountKey(parts []string) bool {
 	plural, single, count, strong := false, false, false, false
+	per, unit := false, false
 	for _, p := range parts {
 		switch p {
+		case "per":
+			per = true
+		case "second", "seconds", "sec", "minute", "minutes", "hour", "hours":
+			// A rate such as tokens_per_second, only after "per".
+			unit = true
+			strong = true
 		case "tokens":
 			plural = true
 		case "token":
@@ -622,10 +639,13 @@ func tokenCountKey(parts []string) bool {
 			"cached", "cache", "reasoning", "thinking", "audio", "text", "image",
 			"accepted", "rejected", "prediction", "limit", "budget", "used", "remaining":
 			strong = true
-		case "new", "to", "sample", "read", "write", "creation", "per":
+		case "new", "to", "sample", "read", "write", "creation":
 		default:
 			return false
 		}
+	}
+	if unit && !per {
+		return false
 	}
 	if len(parts) == 1 {
 		return plural
