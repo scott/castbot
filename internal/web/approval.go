@@ -24,6 +24,8 @@ const (
 
 var errMachinePaused = errors.New("machine is paused")
 
+var errNoJournalDecision = errors.New("no journaled decision")
+
 func approvalWaitFromEnv() time.Duration {
 	raw := strings.TrimSpace(os.Getenv("CASTBOT_APPROVAL_TIMEOUT"))
 	if raw == "" {
@@ -196,6 +198,18 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 	if err != nil {
 		return err
 	}
+	// A decision the castlet journal already recorded was delivered. Audit that
+	// outcome instead of marking the row inactive when the prompt is gone.
+	if !row.Sent {
+		s.pullJournalBestEffort(ctx, user.ID, runRow.AgentID)
+		if err := s.confirmJournaled(ctx, runRow, row); err != nil {
+			if !errors.Is(err, errNoJournalDecision) {
+				return err
+			}
+		} else {
+			return nil
+		}
+	}
 	// A failed or finished run must not be approved. Deny if the prompt is
 	// still live, then mark the row inactive with no approved audit.
 	if runTerminal(runRow.Status) && row.Status == "approved" {
@@ -209,6 +223,11 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 	if !row.Sent {
 		postErr := s.postPermission(ctx, user, runRow, row.RequestID, allow, false)
 		if lostPermission(postErr) {
+			if err := s.confirmJournaled(ctx, runRow, row); err != nil && !errors.Is(err, errNoJournalDecision) {
+				return err
+			} else if err == nil {
+				return nil
+			}
 			return s.settleLostClaim(ctx, user, runRow, row, false)
 		}
 		if postErr != nil {
@@ -239,6 +258,47 @@ func (s *Server) settleLostClaim(ctx context.Context, user store.User, runRow st
 	}
 	if _, err := s.store.MarkInactive(ctx, row.UserID, row.ID, "user", row.DecidedBy); err != nil {
 		return err
+	}
+	s.runs.Hub.Notify(row.RunID)
+	return nil
+}
+
+// pullJournalBestEffort refreshes the stored castlet journal when this agent
+// has a machine. A missing machine leaves the rows already on disk.
+func (s *Server) pullJournalBestEffort(ctx context.Context, userID, agentID string) {
+	endpoint, token, err := s.store.VMCredentials(ctx, userID, agentID)
+	if err != nil || endpoint == "" || token == "" {
+		return
+	}
+	s.pullJournal(ctx, userID, agentID, endpoint, token)
+}
+
+// confirmJournaled writes the audit row for a decision the journal already
+// recorded. errNoJournalDecision means the journal has no approved or denied
+// row for this request, so the caller keeps the lost-prompt path.
+func (s *Server) confirmJournaled(ctx context.Context, runRow store.Run, row store.Approval) error {
+	decision, found, err := s.store.JournalDecision(ctx, row.UserID, runRow.AgentID, row.RequestID)
+	if err != nil {
+		return err
+	}
+	action := ""
+	switch decision {
+	case "approved":
+		action = "approval.approved"
+	case "denied":
+		action = "approval.denied"
+	}
+	if !found || action == "" {
+		return errNoJournalDecision
+	}
+	if err := s.store.WriteDecisionAudit(ctx, row.UserID, row.ID, action, "user", row.DecidedBy); err != nil {
+		return err
+	}
+	if err := s.store.MarkSent(ctx, row.UserID, row.ID); err != nil {
+		return err
+	}
+	if !runTerminal(runRow.Status) {
+		_ = s.store.ResumeAfterApproval(ctx, row.UserID, runRow.ID)
 	}
 	s.runs.Hub.Notify(row.RunID)
 	return nil

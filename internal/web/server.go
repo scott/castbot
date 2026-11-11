@@ -79,6 +79,8 @@ type Server struct {
 	expireMu    sync.Mutex
 	sweepMu     sync.Mutex
 	sweeping    bool
+	deferMu     sync.Mutex
+	deferLogged map[string]string
 	busyMu      sync.Mutex
 	busy        map[string]struct{}
 	denyMu      sync.Mutex

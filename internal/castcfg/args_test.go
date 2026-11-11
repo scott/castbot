@@ -36,19 +36,24 @@ func TestScrubJSONDropsCamelCaseAndBearer(t *testing.T) {
 			t.Fatalf("secret %s survived in %s", secret, text)
 		}
 	}
-	for _, kept := range []string{`"command":"ls"`, `"max_tokens":4`, `"visible":"keep-me"`, `"auth":"au-demo"`, `"pass":"pw-demo"`, `"note":"Bearer Hidden"`} {
+	for _, kept := range []string{`"command":"ls"`, `"max_tokens":4`, `"visible":"keep-me"`, `"note":"Bearer Hidden"`} {
 		if !strings.Contains(text, kept) {
 			t.Fatalf("missing %s in %s", kept, text)
 		}
 	}
-	if strings.Join(redacted, ",") != "privateKey,accessKey,sessionKey,cookie,passphrase,pwd" {
+	for _, gone := range []string{"au-demo", "pw-demo"} {
+		if strings.Contains(text, gone) {
+			t.Fatalf("showed %s in %s", gone, text)
+		}
+	}
+	if strings.Join(redacted, ",") != "privateKey,accessKey,sessionKey,cookie,passphrase,auth,pass,pwd" {
 		t.Fatalf("redacted %#v", redacted)
 	}
 }
 
 func TestScrubJSONOrdinaryNamesStay(t *testing.T) {
-	ordinary := []string{"command", "path", "content", "url", "query", "description", "timeout", "cwd", "session", "sessionId", "sessionName", "pass", "auth", "author", "keyboard", "key", "keys", "monkey", "objectKey", "primaryKey", "partitionKey", "cacheKey", "publicKey", "ssh_public_key", "hostKey", "sortKey", "idempotencyKey", "tokens", "tokenizer", "num_tokens", "maxTokens", "max_tokens", "token_count", "secretary", "passage", "bypass", "cookieName", "environment", "authorName", "file_path", "old_string", "new_string", "pattern", "glob"}
-	hidden := []string{"env", "headers"}
+	ordinary := []string{"command", "path", "content", "url", "query", "description", "timeout", "cwd", "session", "sessionId", "sessionName", "author", "keyboard", "key", "keys", "monkey", "objectKey", "primaryKey", "partitionKey", "cacheKey", "publicKey", "ssh_public_key", "sshPublicKey", "hostKey", "sortKey", "idempotencyKey", "tokens", "tokenizer", "num_tokens", "maxTokens", "max_tokens", "token_count", "secretary", "passage", "bypass", "cookieName", "environment", "authorName", "file_path", "old_string", "new_string", "pattern", "glob"}
+	hidden := []string{"env", "headers", "auth", "pass", "ssh_key", "sshKey", "signing_key", "signingKey", "encryption_key", "encryptionKey", "master_key", "masterKey", "aws_key", "awsKey", "stripe_key", "stripeKey", "license_key", "licenseKey", "jwt", "pat", "bearer", "basic_auth", "basicAuth", "auth_header", "authHeader", "max_secret", "maxSecret", "secret_count", "secretCount"}
 	var buf strings.Builder
 	buf.WriteByte('{')
 	for i, key := range append(append([]string{}, ordinary...), hidden...) {
@@ -79,7 +84,7 @@ func TestScrubJSONOrdinaryNamesStay(t *testing.T) {
 			t.Fatalf("showed %s in %s", key, text)
 		}
 	}
-	if strings.Join(redacted, ",") != "env,headers" {
+	if strings.Join(redacted, ",") != strings.Join(hidden, ",") {
 		t.Fatalf("redacted %#v", redacted)
 	}
 }

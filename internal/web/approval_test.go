@@ -664,11 +664,17 @@ func TestWebJournalDoesNotDuplicateCard(t *testing.T) {
 
 func TestSecretArgNamesStayHidden(t *testing.T) {
 	secrets := map[string]string{
-		"privateKey": "pk-demo", "accessKey": "ak-demo", "sessionKey": "sk-demo",
-		"cookie": "ck-demo", "passphrase": "pp-demo", "pwd": "pd-demo",
-		"note": "Bearer demo-token",
+		"privateKey": "hid-private", "accessKey": "hid-access", "sessionKey": "hid-session",
+		"cookie": "hid-cookie", "passphrase": "hid-phrase", "pwd": "hid-pwd",
+		"auth": "hid-auth", "pass": "hid-pass", "ssh_key": "hid-ssh", "sshKey": "hid-sshcam",
+		"signing_key": "hid-sign", "encryption_key": "hid-enc", "master_key": "hid-master",
+		"aws_key": "hid-aws", "stripe_key": "hid-stripe", "license_key": "hid-lic",
+		"jwt": "hid-jwt", "pat": "hid-pat", "bearer": "hid-bearerkey",
+		"basic_auth": "hid-basic", "auth_header": "hid-authh",
+		"max_secret": "hid-maxsec", "secret_count": "hid-seccount",
+		"note": "Bearer hid-token",
 	}
-	args := map[string]any{"command": "ls demo", "visible": "keep-me", "session": "work", "tokens": 512, "publicKey": "ssh-ed25519 AAAA demo", "auth": "au-demo"}
+	args := map[string]any{"command": "ls demo", "visible": "keep-me", "session": "work", "tokens": 512, "publicKey": "ssh-ed25519 AAAA demo", "ssh_public_key": "ssh-ed25519 AAAA demo", "token_count": 7}
 	for k, v := range secrets {
 		args[k] = v
 	}
@@ -696,8 +702,27 @@ func TestSecretArgNamesStayHidden(t *testing.T) {
 	for _, a := range audits {
 		aud.WriteString(a.Detail)
 	}
+	live := httptest.NewServer(h.srv.Handler())
+	t.Cleanup(live.Close)
+	sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	sseEvents, serr := readSSE(sctx, live.URL+"/runs/"+ap.RunID+"/events", h.cookieList(), "", func(batch []sseEvent) bool {
+		for _, ev := range batch {
+			if strings.Contains(ev.Data, "keep-me") {
+				return true
+			}
+		}
+		return false
+	})
+	cancel()
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	var sse strings.Builder
+	for _, ev := range sseEvents {
+		sse.WriteString(ev.Data)
+	}
 	for name, body := range map[string]string{
-		"page": page, "card": card, "run_events": runEv.String(),
+		"page": page, "card": card, "sse": sse.String(), "run_events": runEv.String(),
 		"arguments": ap.Arguments, "audit": aud.String(),
 	} {
 		for _, secret := range secrets {
@@ -709,7 +734,7 @@ func TestSecretArgNamesStayHidden(t *testing.T) {
 			t.Fatalf("%s dropped a plain value %s", name, body)
 		}
 	}
-	for _, plain := range []string{"work", "512", "ssh-ed25519 AAAA demo", "au-demo", "Bearer Hidden"} {
+	for _, plain := range []string{"work", "512", "ssh-ed25519 AAAA demo", "Bearer Hidden"} {
 		if !strings.Contains(card, plain) {
 			t.Fatalf("card hid %s: %s", plain, card)
 		}
@@ -979,6 +1004,34 @@ func TestRecoveryLostRequestStaysInactive(t *testing.T) {
 	}
 }
 
+func TestRecoveryJournalKeepsApprovedAudit(t *testing.T) {
+	ask := runtime.NewAsk(runtime.AskOptions{Tool: "bash", Args: map[string]any{"command": "ls demo"}})
+	up := httptest.NewServer(&loseAsk{ask: ask})
+	t.Cleanup(up.Close)
+	h := newHarnessWith(t, runtime.NewHTTP(up.URL))
+	ip := "203.0.113.147:9"
+	user, secret := h.account("journal-s07b@example.com", "Demo User", "correct-horse-1")
+	h.login("journal-s07b@example.com", "correct-horse-1", secret, ip, false)
+	agent := h.newAgent(ip, "Atlas")
+	sendPrompt(t, h, agent, ip, "go")
+	ap := waitPending(t, h, user.ID)
+	if _, claimed, err := h.st.ClaimDecision(context.Background(), user.ID, ap.ID, ap.RunID, "approved", user.ID); err != nil || !claimed {
+		t.Fatal(err)
+	}
+	if _, err := h.st.IngestJournal(context.Background(), user.ID, agent.ID, []store.JournalEntry{
+		{Seq: 1, At: "2026-11-10T22:12:17Z", SessionID: "", Caller: "control_plane", Kind: "decision", RequestID: ap.RequestID, Decision: "approved"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.recoverDecisions(context.Background(), 0)
+	row, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+	if err != nil || row.Status != "approved" || !row.Sent {
+		t.Fatalf("row %#v %v", row, err)
+	}
+	assertAudit(t, h, user.ID, "approval.approved", "user", user.ID, 1)
+	assertAudit(t, h, user.ID, "approval.inactive", "", "", 0)
+}
+
 func TestGuestRestartDeferralIsLogged(t *testing.T) {
 	h := newHarness(t)
 	var buf bytes.Buffer
@@ -993,16 +1046,29 @@ func TestGuestRestartDeferralIsLogged(t *testing.T) {
 	if err := h.st.GrantSecret(context.Background(), user.ID, agent.ID, sec.ID); err != nil {
 		t.Fatal(err)
 	}
+	fp, err := h.srv.secretFingerprint(context.Background(), user.ID, agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SetSecretFP(context.Background(), user.ID, agent.ID, fp); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.noteGuestDefer(context.Background(), user.ID, agent.ID, "pending approval")
+	if buf.Len() != 0 {
+		t.Fatalf("logged a restart that was not pending %s", buf.String())
+	}
 	if err := h.st.SetSecretFP(context.Background(), user.ID, agent.ID, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err != nil {
 		t.Fatal(err)
 	}
 	h.srv.noteGuestDefer(context.Background(), user.ID, agent.ID, "pending approval")
+	h.srv.noteGuestDefer(context.Background(), user.ID, agent.ID, "pending approval")
+	h.srv.noteGuestDefer(context.Background(), user.ID, agent.ID, "bound:pending approval")
 	h.srv.noteGuestDefer(context.Background(), user.ID, agent.ID, "bound:pending approval")
 	text := buf.String()
 	if strings.Contains(text, secret) || strings.Contains(text, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
 		t.Fatalf("log leaked a secret or a full fingerprint %s", text)
 	}
-	if !strings.Contains(text, "guest_restart_deferred") || !strings.Contains(text, "pending approval") || !strings.Contains(text, "old_fp=aaaaaaaa") || !strings.Contains(text, "guest_restart_forced") {
+	if strings.Count(text, "guest_restart_deferred") != 1 || strings.Count(text, "guest_restart_forced") != 1 || !strings.Contains(text, "pending approval") || !strings.Contains(text, "old_fp=aaaaaaaa") {
 		t.Fatalf("log %s", text)
 	}
 }

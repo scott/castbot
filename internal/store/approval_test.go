@@ -111,14 +111,84 @@ func TestDeferGuestRestartBound(t *testing.T) {
 	if err := s.MarkStreaming(ctx, owner.ID, newer.ID); err != nil {
 		t.Fatal(err)
 	}
+	// The older run has been open for a minute. That age does not start the bound.
 	wait, reason, err := s.DeferGuestRestart(ctx, owner.ID, agent.ID, newer.ID)
-	if err != nil || !wait {
-		t.Fatalf("young %v %s %v", wait, reason, err)
+	if err != nil || !wait || strings.HasPrefix(reason, "bound:") {
+		t.Fatalf("before wanted %v %s %v", wait, reason, err)
 	}
-	now = start.Add(DeferRestartLimit)
+	now = start.Add(16 * time.Minute)
+	wait, reason, err = s.DeferGuestRestart(ctx, owner.ID, agent.ID, newer.ID)
+	if err != nil || !wait || strings.HasPrefix(reason, "bound:") {
+		t.Fatalf("old run without a wanted stamp %v %s %v", wait, reason, err)
+	}
+	wantedAt := now
+	s.NoteRestartWanted(owner.ID, agent.ID)
+	wait, reason, err = s.DeferGuestRestart(ctx, owner.ID, agent.ID, newer.ID)
+	if err != nil || !wait || strings.HasPrefix(reason, "bound:") {
+		t.Fatalf("first deferral %v %s %v", wait, reason, err)
+	}
+	now = wantedAt.Add(DeferRestartLimit - time.Second)
+	wait, reason, err = s.DeferGuestRestart(ctx, owner.ID, agent.ID, newer.ID)
+	if err != nil || !wait || strings.HasPrefix(reason, "bound:") {
+		t.Fatalf("inside the bound %v %s %v", wait, reason, err)
+	}
+	now = wantedAt.Add(DeferRestartLimit)
 	wait, reason, err = s.DeferGuestRestart(ctx, owner.ID, agent.ID, newer.ID)
 	if err != nil || wait || !strings.HasPrefix(reason, "bound:") {
 		t.Fatalf("bound %v %s %v", wait, reason, err)
+	}
+}
+
+func TestDeferGuestRestartDoesNotForcePendingApproval(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	start := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	now := start
+	s.SetNow(func() time.Time { return now })
+	owner := makeUser(t, s, "bound-ask-s07b@example.com", "Owner")
+	sec, err := s.CreateSection(ctx, owner.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, thread, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := s.CreateRun(ctx, owner.ID, thread.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkStreaming(ctx, owner.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendRunEvent(ctx, owner.ID, run.ID, "text", `{"text":"hi"}`, 2); err != nil {
+		t.Fatal(err)
+	}
+	now = start.Add(16 * time.Minute)
+	ap, err := s.RecordPermission(ctx, owner.ID, run.ID, json.RawMessage(`{"id":"req-bound","tool":"bash","arguments":{"command":"ls"}}`), now.Add(time.Hour), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.NoteRestartWanted(owner.ID, agent.ID)
+	wait, reason, err := s.DeferGuestRestart(ctx, owner.ID, agent.ID, "")
+	if err != nil || !wait || reason != "pending approval" {
+		t.Fatalf("fresh ask %v %s %v", wait, reason, err)
+	}
+	now = now.Add(DeferRestartLimit)
+	wait, reason, err = s.DeferGuestRestart(ctx, owner.ID, agent.ID, "")
+	if err != nil || !wait || strings.HasPrefix(reason, "bound:") {
+		t.Fatalf("forced a pending approval %v %s %v", wait, reason, err)
+	}
+	row, err := s.GetApproval(ctx, owner.ID, ap.ID)
+	if err != nil || row.Status != "pending" || row.DecidedBy != "" {
+		t.Fatalf("row %#v %v", row, err)
+	}
+	if _, err := s.MarkInactive(ctx, owner.ID, ap.ID, "user", owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	wait, reason, err = s.DeferGuestRestart(ctx, owner.ID, agent.ID, "")
+	if err != nil || wait || !strings.HasPrefix(reason, "bound:") {
+		t.Fatalf("after the approval %v %s %v", wait, reason, err)
 	}
 }
 

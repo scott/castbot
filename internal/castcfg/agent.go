@@ -432,25 +432,32 @@ func SecretKey(key string) bool { return secretKey(key) }
 
 func secretKey(key string) bool {
 	k := normalizeSecretKey(key)
-	if publicOrCountKey(k) {
+	if ordinaryKey(k) {
 		return false
 	}
 	switch k {
 	case "env", "headers", "token", "secret", "password", "api_key", "apikey",
 		"access_token", "refresh_token", "authorization", "private_key",
 		"client_secret", "credentials", "auth_token", "secret_key",
-		"cookie", "passphrase", "pwd", "access_key", "session_key":
+		"cookie", "passphrase", "pwd", "access_key", "session_key",
+		"auth", "pass", "jwt", "pat", "bearer", "basic_auth", "auth_header":
 		return true
 	}
 	parts := strings.Split(k, "_")
+	// Names that end in _key are secrets unless ordinaryKey allowed them.
+	if len(parts) >= 2 && parts[len(parts)-1] == "key" {
+		return true
+	}
 	for i, p := range parts {
 		switch p {
-		case "token", "tokens", "secret", "password", "passwd", "passphrase", "credential", "credentials":
+		case "token", "tokens", "secret", "password", "passwd", "passphrase",
+			"credential", "credentials", "auth", "jwt", "pat", "bearer":
 			return true
 		}
 		if i+1 < len(parts) {
 			switch parts[i] + "_" + parts[i+1] {
-			case "api_key", "private_key", "secret_key", "access_key", "session_key", "client_secret":
+			case "api_key", "private_key", "secret_key", "access_key", "session_key",
+				"client_secret", "basic_auth", "auth_header":
 				return true
 			}
 		}
@@ -458,23 +465,19 @@ func secretKey(key string) bool {
 	return false
 }
 
-// publicOrCountKey keeps ordinary names that only look like secrets.
-// A public key and a token count stay visible. Matching is by whole segment.
-func publicOrCountKey(k string) bool {
+// ordinaryKey keeps names that only look like secrets.
+// Token counts stay visible. A short list of ordinary *_key names stays visible.
+// max_ and count do not keep max_secret or secret_count.
+func ordinaryKey(k string) bool {
 	switch k {
-	case "max_tokens", "max_output_tokens", "max_input_tokens",
+	case "tokens", "tokenizer", "num_tokens", "token_count",
+		"max_tokens", "max_output_tokens", "max_input_tokens",
 		"max_completion_tokens", "max_new_tokens",
 		"prompt_tokens", "completion_tokens", "input_tokens", "output_tokens",
-		"total_tokens", "sort_key", "tokens", "tokenizer":
+		"total_tokens",
+		"sort_key", "cache_key", "object_key", "partition_key", "primary_key",
+		"idempotency_key", "host_key", "public_key", "ssh_public_key":
 		return true
-	}
-	if strings.HasPrefix(k, "num_") || strings.HasPrefix(k, "max_") {
-		return true
-	}
-	for _, p := range strings.Split(k, "_") {
-		if p == "public" || p == "count" {
-			return true
-		}
 	}
 	return false
 }

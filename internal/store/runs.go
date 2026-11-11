@@ -465,56 +465,90 @@ func (s *Store) abandonApprovals(ctx context.Context, tx *sql.Tx, userID, runID,
 	return nil
 }
 
-// DeferRestartLimit is how long a bundle or secret reload will wait for an
-// open run or a pending web approval. Past that, the restart proceeds so
-// two threads cannot hold a key rotation or a bundle update open.
+// DeferRestartLimit is how long a bundle or secret reload will wait after
+// the first time that reload had to wait. A pending web approval is never
+// forced: its own timeout ends that wait. Past the limit, with no pending
+// web approval, the restart proceeds.
 const DeferRestartLimit = 15 * time.Minute
+
+func restartKey(userID, agentID string) string {
+	return userID + "\x00" + agentID
+}
+
+// NoteRestartWanted records the first moment a bundle or secret reload had
+// to wait for this agent. A later call keeps the original time.
+func (s *Store) NoteRestartWanted(userID, agentID string) {
+	now := s.Now()
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	if s.restartWanted == nil {
+		s.restartWanted = map[string]time.Time{}
+	}
+	key := restartKey(userID, agentID)
+	if _, ok := s.restartWanted[key]; !ok {
+		s.restartWanted[key] = now
+	}
+}
+
+// ClearRestartWanted drops the wait clock after the reload is no longer wanted.
+func (s *Store) ClearRestartWanted(userID, agentID string) {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	delete(s.restartWanted, restartKey(userID, agentID))
+}
+
+func (s *Store) restartWantedAt(userID, agentID string) (time.Time, bool) {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	t, ok := s.restartWanted[restartKey(userID, agentID)]
+	return t, ok
+}
 
 // DeferGuestRestart reports that a bundle or secret reload should wait.
 // A pending web approval, another open run, or a resume of runID would
 // restart the guest and drop the prompt. A brand new run with no offset
 // does not defer, so the next message can apply the change first.
+// The 15 minute bound starts at NoteRestartWanted, not at the run's start.
+// A pending web approval is never forced.
 // reason is why it is waiting, or "bound:" plus that reason when the wait
 // has passed DeferRestartLimit and the restart should proceed.
 func (s *Store) DeferGuestRestart(ctx context.Context, userID, agentID, runID string) (bool, string, error) {
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
 		return false, "", err
 	}
-	reason, oldest, err := s.deferReason(ctx, userID, agentID, runID)
+	reason, err := s.deferReason(ctx, userID, agentID, runID)
 	if err != nil || reason == "" {
 		return false, "", err
 	}
-	if !oldest.IsZero() && !s.Now().Before(oldest.Add(DeferRestartLimit)) {
+	if reason == "pending approval" {
+		return true, reason, nil
+	}
+	if at, ok := s.restartWantedAt(userID, agentID); ok && !s.Now().Before(at.Add(DeferRestartLimit)) {
 		return false, "bound:" + reason, nil
 	}
 	return true, reason, nil
 }
 
-func (s *Store) deferReason(ctx context.Context, userID, agentID, runID string) (string, time.Time, error) {
+func (s *Store) deferReason(ctx context.Context, userID, agentID, runID string) (string, error) {
 	var reason string
-	var oldest time.Time
 	consider := func(why, stamp string) error {
 		if stamp == "" {
 			return nil
 		}
-		t, err := parseTime(stamp)
-		if err != nil {
+		if _, err := parseTime(stamp); err != nil {
 			return err
 		}
 		if reason == "" {
 			reason = why
 		}
-		if oldest.IsZero() || t.Before(oldest) {
-			oldest = t
-		}
 		return nil
 	}
 	var created string
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MIN(a.created_at), '') FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id WHERE a.user_id = ? AND r.agent_id = ? AND a.status = 'pending' AND a.origin = 'web'`, userID, agentID).Scan(&created); err != nil {
-		return "", time.Time{}, err
+		return "", err
 	}
 	if err := consider("pending approval", created); err != nil {
-		return "", time.Time{}, err
+		return "", err
 	}
 	q := `SELECT COALESCE(MIN(started_at), '') FROM runs WHERE user_id = ? AND agent_id = ? AND status IN ('streaming', 'waiting_approval')`
 	args := []any{userID, agentID}
@@ -524,25 +558,25 @@ func (s *Store) deferReason(ctx context.Context, userID, agentID, runID string) 
 	}
 	var started string
 	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&started); err != nil {
-		return "", time.Time{}, err
+		return "", err
 	}
 	if err := consider("another run is open", started); err != nil {
-		return "", time.Time{}, err
+		return "", err
 	}
 	if runID != "" {
 		var status, runStarted string
 		var offset int
 		err := s.db.QueryRowContext(ctx, `SELECT status, stream_offset, started_at FROM runs WHERE id = ? AND user_id = ?`, runID, userID).Scan(&status, &offset, &runStarted)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return "", time.Time{}, err
+			return "", err
 		}
 		if err == nil && (status == "waiting_approval" || offset > 0) {
 			if err := consider("this run has already started", runStarted); err != nil {
-				return "", time.Time{}, err
+				return "", err
 			}
 		}
 	}
-	return reason, oldest, nil
+	return reason, nil
 }
 
 // SetMessageRun links one of the caller's messages to a run they own.

@@ -49,6 +49,12 @@ type Store struct {
 	now     func() time.Time
 	argon   auth.Params
 	dummy   string
+
+	// restartWanted is the first moment a bundle or secret reload had to wait,
+	// keyed by user and agent. It is process memory, so a restart of this
+	// process starts the wait again. Cleared once the reload is no longer wanted.
+	restartMu     sync.Mutex
+	restartWanted map[string]time.Time
 }
 
 // Options tunes a store. Zero values use the production defaults.
