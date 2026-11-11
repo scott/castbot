@@ -259,6 +259,29 @@ func (s *Store) JournalDecision(ctx context.Context, userID, agentID, requestID 
 	return decision, true, nil
 }
 
+// JournalDecisionBetween is a decision after minSeq and at or below maxSeq.
+// Recovery uses that window for an earlier attempt. A row written by the
+// attempt in progress is above the cursor captured before the post.
+func (s *Store) JournalDecisionBetween(ctx context.Context, userID, agentID, requestID string, minSeq, maxSeq int) (string, bool, error) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" || maxSeq < 1 || maxSeq <= minSeq {
+		return "", false, nil
+	}
+	key, err := s.agentVMKey(ctx, userID, agentID)
+	if err != nil {
+		return "", false, err
+	}
+	var decision string
+	err = s.db.QueryRowContext(ctx, `SELECT decision FROM journal_entries WHERE agent_vm_id = ? AND user_id = ? AND agent_id = ? AND request_id = ? AND kind = 'decision' AND decision != '' AND seq > ? AND seq <= ? ORDER BY seq DESC LIMIT 1`, key, userID, agentID, requestID, minSeq, maxSeq).Scan(&decision)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return decision, true, nil
+}
+
 // JournalDecisionBefore is JournalDecision limited to rows at or below maxSeq.
 // Recovery trusts only the journal it had seen before its own first re-post.
 func (s *Store) JournalDecisionBefore(ctx context.Context, userID, agentID, requestID string, maxSeq int) (string, bool, error) {
@@ -425,7 +448,7 @@ func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmK
 		return err
 	}
 	if e.Kind == "request" || e.Kind == "reply" {
-		attached, err := s.attachJournalMessage(ctx, tx, agent, th.ID, e)
+		attached, err := s.attachJournalMessage(ctx, tx, agent, vmKey, th.ID, e)
 		if err != nil || attached {
 			return err
 		}
@@ -526,10 +549,10 @@ ORDER BY CASE WHEN m.agent_vm_id = ? THEN 0 ELSE 1 END, m.rowid LIMIT 1`, agent.
 	return nil
 }
 
-func (s *Store) attachJournalMessage(ctx context.Context, tx *sql.Tx, agent Agent, threadID string, e JournalEntry) (bool, error) {
+func (s *Store) attachJournalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmKey, threadID string, e JournalEntry) (bool, error) {
 	if e.Kind == "request" && e.MessageID != "" {
-		res, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = ? WHERE id = ? AND user_id = ? AND thread_id = ? AND author_kind = 'user' AND journal_seq IS NULL`,
-			e.Seq, e.MessageID, agent.UserID, threadID)
+		res, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = ?, agent_vm_id = ? WHERE id = ? AND user_id = ? AND thread_id = ? AND author_kind = 'user' AND journal_seq IS NULL`,
+			e.Seq, vmKey, e.MessageID, agent.UserID, threadID)
 		if err != nil {
 			return false, err
 		}
@@ -537,8 +560,8 @@ func (s *Store) attachJournalMessage(ctx context.Context, tx *sql.Tx, agent Agen
 		return n == 1, err
 	}
 	if e.Kind == "reply" && e.StreamID != "" {
-		res, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = ? WHERE user_id = ? AND thread_id = ? AND author_kind = 'agent' AND run_id = ? AND journal_seq IS NULL`,
-			e.Seq, agent.UserID, threadID, e.StreamID)
+		res, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = ?, agent_vm_id = ? WHERE user_id = ? AND thread_id = ? AND author_kind = 'agent' AND run_id = ? AND journal_seq IS NULL`,
+			e.Seq, vmKey, agent.UserID, threadID, e.StreamID)
 		if err != nil {
 			return false, err
 		}

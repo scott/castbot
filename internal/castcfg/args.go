@@ -43,37 +43,158 @@ var errBadJSON = errors.New("bad json")
 
 var (
 	// Any value after Bearer or Basic is hidden, including short and letters-only tokens.
-	// A closing quote is not part of the value.
+	// A closing quote is not part of the value. A URL is not a credential.
 	bearerAny = regexp.MustCompile(`(?i)\bbearer\s+\S+`)
 	basicAny  = regexp.MustCompile(`(?i)\bbasic\s+\S+`)
-	// A password or user stuck to -p or -u, as in mysql -pSECRET or curl -uuser:pass.
-	flagStick = regexp.MustCompile(`(?i)(^|[\s])(-u|-p)(\S+)`)
-	// A credential flag, then a separate value. sort -u names.txt is hidden too.
-	flagNext = regexp.MustCompile(`(?i)(^|[\s])(--user|--password|--token|--api-key|--apikey|--passphrase|--pass|-u)(\s+)("[^"]*"|'[^']*'|\S+)`)
-	// --user= is a secret even though the name "user" is not.
-	flagEq = regexp.MustCompile(`(?i)(^|[\s])(--user|--password|--token|--api-key|--apikey|--passphrase|--pass)(=)("[^"]*"|'[^']*'|\S+)`)
+	// authorization: token VALUE hides one token. Bearer and Basic are above.
+	authTokenScheme = regexp.MustCompile(`(?i)((?:proxy-)?authorization\s*:\s*token\s+)([^\s'"]+)`)
+	// A private key body. The BEGIN and END lines stay so the command is recognizable.
+	pemPrivate = regexp.MustCompile(`(?s)(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)(.*?)(-----END [A-Z0-9 ]*PRIVATE KEY-----)`)
+	// Token shapes that are secrets even with no name beside them.
+	knownToken = regexp.MustCompile(`\b(?:ghp_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|sk-[A-Za-z0-9_-]{8,})`)
+	// --name value and --name=value. The value stops at whitespace or a shell break.
+	longFlag = regexp.MustCompile(`(?i)(^|[\s;|&])(--)([A-Za-z0-9][A-Za-z0-9-]*)(=|[ \t]+)("[^"]*"|'[^']*'|[^\s;|&]+)`)
+	// Short flags. Only a known credential tool uses these.
+	shortFlag = regexp.MustCompile(`(?i)(^|[\s;|&])(-u|-p|-a)([ \t]*)([^\s;|&]+)`)
 	// scheme://user:pass@host and scheme://token@host.
 	urlUserinfo = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+(?::[^\s/@]*)?@`)
 )
 
 // scrubString hides credential values inside a string and keeps the rest.
-// A false positive is preferred to a leaked secret.
+// Only the secret token is replaced. The rest of the command stays visible.
 func scrubScheme(s string, re *regexp.Regexp, label string) string {
 	return re.ReplaceAllStringFunc(s, func(m string) string {
 		trimmed := strings.TrimRight(m, `"'`)
-		return label + m[len(trimmed):]
+		quote := m[len(trimmed):]
+		val := trimmed
+		if i := strings.LastIndexAny(trimmed, " \t"); i >= 0 {
+			val = trimmed[i+1:]
+		}
+		if strings.Contains(val, "://") {
+			return m
+		}
+		return label + quote
 	})
 }
 
 func scrubString(s string) (string, bool) {
-	next := scrubScheme(s, bearerAny, "Bearer Hidden")
+	next := pemPrivate.ReplaceAllString(s, "${1}\nHidden\n${3}")
+	next = knownToken.ReplaceAllString(next, "Hidden")
+	next = scrubScheme(next, bearerAny, "Bearer Hidden")
 	next = scrubScheme(next, basicAny, "Basic Hidden")
-	next = flagStick.ReplaceAllString(next, "${1}${2}Hidden")
-	next = flagNext.ReplaceAllString(next, "${1}${2}${3}Hidden")
-	next = flagEq.ReplaceAllString(next, "${1}${2}${3}Hidden")
+	next = authTokenScheme.ReplaceAllString(next, "${1}Hidden")
+	next = scrubToolFlags(next)
 	next = urlUserinfo.ReplaceAllString(next, "${1}Hidden@")
 	next = scrubLabeled(next)
 	return next, next != s
+}
+
+func commandSubst(v string) bool {
+	return strings.Contains(v, "$(") || strings.Contains(v, "`")
+}
+
+func commandBefore(s string, pos int) string {
+	start := pos
+	for start > 0 {
+		switch s[start-1] {
+		case ';', '|', '&', '\n', '\r':
+			goto scan
+		}
+		start--
+	}
+scan:
+	fields := strings.Fields(s[start:pos])
+	if len(fields) == 0 {
+		return ""
+	}
+	cmd := fields[0]
+	if i := strings.LastIndex(cmd, "/"); i >= 0 {
+		cmd = cmd[i+1:]
+	}
+	cmd = strings.ToLower(cmd)
+	if strings.HasPrefix(cmd, "-") {
+		return ""
+	}
+	if cmd == "docker" {
+		for _, f := range fields[1:] {
+			if strings.EqualFold(f, "login") {
+				return "docker login"
+			}
+		}
+	}
+	return cmd
+}
+
+func scrubToolFlags(s string) string {
+	s = replaceFlagValues(s, longFlag, func(m []string, cmd string) (string, bool) {
+		name := m[3]
+		val := m[5]
+		if commandSubst(val) {
+			return "", false
+		}
+		if (cmd == "curl" || cmd == "wget") && strings.EqualFold(name, "user") && strings.Contains(val, ":") {
+			return m[1] + m[2] + name + m[4] + "Hidden", true
+		}
+		if valueSecretName(name) {
+			return m[1] + m[2] + name + m[4] + "Hidden", true
+		}
+		return "", false
+	})
+	return replaceFlagValues(s, shortFlag, func(m []string, cmd string) (string, bool) {
+		flag := strings.ToLower(m[2])
+		space := m[3]
+		val := m[4]
+		switch flag {
+		case "-u":
+			if (cmd == "curl" || cmd == "wget") && strings.Contains(val, ":") {
+				return m[1] + flag + space + "Hidden", true
+			}
+		case "-p":
+			stuck := space == ""
+			switch cmd {
+			case "mysql", "mariadb", "mysqldump":
+				if stuck && val != "" {
+					return m[1] + flag + "Hidden", true
+				}
+			case "sshpass", "docker login":
+				return m[1] + flag + space + "Hidden", true
+			}
+		case "-a":
+			if cmd == "redis-cli" {
+				return m[1] + flag + space + "Hidden", true
+			}
+		}
+		return "", false
+	})
+}
+
+func replaceFlagValues(s string, re *regexp.Regexp, decide func(m []string, cmd string) (string, bool)) string {
+	locs := re.FindAllStringSubmatchIndex(s, -1)
+	if len(locs) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, loc := range locs {
+		if loc[0] < last {
+			continue
+		}
+		full := s[loc[0]:loc[1]]
+		m := re.FindStringSubmatch(full)
+		if m == nil {
+			continue
+		}
+		cmd := commandBefore(s, loc[0])
+		repl, ok := decide(m, cmd)
+		if !ok {
+			continue
+		}
+		b.WriteString(s[last:loc[0]])
+		b.WriteString(repl)
+		last = loc[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }
 
 // valueSecretName reports a name whose value must be hidden inside a string.
@@ -84,6 +205,9 @@ func valueSecretName(name string) bool {
 		return true
 	}
 	k := normalizeSecretKey(name)
+	if k == "password" || strings.HasSuffix(k, "password") {
+		return true
+	}
 	switch k {
 	case "key", "keys", "signature", "sig", "apikey", "api_key":
 		return true
@@ -155,21 +279,6 @@ func scrubLabeled(s string) string {
 			vStart++
 		}
 		vEnd := vStart
-		if strings.EqualFold(name, "authorization") {
-			for vEnd < len(s) && s[vEnd] != '\n' && s[vEnd] != '\r' {
-				vEnd++
-			}
-			if valueSecretName(name) {
-				b.WriteString(s[i:sep])
-				b.WriteByte(s[sep])
-				if vStart > sep+1 {
-					b.WriteString(s[sep+1 : vStart])
-				}
-				b.WriteString("Hidden")
-				i = vEnd
-				continue
-			}
-		}
 		if vStart < len(s) && (s[vStart] == '"' || s[vStart] == '\'') {
 			q := s[vStart]
 			vEnd = vStart + 1
@@ -180,19 +289,24 @@ func scrubLabeled(s string) string {
 				vEnd++
 			}
 		} else {
-			for vEnd < len(s) && s[vEnd] != ' ' && s[vEnd] != '\t' && s[vEnd] != '\n' && s[vEnd] != '\r' && s[vEnd] != ';' && s[vEnd] != '&' && s[vEnd] != ',' {
+			for vEnd < len(s) && s[vEnd] != ' ' && s[vEnd] != '\t' && s[vEnd] != '\n' && s[vEnd] != '\r' && s[vEnd] != ';' && s[vEnd] != '&' && s[vEnd] != '|' && s[vEnd] != ',' {
 				vEnd++
 			}
 		}
 		if vEnd < i {
 			vEnd = i
 		}
-		if !valueSecretName(name) {
+		if !labelIsSecret(name, s[sep]) {
 			if vEnd <= i {
 				b.WriteByte(s[sep])
 				i = sep + 1
 				continue
 			}
+			b.WriteString(s[i:vEnd])
+			i = vEnd
+			continue
+		}
+		if strings.Contains(s[vStart:vEnd], "$(") || strings.Contains(s[vStart:vEnd], "`") {
 			b.WriteString(s[i:vEnd])
 			i = vEnd
 			continue
@@ -206,6 +320,23 @@ func scrubLabeled(s string) string {
 		i = vEnd
 	}
 	return b.String()
+}
+
+// labelIsSecret reports a NAME=value or NAME: value whose value is a secret.
+// A bare key: label is prose. key= in a query string is still a secret.
+func labelIsSecret(name string, sep byte) bool {
+	switch strings.ToLower(name) {
+	case "authorization", "proxy-authorization":
+		// Bearer, Basic, and token schemes hide one value. Other words stay.
+		return false
+	}
+	if sep == ':' {
+		switch strings.ToLower(name) {
+		case "key", "keys":
+			return false
+		}
+	}
+	return valueSecretName(name)
 }
 
 func scrubScalar(raw json.RawMessage, path string, redacted *[]string) (json.RawMessage, error) {
@@ -294,13 +425,65 @@ func scrubObject(raw json.RawMessage, path string, redacted *[]string) (json.Raw
 	return json.RawMessage(buf.Bytes()), nil
 }
 
-func flagTakesNext(s string) bool {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "-u", "--user", "--token", "--password", "--api-key", "--apikey", "--pass", "--passphrase", "-p":
-		return true
-	default:
-		return false
+func argvCommand(words []string, upto int) string {
+	if upto > len(words) {
+		upto = len(words)
 	}
+	if upto < 1 {
+		return ""
+	}
+	cmd := words[0]
+	if i := strings.LastIndex(cmd, "/"); i >= 0 {
+		cmd = cmd[i+1:]
+	}
+	cmd = strings.ToLower(cmd)
+	if cmd == "docker" {
+		for _, w := range words[1:upto] {
+			if strings.EqualFold(w, "login") {
+				return "docker login"
+			}
+		}
+	}
+	return cmd
+}
+
+func stuckArgv(cmd, word string) (string, bool) {
+	low := strings.ToLower(word)
+	switch cmd {
+	case "mysql", "mariadb", "mysqldump":
+		if strings.HasPrefix(low, "-p") && len(word) > 2 {
+			return "-pHidden", true
+		}
+	case "curl", "wget":
+		if strings.HasPrefix(low, "-u") && len(word) > 2 && strings.Contains(word, ":") {
+			return "-uHidden", true
+		}
+	case "redis-cli":
+		if strings.HasPrefix(low, "-a") && len(word) > 2 {
+			return "-aHidden", true
+		}
+	case "sshpass", "docker login":
+		if strings.HasPrefix(low, "-p") && len(word) > 2 {
+			return "-pHidden", true
+		}
+	}
+	return "", false
+}
+
+func argvHidesNext(cmd, flag, value string) bool {
+	switch strings.ToLower(flag) {
+	case "-u", "--user":
+		return (cmd == "curl" || cmd == "wget") && strings.Contains(value, ":")
+	case "-p":
+		return cmd == "sshpass" || cmd == "docker login"
+	case "-a":
+		return cmd == "redis-cli"
+	}
+	name := strings.TrimLeft(flag, "-")
+	if strings.HasPrefix(flag, "--") && valueSecretName(name) && !commandSubst(value) {
+		return true
+	}
+	return false
 }
 
 func scrubArray(raw json.RawMessage, path string, redacted *[]string) (json.RawMessage, error) {
@@ -320,15 +503,32 @@ func scrubArray(raw json.RawMessage, path string, redacted *[]string) (json.RawM
 		}
 		elems = append(elems, val)
 	}
+	var words []string
+	stringAt := map[int]bool{}
+	for i, val := range elems {
+		var word string
+		if len(val) > 0 && val[0] == '"' && json.Unmarshal(val, &word) == nil {
+			words = append(words, word)
+			stringAt[i] = true
+		} else {
+			words = append(words, "")
+		}
+	}
 	var buf bytes.Buffer
 	buf.WriteByte('[')
 	first := true
-	hideNext := false
-	for _, val := range elems {
-		var word string
-		isString := len(val) > 0 && val[0] == '"' && json.Unmarshal(val, &word) == nil
+	for i, val := range elems {
 		var cleaned json.RawMessage
-		if hideNext && isString {
+		if repl, ok := stuckArgv(argvCommand(words, i), words[i]); stringAt[i] && ok {
+			b, err := json.Marshal(repl)
+			if err != nil {
+				return nil, err
+			}
+			cleaned = b
+			if path != "" {
+				*redacted = append(*redacted, path)
+			}
+		} else if stringAt[i] && i > 0 && stringAt[i-1] && argvHidesNext(argvCommand(words, i), words[i-1], words[i]) {
 			b, err := json.Marshal("Hidden")
 			if err != nil {
 				return nil, err
@@ -337,9 +537,7 @@ func scrubArray(raw json.RawMessage, path string, redacted *[]string) (json.RawM
 			if path != "" {
 				*redacted = append(*redacted, path)
 			}
-			hideNext = false
 		} else {
-			hideNext = isString && flagTakesNext(word)
 			var err error
 			cleaned, err = scrubJSON(val, path, redacted)
 			if err != nil {

@@ -276,6 +276,91 @@ func TestOrphanCLIDecisionSurvivesNewMachine(t *testing.T) {
 	}
 }
 
+func TestWebJournalSeqReusedOnNewMachine(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	owner := makeUser(t, s, "reuse-owner@example.com", "Owner")
+	sec, err := s.CreateSection(ctx, owner.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, thread, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.CreateMessage(ctx, owner.ID, thread.ID, "user", owner.ID, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.CreateMessage(ctx, owner.ID, thread.ID, "user", owner.ID, "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginVM(ctx, owner.ID, agent.ID, "castbot-reuse-1", "example.invalid/castbot-runtime:s07"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishVM(ctx, owner.ID, agent.ID, "vm-reuse-1", "https://vm.example", "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	vm1, err := s.LiveVM(ctx, owner.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.IngestJournal(ctx, owner.ID, agent.ID, []JournalEntry{
+		{Seq: 1, At: "2026-11-10T12:00:00Z", SessionID: thread.ID, Caller: "control_plane", Kind: "request", Text: "first", MessageID: first.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkVMDeleted(ctx, owner.ID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginVM(ctx, owner.ID, agent.ID, "castbot-reuse-2", "example.invalid/castbot-runtime:s07"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishVM(ctx, owner.ID, agent.ID, "vm-reuse-2", "https://vm.example", "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	vm2, err := s.LiveVM(ctx, owner.ID, agent.ID)
+	if err != nil || vm2.ID == vm1.ID {
+		t.Fatalf("vm %+v %v", vm2, err)
+	}
+	run, err := s.CreateRun(ctx, owner.ID, thread.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.IngestJournal(ctx, owner.ID, agent.ID, []JournalEntry{
+		{Seq: 1, At: "2026-11-10T12:01:00Z", SessionID: thread.ID, Caller: "control_plane", Kind: "request", Text: "second", MessageID: second.ID},
+		{Seq: 2, At: "2026-11-10T12:01:01Z", SessionID: thread.ID, Caller: "control_plane", Kind: "reply", Text: "done", StreamID: run.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	msg, _, err := s.FinishRun(ctx, owner.ID, run.ID, "done", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.JournalSeq != 2 {
+		t.Fatalf("reply seq %d", msg.JournalSeq)
+	}
+	var vmA, vmB string
+	var seqA, seqB int
+	if err := s.db.QueryRowContext(ctx, `SELECT journal_seq, agent_vm_id FROM messages WHERE id = ?`, first.ID).Scan(&seqA, &vmA); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT journal_seq, agent_vm_id FROM messages WHERE id = ?`, second.ID).Scan(&seqB, &vmB); err != nil {
+		t.Fatal(err)
+	}
+	if seqA != 1 || seqB != 1 || vmA != vm1.ID || vmB != vm2.ID {
+		t.Fatalf("first %d %s second %d %s", seqA, vmA, seqB, vmB)
+	}
+	var replyVM string
+	if err := s.db.QueryRowContext(ctx, `SELECT agent_vm_id FROM messages WHERE id = ?`, msg.ID).Scan(&replyVM); err != nil {
+		t.Fatal(err)
+	}
+	if replyVM != vm2.ID {
+		t.Fatalf("reply machine %s", replyVM)
+	}
+}
+
 func cliMessages(t *testing.T, s *Store, userID, agentID string) int {
 	t.Helper()
 	threads, err := s.ListThreadsByAgent(context.Background(), userID, agentID)

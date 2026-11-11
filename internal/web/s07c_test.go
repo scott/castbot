@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -165,19 +166,28 @@ func TestCastletConfirmedDecisionLeavesTheRun(t *testing.T) {
 	}
 	readyMachine(t, h, fake, agent, "vm-kept", "running")
 	runRow, ap := seedClaim(t, h, user, agent, "req-kept", time.Now().Add(time.Minute))
-	journal := []byte(`{"entries":[{"seq":1,"at":"2026-11-10T12:00:01Z","caller":"control_plane","kind":"decision","request_id":"req-kept","decision":"approved","tool":"bash"}]}`)
-	gate := &gateHost{Fake: fake, approveErrs: []error{errors.New("runtime down"), host.ErrNoRequest}, journalAfterLost: journal}
+	gate := &gateHost{Fake: fake, approveErrs: []error{errors.New("runtime down")}}
 	h.srv.SetHost(gate, "example.invalid/castbot-runtime:s07", "https://castbot.example")
 	h.srv.recoverDecisions(context.Background(), 0)
 	snap, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
 	if err != nil || !snap.RecoverSet || snap.RecoverSeq != 0 || snap.Status != "approved" {
 		t.Fatalf("snapshot %+v %v", snap, err)
 	}
+	if _, err := h.st.IngestJournal(context.Background(), user.ID, agent.ID, []store.JournalEntry{
+		{Seq: 1, At: "2026-11-10T12:00:01Z", Caller: "control_plane", Kind: "decision", RequestID: "req-kept", Decision: "approved", Tool: "bash"},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	clearDenyBackoff(h.srv)
+	h.srv.SetHost(&castletLike{Fake: fake, next: 1}, "example.invalid/castbot-runtime:s07", "https://castbot.example")
 	h.srv.recoverDecisions(context.Background(), 0)
 	got, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
 	if err != nil || got.Status != "inactive" {
 		t.Fatalf("%+v %v", got, err)
+	}
+	cur, err := h.st.JournalCursor(context.Background(), user.ID, agent.ID)
+	if err != nil || cur != 2 {
+		t.Fatalf("cursor %d %v", cur, err)
 	}
 	runGot, err := h.st.GetRun(context.Background(), user.ID, runRow.ID)
 	if err != nil || runGot.Status != "waiting_approval" || runGot.Error != "" {
@@ -190,6 +200,43 @@ func TestCastletConfirmedDecisionLeavesTheRun(t *testing.T) {
 	for _, row := range rows {
 		if row.Action == "approval.approved" {
 			t.Fatal("a confirmed decision was audited as approved")
+		}
+	}
+}
+
+func TestLostPromptFailsWhenCastletJournalsItsPost(t *testing.T) {
+	h, fake, agent := machineUser(t, "203.0.113.250:9")
+	h.srv.pauseSweeps()
+	user, err := h.st.GetUser(context.Background(), agent.UserID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyMachine(t, h, fake, agent, "vm-cl", "running")
+	runRow, ap := seedClaim(t, h, user, agent, "req-cl", time.Now().Add(time.Minute))
+	h.srv.SetHost(&castletLike{Fake: fake}, "example.invalid/castbot-runtime:s07", "https://castbot.example")
+	h.srv.recoverDecisions(context.Background(), 0)
+	got, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := h.st.GetRun(context.Background(), user.ID, runRow.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, found, err := h.st.JournalDecision(context.Background(), user.ID, agent.ID, "req-cl")
+	if err != nil || !found || dec != "approved" {
+		t.Fatalf("castlet row %q found=%v %v", dec, found, err)
+	}
+	if got.Status != "inactive" || run.Status != "failed" || run.Error != lostApprovalNotice {
+		t.Fatalf("approval=%s run=%s err=%q", got.Status, run.Status, run.Error)
+	}
+	rows, err := h.st.ListAudit(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Action == "approval.approved" {
+			t.Fatal("a lost prompt was audited as approved")
 		}
 	}
 }
@@ -558,6 +605,36 @@ func (l *lockedLog) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.b.String()
+}
+
+// castletLike journals the decision before the runtime answers, the way
+// castlet's permission proxy does, then reports that the prompt is gone.
+type castletLike struct {
+	*host.Fake
+	mu   sync.Mutex
+	body []byte
+	next int
+}
+
+func (c *castletLike) PullJournal(ctx context.Context, endpoint, token string, after int) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.body) == 0 {
+		return []byte(`{"entries":[]}`), nil
+	}
+	return c.body, nil
+}
+
+func (c *castletLike) Approve(ctx context.Context, endpoint, token, requestID string, allow bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.next++
+	decision := "denied"
+	if allow {
+		decision = "approved"
+	}
+	c.body = []byte(`{"entries":[{"seq":` + strconv.Itoa(c.next) + `,"at":"2026-11-10T12:00:01Z","caller":"control_plane","kind":"decision","request_id":"` + requestID + `","decision":"` + decision + `","tool":"bash"}]}`)
+	return host.ErrNoRequest
 }
 
 type gateHost struct {

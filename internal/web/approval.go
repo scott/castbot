@@ -258,6 +258,12 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 		if err != nil {
 			return err
 		}
+		// castlet journals this post before it forwards it. Remember the cursor
+		// now so that row, which is above it, is not treated as an earlier one.
+		preSeq, err := s.store.JournalCursor(ctx, user.ID, runRow.AgentID)
+		if err != nil {
+			return err
+		}
 		// Always re-post. A journal row alone does not prove the runtime got
 		// the decision. A second post that finds no pending prompt is harmless.
 		postErr := s.postPermission(ctx, user, runRow, row.RequestID, allow && !terminalApprove, false)
@@ -289,13 +295,15 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 					return err
 				}
 			}
-			// The pre-post pull cannot see a row castlet writes while forwarding.
-			// Pull once more. If that row exists, castlet received the decision
-			// and the tool may already have run, so the run stays as it is.
+			// Pull the row castlet wrote while forwarding. It is this attempt's
+			// own row when its sequence is above preSeq, and it does not prove
+			// the runtime ran the tool. A row from an earlier attempt sits in
+			// (recover_seq, preSeq]: the outcome of that post is unknown, so
+			// the run stays as it is.
 			if err := s.pullJournalBestEffort(ctx, user.ID, runRow.AgentID); err != nil {
 				return err
 			}
-			_, found, err := s.store.JournalDecision(ctx, row.UserID, runRow.AgentID, row.RequestID)
+			_, found, err := s.store.JournalDecisionBetween(ctx, row.UserID, runRow.AgentID, row.RequestID, seq, preSeq)
 			if err != nil {
 				return err
 			}
