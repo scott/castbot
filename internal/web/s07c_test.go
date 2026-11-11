@@ -122,7 +122,7 @@ func TestRecoveryIgnoresItsOwnJournaledDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	readyMachine(t, h, fake, agent, "vm-own", "running")
-	_, ap := seedClaim(t, h, user, agent, "req-own", time.Now().Add(time.Minute))
+	runRow, ap := seedClaim(t, h, user, agent, "req-own", time.Now().Add(time.Minute))
 	gate := &gateHost{Fake: fake, approveErrs: []error{errors.New("runtime down"), host.ErrNoRequest}}
 	h.srv.SetHost(gate, "example.invalid/castbot-runtime:s07", "https://castbot.example")
 	h.srv.recoverDecisions(context.Background(), 0)
@@ -141,6 +141,10 @@ func TestRecoveryIgnoresItsOwnJournaledDecision(t *testing.T) {
 	if err != nil || got.Status != "inactive" || got.RecoverSeq != 0 {
 		t.Fatalf("%+v %v", got, err)
 	}
+	runGot, err := h.st.GetRun(context.Background(), user.ID, runRow.ID)
+	if err != nil || runGot.Status != "waiting_approval" || runGot.Error != "" {
+		t.Fatalf("run %+v %v", runGot, err)
+	}
 	rows, err := h.st.ListAudit(context.Background(), user.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -148,6 +152,44 @@ func TestRecoveryIgnoresItsOwnJournaledDecision(t *testing.T) {
 	for _, row := range rows {
 		if row.Action == "approval.approved" {
 			t.Fatal("recovery trusted its own journal row")
+		}
+	}
+}
+
+func TestCastletConfirmedDecisionLeavesTheRun(t *testing.T) {
+	h, fake, agent := machineUser(t, "203.0.113.246:9")
+	h.srv.pauseSweeps()
+	user, err := h.st.GetUser(context.Background(), agent.UserID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyMachine(t, h, fake, agent, "vm-kept", "running")
+	runRow, ap := seedClaim(t, h, user, agent, "req-kept", time.Now().Add(time.Minute))
+	journal := []byte(`{"entries":[{"seq":1,"at":"2026-11-10T12:00:01Z","caller":"control_plane","kind":"decision","request_id":"req-kept","decision":"approved","tool":"bash"}]}`)
+	gate := &gateHost{Fake: fake, approveErrs: []error{errors.New("runtime down"), host.ErrNoRequest}, journalAfterLost: journal}
+	h.srv.SetHost(gate, "example.invalid/castbot-runtime:s07", "https://castbot.example")
+	h.srv.recoverDecisions(context.Background(), 0)
+	snap, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+	if err != nil || !snap.RecoverSet || snap.RecoverSeq != 0 || snap.Status != "approved" {
+		t.Fatalf("snapshot %+v %v", snap, err)
+	}
+	clearDenyBackoff(h.srv)
+	h.srv.recoverDecisions(context.Background(), 0)
+	got, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+	if err != nil || got.Status != "inactive" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	runGot, err := h.st.GetRun(context.Background(), user.ID, runRow.ID)
+	if err != nil || runGot.Status != "waiting_approval" || runGot.Error != "" {
+		t.Fatalf("run %+v %v", runGot, err)
+	}
+	rows, err := h.st.ListAudit(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Action == "approval.approved" {
+			t.Fatal("a confirmed decision was audited as approved")
 		}
 	}
 }
@@ -520,24 +562,35 @@ func (l *lockedLog) String() string {
 
 type gateHost struct {
 	*host.Fake
-	pullErr     error
-	approveErrs []error
-	approves    int
+	pullErr          error
+	approveErrs      []error
+	approves         int
+	lost             bool
+	journalAfterLost []byte
 }
 
 func (g *gateHost) PullJournal(ctx context.Context, endpoint, token string, after int) ([]byte, error) {
 	if g.pullErr != nil {
 		return nil, g.pullErr
 	}
+	if g.lost && len(g.journalAfterLost) > 0 {
+		return g.journalAfterLost, nil
+	}
 	return g.Fake.PullJournal(ctx, endpoint, token, after)
 }
 
 func (g *gateHost) Approve(ctx context.Context, endpoint, token, requestID string, allow bool) error {
 	g.approves++
+	var err error
 	if g.approves <= len(g.approveErrs) {
-		return g.approveErrs[g.approveErrsIndex()]
+		err = g.approveErrs[g.approveErrsIndex()]
+	} else {
+		err = g.Fake.Approve(ctx, endpoint, token, requestID, allow)
 	}
-	return g.Fake.Approve(ctx, endpoint, token, requestID, allow)
+	if errors.Is(err, host.ErrNoRequest) {
+		g.lost = true
+	}
+	return err
 }
 
 func (g *gateHost) approveErrsIndex() int {

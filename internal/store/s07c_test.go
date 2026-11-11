@@ -186,6 +186,96 @@ func TestOrphanCLIDecisionWaitsFiveMinutes(t *testing.T) {
 	}
 }
 
+func TestOrphanCLIDecisionSurvivesOtherAgent(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	s.SetNow(func() time.Time { return now })
+	owner := makeUser(t, s, "n6-owner@example.com", "Owner")
+	sec, err := s.CreateSection(ctx, owner.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	atlas, _, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bolt, _, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: sec.ID, Name: "Bolt", Title: "Helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ida, _, err := s.IssueCLIToken(ctx, owner.ID, atlas.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idb, _, err := s.IssueCLIToken(ctx, owner.ID, bolt.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.IngestJournal(ctx, owner.ID, bolt.ID, []JournalEntry{
+		{Seq: 1, At: "2026-11-10T12:00:00Z", SessionID: "sb", Caller: "cli:" + idb, Kind: "reply", Text: "hello from Bolt"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.IngestJournal(ctx, owner.ID, atlas.ID, []JournalEntry{
+		{Seq: 1, At: "2026-11-10T12:00:00Z", Caller: "cli:" + ida, Kind: "decision", RequestID: "req-a", Tool: "bash", Decision: "approved"},
+		{Seq: 2, At: "2026-11-10T12:00:05Z", SessionID: "sa", Caller: "cli:" + ida, Kind: "reply", Text: "done"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if cliMessages(t, s, owner.ID, atlas.ID) != 2 {
+		t.Fatalf("atlas cli messages %d", cliMessages(t, s, owner.ID, atlas.ID))
+	}
+	now = now.Add(10 * time.Minute)
+	s.SetNow(func() time.Time { return now })
+	n, err := s.SweepOrphanCLIDecisions(ctx)
+	if err != nil || n != 0 || cliMessages(t, s, owner.ID, atlas.ID) != 2 {
+		t.Fatalf("sweep %d messages %d %v", n, cliMessages(t, s, owner.ID, atlas.ID), err)
+	}
+}
+
+func TestOrphanCLIDecisionSurvivesNewMachine(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	s.SetNow(func() time.Time { return now })
+	owner := makeUser(t, s, "n6-vm-owner@example.com", "Owner")
+	sec, err := s.CreateSection(ctx, owner.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := s.IssueCLIToken(ctx, owner.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := "cli:" + id
+	if _, err := s.IngestJournal(ctx, owner.ID, agent.ID, []JournalEntry{
+		{Seq: 1, At: "2026-11-10T12:00:00Z", Caller: caller, Kind: "decision", RequestID: "req-old", Tool: "bash", Decision: "approved"},
+		{Seq: 2, At: "2026-11-10T12:00:05Z", SessionID: "old", Caller: caller, Kind: "reply", Text: "old"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginVM(ctx, owner.ID, agent.ID, "castbot-n6", "example.invalid/castbot-runtime:s07"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishVM(ctx, owner.ID, agent.ID, "vm-n6", "https://vm.example", "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.IngestJournal(ctx, owner.ID, agent.ID, []JournalEntry{
+		{Seq: 1, At: "2026-11-10T12:01:00Z", Caller: caller, Kind: "decision", RequestID: "req-new", Tool: "bash", Decision: "approved"},
+		{Seq: 2, At: "2026-11-10T12:01:05Z", SessionID: "new", Caller: caller, Kind: "reply", Text: "new"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if cliMessages(t, s, owner.ID, agent.ID) != 4 {
+		t.Fatalf("cli messages %d", cliMessages(t, s, owner.ID, agent.ID))
+	}
+}
+
 func cliMessages(t *testing.T, s *Store, userID, agentID string) int {
 	t.Helper()
 	threads, err := s.ListThreadsByAgent(context.Background(), userID, agentID)
@@ -214,10 +304,19 @@ func TestV14AddsStateGenAndRecoverSeq(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.db.Exec(`DROP INDEX IF EXISTS idx_messages_journal`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.db.Exec(`ALTER TABLE agent_vms DROP COLUMN state_gen`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`ALTER TABLE approvals DROP COLUMN recover_seq`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`ALTER TABLE journal_entries DROP COLUMN placed`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`ALTER TABLE messages DROP COLUMN agent_vm_id`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`DELETE FROM schema_migrations WHERE version = 14`); err != nil {
@@ -230,8 +329,12 @@ func TestV14AddsStateGenAndRecoverSeq(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !columnExists(t, s, "agent_vms", "state_gen") || !columnExists(t, s, "approvals", "recover_seq") {
+	if !columnExists(t, s, "agent_vms", "state_gen") || !columnExists(t, s, "approvals", "recover_seq") || !columnExists(t, s, "journal_entries", "placed") || !columnExists(t, s, "messages", "agent_vm_id") {
 		t.Fatal("v14 columns missing after reopen")
+	}
+	cols, err := s.indexColumns("idx_messages_journal")
+	if err != nil || len(cols) != 3 || cols[2] != "agent_vm_id" {
+		t.Fatalf("journal index %v %v", cols, err)
 	}
 	var version int
 	if err := s.db.QueryRow(`SELECT version FROM schema_migrations WHERE version = 14`).Scan(&version); err != nil || version != 14 {
@@ -248,7 +351,7 @@ func TestV14AddsStateGenAndRecoverSeq(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !columnExists(t, s, "agent_vms", "state_gen") || !columnExists(t, s, "approvals", "recover_seq") {
+	if !columnExists(t, s, "agent_vms", "state_gen") || !columnExists(t, s, "approvals", "recover_seq") || !columnExists(t, s, "journal_entries", "placed") || !columnExists(t, s, "messages", "agent_vm_id") {
 		t.Fatal("second open dropped a column")
 	}
 	s.Close()
@@ -299,7 +402,7 @@ func TestV14BackupIfPresent(t *testing.T) {
 	if err := s.db.QueryRow(`PRAGMA integrity_check`).Scan(&check); err != nil || check != "ok" {
 		t.Fatalf("integrity %q %v", check, err)
 	}
-	if !columnExists(t, s, "agent_vms", "state_gen") || !columnExists(t, s, "approvals", "recover_seq") {
+	if !columnExists(t, s, "agent_vms", "state_gen") || !columnExists(t, s, "approvals", "recover_seq") || !columnExists(t, s, "journal_entries", "placed") || !columnExists(t, s, "messages", "agent_vm_id") {
 		t.Fatal("backup did not gain v14 columns")
 	}
 	if err := s.Close(); err != nil {

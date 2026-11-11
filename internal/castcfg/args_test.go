@@ -165,7 +165,7 @@ func TestScrubJSONValueSecrets(t *testing.T) {
 	if err := json.Unmarshal(clean, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["note"] != "Use a bearer token" {
+	if got["note"] != "Use a Bearer Hidden" {
 		t.Fatalf("prose %q", got["note"])
 	}
 	if got["header"] != "Bearer Hidden" {
@@ -174,7 +174,7 @@ func TestScrubJSONValueSecrets(t *testing.T) {
 	if got["basic"] != "Basic Hidden" {
 		t.Fatalf("basic %q", got["basic"])
 	}
-	if got["basic_prose"] != "Basic information" {
+	if got["basic_prose"] != "Basic Hidden" {
 		t.Fatalf("basic prose %q", got["basic_prose"])
 	}
 	if got["curl"] != "curl -u Hidden https://example.com/x" {
@@ -202,14 +202,15 @@ func TestScrubJSONValueSecrets(t *testing.T) {
 		t.Fatalf("ordinary values changed %q %q", got["count"], got["plain"])
 	}
 	want := map[string]bool{
-		"header": true, "basic": true, "curl": true, "curl_long": true,
-		"url": true, "query": true, "address": true, "export": true, "assign": true,
+		"note": true, "header": true, "basic": true, "basic_prose": true,
+		"curl": true, "curl_long": true, "url": true, "query": true,
+		"address": true, "export": true, "assign": true,
 	}
 	if len(redacted) != len(want) {
 		t.Fatalf("redacted %v", redacted)
 	}
 	for _, path := range redacted {
-		if path == "note" || path == "basic_prose" || path == "count" || path == "plain" {
+		if path == "count" || path == "plain" {
 			t.Fatalf("redacted ordinary field %s", path)
 		}
 		if !want[path] {
@@ -219,5 +220,78 @@ func TestScrubJSONValueSecrets(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing redacted %v", want)
+	}
+}
+
+func TestScrubJSONProbeSecrets(t *testing.T) {
+	cases := []struct{ name, val, planted string }{
+		{"bearer header", "Authorization: Bearer abcDEF1234567890xyz", "abcDEF1234567890xyz"},
+		{"bearer alpha-only 20", "Authorization: Bearer abcdefghijABCDEFGHIJ", "abcdefghijABCDEFGHIJ"},
+		{"bearer short 12", "Authorization: Bearer ab12cd34ef56", "ab12cd34ef56"},
+		{"github token scheme", "Authorization: token ghp_FAKE0123456789abcdefABCDEF", "ghp_FAKE0123456789abcdefABCDEF"},
+		{"x-api-key header", "curl -H 'X-Api-Key: sk-FAKE0123456789' https://x", "sk-FAKE0123456789"}, // gitleaks:allow
+		{"curl -u nospace", "curl -ualice:FAKEpw99 https://x", "FAKEpw99"},                            // gitleaks:allow
+		{"curl -u", "curl -u alice:FAKEpw99 https://x", "FAKEpw99"},                                   // gitleaks:allow
+		{"curl --user=", "curl --user=alice:FAKEpw99 https://x", "FAKEpw99"},                          // gitleaks:allow
+		{"url userinfo", "git clone https://alice:FAKEpw99@github.com/x", "FAKEpw99"},                 // gitleaks:allow
+		{"url token-as-user", "git clone https://ghp_FAKE0123456789abcdef@github.com/x", "ghp_FAKE0123456789abcdef"},
+		{"query token", "https://x/cb?token=FAKEtok99", "FAKEtok99"},
+		{"query client_secret", "https://x/oauth?client_id=a&client_secret=FAKEcs99", "FAKEcs99"},
+		{"query refresh_token", "https://x/oauth?refresh_token=FAKErt99", "FAKErt99"},
+		{"query apikey", "https://x/v1?apikey=FAKEak99", "FAKEak99"},
+		{"query sig", "https://bucket.s3/x?X-Amz-Signature=FAKEsig99", "FAKEsig99"},
+		{"form body client_secret", "curl -d 'grant_type=client_credentials&client_secret=FAKEcs99' https://x", "FAKEcs99"},
+		{"export", "export OPENAI_API_KEY=sk-FAKE0123456789", "sk-FAKE0123456789"},
+		{"assign", "GITHUB_TOKEN=ghp_FAKE0123 gh pr list", "ghp_FAKE0123"},
+		{"assign double-quoted spaces", `export DB_PASSWORD="FAKE pw99"`, "pw99"},
+		{"assign inside sh -c quote", `sh -c "API_KEY=FAKEak99 ./run"`, "FAKEak99"},
+		{"assign after &&", `cd x&&API_KEY=FAKEak99 ./run`, "FAKEak99"},
+		{"flag --api-key=", "tool --api-key=FAKEak99 run", "FAKEak99"},
+		{"flag --token sep", "tool --token FAKEtok99 run", "FAKEtok99"},
+		{"flag --password=", "mysql --password=FAKEpw99", "FAKEpw99"},
+		{"mysql -p", "mysql -uroot -pFAKEpw99", "FAKEpw99"},
+		{"json-in-string", `{"api_key": "FAKEak99"}`, "FAKEak99"},
+		{"yaml-ish", "password: FAKEpw99", "FAKEpw99"},
+		{"lowercase assign", "api_key=FAKEak99", "FAKEak99"},
+		{"newline export", "echo hi\nexport SECRET_TOKEN=FAKEst99", "FAKEst99"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			obj, err := json.Marshal(map[string]string{"command": c.val})
+			if err != nil {
+				t.Fatal(err)
+			}
+			clean, _, err := ScrubJSON(obj)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(clean), c.planted) {
+				t.Fatalf("leaked %s in %s", c.planted, clean)
+			}
+		})
+	}
+	arrays := []struct {
+		name    string
+		argv    []string
+		planted string
+	}{
+		{"argv curl -u", []string{"curl", "-u", "alice:FAKEpw99", "https://x"}, "FAKEpw99"}, // gitleaks:allow
+		{"argv --token", []string{"tool", "--token", "FAKEtok99"}, "FAKEtok99"},
+		{"argv bearer header", []string{"curl", "-H", "Authorization: Bearer abcDEF1234567890xyz"}, "abcDEF1234567890xyz"},
+	}
+	for _, c := range arrays {
+		t.Run(c.name, func(t *testing.T) {
+			obj, err := json.Marshal(map[string]any{"argv": c.argv})
+			if err != nil {
+				t.Fatal(err)
+			}
+			clean, _, err := ScrubJSON(obj)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(clean), c.planted) {
+				t.Fatalf("leaked %s in %s", c.planted, clean)
+			}
+		})
 	}
 }

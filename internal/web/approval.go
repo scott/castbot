@@ -289,6 +289,23 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 					return err
 				}
 			}
+			// The pre-post pull cannot see a row castlet writes while forwarding.
+			// Pull once more. If that row exists, castlet received the decision
+			// and the tool may already have run, so the run stays as it is.
+			if err := s.pullJournalBestEffort(ctx, user.ID, runRow.AgentID); err != nil {
+				return err
+			}
+			_, found, err := s.store.JournalDecision(ctx, row.UserID, runRow.AgentID, row.RequestID)
+			if err != nil {
+				return err
+			}
+			if found {
+				if _, err := s.store.MarkInactive(ctx, row.UserID, row.ID, "user", row.DecidedBy); err != nil {
+					return err
+				}
+				s.runs.Hub.Notify(row.RunID)
+				return nil
+			}
 			return s.settleLostClaim(ctx, user, runRow, row, false)
 		}
 		if postErr != nil {

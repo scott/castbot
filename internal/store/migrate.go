@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS messages (
   run_id TEXT,
   origin TEXT NOT NULL DEFAULT 'web',
   journal_seq INTEGER,
+  agent_vm_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 
@@ -298,6 +299,7 @@ CREATE TABLE IF NOT EXISTS journal_entries (
   at TEXT NOT NULL,
   message_id TEXT NOT NULL DEFAULT '',
   stream_id TEXT NOT NULL DEFAULT '',
+  placed INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (agent_vm_id, seq)
 );
 
@@ -448,9 +450,11 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	return nil
 }
 
-// migrateV14 adds the machine state generation and the approval journal
-// snapshot. vm_replacements and agent token revoke stay out of this
-// version. Those belong to Replace machine.
+// migrateV14 adds the machine state generation, the approval journal
+// snapshot, and the journal placement mark. A message also records which
+// machine journal it came from, so a new machine can reuse sequence numbers.
+// vm_replacements and agent token revoke stay out of this version. Those
+// belong to Replace machine.
 func (s *Store) migrateV14() error {
 	if err := s.ensureColumn("agent_vms", "state_gen", `ALTER TABLE agent_vms ADD COLUMN state_gen INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
@@ -458,7 +462,41 @@ func (s *Store) migrateV14() error {
 	if err := s.ensureColumn("approvals", "recover_seq", `ALTER TABLE approvals ADD COLUMN recover_seq INTEGER`); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (14) ON CONFLICT(version) DO NOTHING`)
+	missingPlaced, err := s.columnMissing("journal_entries", "placed")
+	if err != nil {
+		return err
+	}
+	if err := s.ensureColumn("journal_entries", "placed", `ALTER TABLE journal_entries ADD COLUMN placed INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("messages", "agent_vm_id", `ALTER TABLE messages ADD COLUMN agent_vm_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if missingPlaced {
+		// Decisions already filed on this agent's threads are not filed again.
+		// The match is the agent, not the user: two agents share sequence numbers.
+		if _, err := s.db.Exec(`UPDATE journal_entries SET placed = 1
+WHERE EXISTS (
+  SELECT 1 FROM messages m
+  JOIN threads t ON t.id = m.thread_id AND t.user_id = m.user_id AND t.agent_id = journal_entries.agent_id
+  WHERE m.user_id = journal_entries.user_id AND m.journal_seq = journal_entries.seq
+)`); err != nil {
+			return err
+		}
+	}
+	cols, err := s.indexColumns("idx_messages_journal")
+	if err != nil {
+		return err
+	}
+	if len(cols) != 3 || cols[0] != "thread_id" || cols[1] != "journal_seq" || cols[2] != "agent_vm_id" {
+		if _, err := s.db.Exec(`DROP INDEX IF EXISTS idx_messages_journal`); err != nil {
+			return err
+		}
+		if _, err := s.db.Exec(`CREATE UNIQUE INDEX idx_messages_journal ON messages(thread_id, journal_seq, agent_vm_id) WHERE journal_seq IS NOT NULL`); err != nil {
+			return err
+		}
+	}
+	_, err = s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (14) ON CONFLICT(version) DO NOTHING`)
 	return err
 }
 

@@ -409,7 +409,7 @@ func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmK
 		if err != nil {
 			return err
 		}
-		if err := s.insertJournalMessage(ctx, tx, agent, th, e, body, "cli"); err != nil {
+		if err := s.insertJournalMessage(ctx, tx, agent, vmKey, th, e, body, "cli"); err != nil {
 			return err
 		}
 		if e.Kind == "reply" {
@@ -439,7 +439,7 @@ func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmK
 	if (e.Kind == "permission" || e.Kind == "decision") && th.Kind != "cli" {
 		return nil
 	}
-	return s.insertJournalMessage(ctx, tx, agent, th, e, body, "web")
+	return s.insertJournalMessage(ctx, tx, agent, vmKey, th, e, body, "web")
 }
 
 // backfillDecisionTool copies a permission's tool onto an earlier decision
@@ -492,16 +492,20 @@ func (s *Store) backfillDecisionTool(ctx context.Context, tx *sql.Tx, agent Agen
 			return err
 		}
 		var msgID, threadID string
-		err := tx.QueryRowContext(ctx, `SELECT id, thread_id FROM messages WHERE user_id = ? AND journal_seq = ? AND author_kind = 'system' ORDER BY rowid LIMIT 1`, agent.UserID, row.seq).Scan(&msgID, &threadID)
+		err := tx.QueryRowContext(ctx, `SELECT m.id, m.thread_id FROM messages m
+JOIN threads t ON t.id = m.thread_id AND t.user_id = m.user_id AND t.agent_id = ?
+WHERE m.user_id = ? AND m.journal_seq = ? AND m.author_kind = 'system'
+AND (m.agent_vm_id = ? OR m.agent_vm_id = '')
+ORDER BY CASE WHEN m.agent_vm_id = ? THEN 0 ELSE 1 END, m.rowid LIMIT 1`, agent.ID, agent.UserID, row.seq, vmKey, vmKey).Scan(&msgID, &threadID)
 		if err == sql.ErrNoRows {
 			if th.ID == "" {
 				continue
 			}
 			placed := JournalEntry{Seq: row.seq, Kind: "decision", Tool: e.Tool, Decision: row.decision, At: follow}
-			if err := s.insertJournalMessage(ctx, tx, agent, th, placed, body, "cli"); err != nil {
+			if err := s.insertJournalMessage(ctx, tx, agent, vmKey, th, placed, body, "cli"); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE messages SET created_at = ? WHERE user_id = ? AND thread_id = ? AND journal_seq = ?`, follow, agent.UserID, th.ID, row.seq); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET created_at = ? WHERE user_id = ? AND thread_id = ? AND journal_seq = ? AND agent_vm_id = ?`, follow, agent.UserID, th.ID, row.seq, vmKey); err != nil {
 				return err
 			}
 			continue
@@ -544,7 +548,7 @@ func (s *Store) attachJournalMessage(ctx context.Context, tx *sql.Tx, agent Agen
 	return false, nil
 }
 
-func (s *Store) insertJournalMessage(ctx context.Context, tx *sql.Tx, agent Agent, th Thread, e JournalEntry, body, origin string) error {
+func (s *Store) insertJournalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmKey string, th Thread, e JournalEntry, body, origin string) error {
 	author := "system"
 	switch e.Kind {
 	case "request":
@@ -556,11 +560,13 @@ func (s *Store) insertJournalMessage(ctx context.Context, tx *sql.Tx, agent Agen
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, origin, journal_seq, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, agent.WorkspaceID, agent.UserID, th.ID, author, agent.ID, body, origin, e.Seq, entryStamp(s, e.At))
-	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
-		return nil
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, origin, journal_seq, agent_vm_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, agent.WorkspaceID, agent.UserID, th.ID, author, agent.ID, body, origin, e.Seq, vmKey, entryStamp(s, e.At))
+	if err != nil && !strings.Contains(err.Error(), "UNIQUE") {
+		return err
 	}
+	// placed is per machine journal row. A later machine reuses sequence numbers.
+	_, err = tx.ExecContext(ctx, `UPDATE journal_entries SET placed = 1 WHERE agent_vm_id = ? AND seq = ? AND user_id = ?`, vmKey, e.Seq, agent.UserID)
 	return err
 }
 
@@ -635,8 +641,7 @@ func (s *Store) placeOrphanDecisions(ctx context.Context, tx *sql.Tx, agent Agen
 		return nil
 	}
 	found, err := orphanDecisions(ctx, tx, `SELECT seq, tool, decision, at FROM journal_entries
-WHERE agent_vm_id = ? AND user_id = ? AND kind = 'decision' AND caller = ? AND seq < ?
-AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.user_id = journal_entries.user_id AND m.journal_seq = journal_entries.seq)
+WHERE agent_vm_id = ? AND user_id = ? AND kind = 'decision' AND caller = ? AND seq < ? AND placed = 0
 ORDER BY seq`, vmKey, agent.UserID, caller, beforeSeq)
 	if err != nil || len(found) == 0 {
 		return err
@@ -648,7 +653,7 @@ ORDER BY seq`, vmKey, agent.UserID, caller, beforeSeq)
 	for _, row := range found {
 		body := journalBody(JournalEntry{Kind: "decision", Tool: row.tool, Decision: row.decision})
 		placed := JournalEntry{Seq: row.seq, Kind: "decision", Tool: row.tool, Decision: row.decision, At: row.at}
-		if err := s.insertJournalMessage(ctx, tx, agent, th, placed, body, "cli"); err != nil {
+		if err := s.insertJournalMessage(ctx, tx, agent, vmKey, th, placed, body, "cli"); err != nil {
 			return err
 		}
 	}
@@ -685,21 +690,21 @@ func orphanDecisions(ctx context.Context, q interface {
 // five minutes after they were journaled. The sweep is the control plane.
 func (s *Store) SweepOrphanCLIDecisions(ctx context.Context) (int, error) {
 	cutoff := s.stamp(s.Now().Add(-orphanDecisionWait))
-	rows, err := s.db.QueryContext(ctx, `SELECT workspace_id, user_id, agent_id, seq, tool, decision, at FROM journal_entries
-WHERE kind = 'decision' AND caller LIKE 'cli:%' AND at <= ?
-AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.user_id = journal_entries.user_id AND m.journal_seq = journal_entries.seq)
+	rows, err := s.db.QueryContext(ctx, `SELECT agent_vm_id, workspace_id, user_id, agent_id, seq, tool, decision, at FROM journal_entries
+WHERE kind = 'decision' AND caller LIKE 'cli:%' AND at <= ? AND placed = 0
 ORDER BY user_id, agent_id, seq`, cutoff)
 	if err != nil {
 		return 0, err
 	}
 	type item struct {
 		agent Agent
+		vmKey string
 		row   orphanDecision
 	}
 	var pending []item
 	for rows.Next() {
 		var it item
-		if err := rows.Scan(&it.agent.WorkspaceID, &it.agent.UserID, &it.agent.ID, &it.row.seq, &it.row.tool, &it.row.decision, &it.row.at); err != nil {
+		if err := rows.Scan(&it.vmKey, &it.agent.WorkspaceID, &it.agent.UserID, &it.agent.ID, &it.row.seq, &it.row.tool, &it.row.decision, &it.row.at); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -732,7 +737,7 @@ ORDER BY user_id, agent_id, seq`, cutoff)
 		}
 		body := journalBody(JournalEntry{Kind: "decision", Tool: it.row.tool, Decision: it.row.decision})
 		placed := JournalEntry{Seq: it.row.seq, Kind: "decision", Tool: it.row.tool, Decision: it.row.decision, At: it.row.at}
-		if err := s.insertJournalMessage(ctx, tx, it.agent, th, placed, body, "cli"); err != nil {
+		if err := s.insertJournalMessage(ctx, tx, it.agent, it.vmKey, th, placed, body, "cli"); err != nil {
 			return 0, err
 		}
 		n++
