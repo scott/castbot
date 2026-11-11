@@ -1,10 +1,12 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -275,7 +277,7 @@ func TestCLIApprovalIsReadOnly(t *testing.T) {
 	agent := makeAgent(t, h.st, user.ID, "Atlas")
 	if _, err := h.st.IngestJournal(context.Background(), user.ID, agent.ID, []store.JournalEntry{
 		{Seq: 1, At: "2026-11-10T18:00:00Z", SessionID: "sess-s07b", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "request", Text: "from the cli"},
-		{Seq: 2, At: "2026-11-10T18:00:01Z", SessionID: "sess-s07b", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "decision", RequestID: "req-s07b", Decision: "approved"},
+		{Seq: 2, At: "2026-11-10T18:00:01Z", SessionID: "", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "decision", RequestID: "req-s07b", Decision: "approved"},
 		{Seq: 3, At: "2026-11-10T18:00:02Z", SessionID: "sess-s07b", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "permission", Tool: "bash", RequestID: "req-s07b"},
 	}); err != nil {
 		t.Fatal(err)
@@ -562,9 +564,27 @@ func TestCanceledClickStillDecides(t *testing.T) {
 		if calls := ask.Calls(); len(calls) != 1 || !calls[0] {
 			t.Fatalf("calls %#v", calls)
 		}
-		row, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
-		if err != nil || row.Status != "approved" || !row.Sent {
-			t.Fatalf("row %#v %v", row, err)
+		// Sent and the audit row are written after the respond call returns.
+		deadline = time.Now().Add(3 * time.Second)
+		var row store.Approval
+		for {
+			row, err = h.st.GetApproval(context.Background(), user.ID, ap.ID)
+			audits, aerr := h.st.ListAudit(context.Background(), user.ID)
+			n := 0
+			if aerr == nil {
+				for _, a := range audits {
+					if a.Action == "approval.approved" {
+						n++
+					}
+				}
+			}
+			if err == nil && aerr == nil && row.Status == "approved" && row.Sent && n == 1 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("row %#v audits %d err %v %v", row, n, err, aerr)
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
 		assertAudit(t, h, user.ID, "approval.approved", "user", user.ID, 1)
 		runRow, err := h.st.GetRun(context.Background(), user.ID, ap.RunID)
@@ -645,10 +665,10 @@ func TestWebJournalDoesNotDuplicateCard(t *testing.T) {
 func TestSecretArgNamesStayHidden(t *testing.T) {
 	secrets := map[string]string{
 		"privateKey": "pk-demo", "accessKey": "ak-demo", "sessionKey": "sk-demo",
-		"cookie": "ck-demo", "passphrase": "pp-demo", "auth": "au-demo",
+		"cookie": "ck-demo", "passphrase": "pp-demo", "pwd": "pd-demo",
 		"note": "Bearer demo-token",
 	}
-	args := map[string]any{"command": "ls demo", "visible": "keep-me"}
+	args := map[string]any{"command": "ls demo", "visible": "keep-me", "session": "work", "tokens": 512, "publicKey": "ssh-ed25519 AAAA demo", "auth": "au-demo"}
 	for k, v := range secrets {
 		args[k] = v
 	}
@@ -687,6 +707,11 @@ func TestSecretArgNamesStayHidden(t *testing.T) {
 		}
 		if !strings.Contains(body, "keep-me") && name != "audit" {
 			t.Fatalf("%s dropped a plain value %s", name, body)
+		}
+	}
+	for _, plain := range []string{"work", "512", "ssh-ed25519 AAAA demo", "au-demo", "Bearer Hidden"} {
+		if !strings.Contains(card, plain) {
+			t.Fatalf("card hid %s: %s", plain, card)
 		}
 	}
 }
@@ -866,6 +891,122 @@ func TestApprovalSurvivesCutProxy(t *testing.T) {
 	}
 }
 
+func TestDecisionStreamCarriesChrome(t *testing.T) {
+	h, _, user, agent, ip := newAsk(t, nil, nil)
+	live := httptest.NewServer(h.srv.Handler())
+	t.Cleanup(live.Close)
+	sendPrompt(t, h, agent, ip, "go")
+	ap := waitPending(t, h, user.ID)
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		postDecision(h, ap, ip, true)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	events, err := readSSE(ctx, live.URL+"/runs/"+ap.RunID+"/events", h.cookieList(), "", func(batch []sseEvent) bool {
+		for _, ev := range batch {
+			if ev.Event == "done" && strings.Contains(ev.Data, `id="pending-bar"`) && strings.Contains(ev.Data, "hidden") {
+				return true
+			}
+		}
+		return false
+	})
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saw bool
+	for _, ev := range events {
+		if ev.Event == "done" && strings.Contains(ev.Data, `id="nav-approvals"`) && strings.Contains(ev.Data, "hidden") {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("done event missing chrome %#v", events)
+	}
+	_ = user
+}
+
+func TestRecoveryDoesNotApproveAFailedRun(t *testing.T) {
+	h, ask, user, _, ip := newAsk(t, nil, nil)
+	sendPrompt(t, h, mustAgent(t, h, user.ID), ip, "go")
+	ap := waitPending(t, h, user.ID)
+	if _, claimed, err := h.st.ClaimDecision(context.Background(), user.ID, ap.ID, ap.RunID, "approved", user.ID); err != nil || !claimed {
+		t.Fatal(err)
+	}
+	if err := h.st.FailAbandoned(context.Background(), "The reply was interrupted."); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.recoverDecisions(context.Background(), 0)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && len(ask.Calls()) == 0 {
+		h.srv.recoverDecisions(context.Background(), 0)
+		time.Sleep(20 * time.Millisecond)
+	}
+	if calls := ask.Calls(); len(calls) != 1 || calls[0] {
+		t.Fatalf("deny %#v", calls)
+	}
+	row, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+	if err != nil || row.Status != "inactive" || !row.Sent {
+		t.Fatalf("row %#v %v", row, err)
+	}
+	assertAudit(t, h, user.ID, "approval.approved", "", "", 0)
+	assertAudit(t, h, user.ID, "approval.inactive", "user", user.ID, 1)
+}
+
+func TestRecoveryLostRequestStaysInactive(t *testing.T) {
+	ask := runtime.NewAsk(runtime.AskOptions{Tool: "bash", Args: map[string]any{"command": "ls demo"}})
+	up := httptest.NewServer(&loseAsk{ask: ask})
+	t.Cleanup(up.Close)
+	h := newHarnessWith(t, runtime.NewHTTP(up.URL))
+	ip := "203.0.113.146:9"
+	user, secret := h.account("lost-s07b@example.com", "Demo User", "correct-horse-1")
+	h.login("lost-s07b@example.com", "correct-horse-1", secret, ip, false)
+	agent := h.newAgent(ip, "Atlas")
+	sendPrompt(t, h, agent, ip, "go")
+	ap := waitPending(t, h, user.ID)
+	if _, claimed, err := h.st.ClaimDecision(context.Background(), user.ID, ap.ID, ap.RunID, "approved", user.ID); err != nil || !claimed {
+		t.Fatal(err)
+	}
+	h.srv.recoverDecisions(context.Background(), 0)
+	row, err := h.st.GetApproval(context.Background(), user.ID, ap.ID)
+	if err != nil || row.Status != "inactive" {
+		t.Fatalf("row %#v %v", row, err)
+	}
+	assertAudit(t, h, user.ID, "approval.approved", "", "", 0)
+	assertAudit(t, h, user.ID, "approval.inactive", "user", user.ID, 1)
+	if len(ask.Calls()) != 0 {
+		t.Fatalf("calls %#v", ask.Calls())
+	}
+}
+
+func TestGuestRestartDeferralIsLogged(t *testing.T) {
+	h := newHarness(t)
+	var buf bytes.Buffer
+	h.srv.SetLogger(slog.New(slog.NewTextHandler(&buf, nil)))
+	user, _ := h.account("defer-log-s07b@example.com", "Demo User", "correct-horse-1")
+	agent := makeAgent(t, h.st, user.ID, "Atlas")
+	secret := "demo-secret-value-should-not-log"
+	sec, err := h.st.PutSecret(context.Background(), user.ID, "provider", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.GrantSecret(context.Background(), user.ID, agent.ID, sec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SetSecretFP(context.Background(), user.ID, agent.ID, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.noteGuestDefer(context.Background(), user.ID, agent.ID, "pending approval")
+	h.srv.noteGuestDefer(context.Background(), user.ID, agent.ID, "bound:pending approval")
+	text := buf.String()
+	if strings.Contains(text, secret) || strings.Contains(text, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+		t.Fatalf("log leaked a secret or a full fingerprint %s", text)
+	}
+	if !strings.Contains(text, "guest_restart_deferred") || !strings.Contains(text, "pending approval") || !strings.Contains(text, "old_fp=aaaaaaaa") || !strings.Contains(text, "guest_restart_forced") {
+		t.Fatalf("log %s", text)
+	}
+}
+
 type slowAsk struct {
 	ask   *runtime.Ask
 	delay time.Duration
@@ -878,6 +1019,21 @@ func (s *slowAsk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(s.delay)
 	}
 	s.ask.ServeHTTP(w, r)
+}
+
+type loseAsk struct {
+	ask *runtime.Ask
+}
+
+func (l *loseAsk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	if strings.Contains(string(body), "permission/respond") {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":"1","error":{"code":-32602,"message":"No pending permission request"}}`)
+		return
+	}
+	r.Body = io.NopCloser(strings.NewReader(string(body)))
+	l.ask.ServeHTTP(w, r)
 }
 
 type failAsk struct {

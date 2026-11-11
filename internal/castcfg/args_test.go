@@ -31,16 +31,76 @@ func TestScrubJSONDropsCamelCaseAndBearer(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(clean)
-	for _, secret := range []string{"pk-demo", "ak-demo", "sk-demo", "ck-demo", "pp-demo", "au-demo", "pw-demo", "pd-demo", "demo-token"} {
+	for _, secret := range []string{"pk-demo", "ak-demo", "sk-demo", "ck-demo", "pp-demo", "pd-demo", "demo-token"} {
 		if strings.Contains(text, secret) {
 			t.Fatalf("secret %s survived in %s", secret, text)
 		}
 	}
-	if !strings.Contains(text, `"command":"ls"`) || !strings.Contains(text, `"max_tokens":4`) || !strings.Contains(text, `"visible":"keep-me"`) {
-		t.Fatalf("kept %s", text)
+	for _, kept := range []string{`"command":"ls"`, `"max_tokens":4`, `"visible":"keep-me"`, `"auth":"au-demo"`, `"pass":"pw-demo"`, `"note":"Bearer Hidden"`} {
+		if !strings.Contains(text, kept) {
+			t.Fatalf("missing %s in %s", kept, text)
+		}
 	}
-	if strings.Join(redacted, ",") != "privateKey,accessKey,sessionKey,cookie,passphrase,auth,pass,pwd,note" {
+	if strings.Join(redacted, ",") != "privateKey,accessKey,sessionKey,cookie,passphrase,pwd" {
 		t.Fatalf("redacted %#v", redacted)
+	}
+}
+
+func TestScrubJSONOrdinaryNamesStay(t *testing.T) {
+	ordinary := []string{"command", "path", "content", "url", "query", "description", "timeout", "cwd", "session", "sessionId", "sessionName", "pass", "auth", "author", "keyboard", "key", "keys", "monkey", "objectKey", "primaryKey", "partitionKey", "cacheKey", "publicKey", "ssh_public_key", "hostKey", "sortKey", "idempotencyKey", "tokens", "tokenizer", "num_tokens", "maxTokens", "max_tokens", "token_count", "secretary", "passage", "bypass", "cookieName", "environment", "authorName", "file_path", "old_string", "new_string", "pattern", "glob"}
+	hidden := []string{"env", "headers"}
+	var buf strings.Builder
+	buf.WriteByte('{')
+	for i, key := range append(append([]string{}, ordinary...), hidden...) {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		b, _ := json.Marshal(key)
+		buf.Write(b)
+		buf.WriteString(`:"v-`)
+		buf.WriteString(key)
+		buf.WriteByte('"')
+	}
+	buf.WriteByte('}')
+	clean, redacted, err := ScrubJSON(json.RawMessage(buf.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(clean)
+	for _, key := range ordinary {
+		quoted, _ := json.Marshal(key)
+		if !strings.Contains(text, string(quoted)+`:"v-`+key+`"`) {
+			t.Fatalf("hid %s in %s redacted %v", key, text, redacted)
+		}
+	}
+	for _, key := range hidden {
+		quoted, _ := json.Marshal(key)
+		if strings.Contains(text, string(quoted)+":") {
+			t.Fatalf("showed %s in %s", key, text)
+		}
+	}
+	if strings.Join(redacted, ",") != "env,headers" {
+		t.Fatalf("redacted %#v", redacted)
+	}
+}
+
+func TestScrubJSONBearerInsideStrings(t *testing.T) {
+	cases := []struct {
+		in, secret, kept string
+	}{
+		{`{"command":"echo 'Bearer sk-live-1' done"}`, "sk-live-1", "echo 'Bearer Hidden' done"},
+		{`{"args":["-H","Bearer sk-live-2"]}`, "sk-live-2", `"Bearer Hidden"`},
+		{`{"note":"bearer sk-live-3"}`, "sk-live-3", `"Bearer Hidden"`},
+		{`{"nested":{"cmd":["ok","Bearer sk-live-4"]}}`, "sk-live-4", `"ok"`},
+	}
+	for _, tc := range cases {
+		clean, _, err := ScrubJSON(json.RawMessage(tc.in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(clean), tc.secret) || !strings.Contains(string(clean), tc.kept) {
+			t.Fatalf("in %s got %s", tc.in, clean)
+		}
 	}
 }
 

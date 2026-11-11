@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 )
 
@@ -34,27 +35,43 @@ func scrubJSON(raw json.RawMessage, path string, redacted *[]string) (json.RawMe
 	case '[':
 		return scrubArray(raw, path, redacted)
 	default:
-		if !json.Valid(raw) {
-			return nil, errBadJSON
-		}
-		return raw, nil
+		return scrubScalar(raw)
 	}
 }
 
 var errBadJSON = errors.New("bad json")
 
-// bearerValue reports a string that starts with "Bearer ".
-// Those arguments are treated as secrets even when the key is ordinary.
-func bearerValue(raw json.RawMessage) bool {
+var bearerToken = regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]+`)
+
+// scrubBearer replaces bearer tokens inside a string and keeps the rest.
+func scrubBearer(s string) (string, bool) {
+	if !bearerToken.MatchString(s) {
+		return s, false
+	}
+	return bearerToken.ReplaceAllString(s, "Bearer Hidden"), true
+}
+
+func scrubScalar(raw json.RawMessage) (json.RawMessage, error) {
 	raw = bytes.TrimSpace(raw)
+	if !json.Valid(raw) {
+		return nil, errBadJSON
+	}
 	if len(raw) < 2 || raw[0] != '"' {
-		return false
+		return raw, nil
 	}
 	var s string
-	if json.Unmarshal(raw, &s) != nil {
-		return false
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, err
 	}
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "bearer ")
+	cleaned, ok := scrubBearer(s)
+	if !ok {
+		return raw, nil
+	}
+	b, err := json.Marshal(cleaned)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 func scrubObject(raw json.RawMessage, path string, redacted *[]string) (json.RawMessage, error) {
@@ -86,7 +103,7 @@ func scrubObject(raw json.RawMessage, path string, redacted *[]string) (json.Raw
 		if path != "" {
 			child = path + "." + key
 		}
-		if SecretKey(key) || bearerValue(val) {
+		if SecretKey(key) {
 			*redacted = append(*redacted, child)
 			continue
 		}

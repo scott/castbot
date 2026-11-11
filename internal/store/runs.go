@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 )
 
 // Run is one agent reply. UserID is the owner.
@@ -464,49 +465,84 @@ func (s *Store) abandonApprovals(ctx context.Context, tx *sql.Tx, userID, runID,
 	return nil
 }
 
+// DeferRestartLimit is how long a bundle or secret reload will wait for an
+// open run or a pending web approval. Past that, the restart proceeds so
+// two threads cannot hold a key rotation or a bundle update open.
+const DeferRestartLimit = 15 * time.Minute
+
 // DeferGuestRestart reports that a bundle or secret reload should wait.
 // A pending web approval, another open run, or a resume of runID would
 // restart the guest and drop the prompt. A brand new run with no offset
 // does not defer, so the next message can apply the change first.
-func (s *Store) DeferGuestRestart(ctx context.Context, userID, agentID, runID string) (bool, error) {
+// reason is why it is waiting, or "bound:" plus that reason when the wait
+// has passed DeferRestartLimit and the restart should proceed.
+func (s *Store) DeferGuestRestart(ctx context.Context, userID, agentID, runID string) (bool, string, error) {
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
-		return false, err
+		return false, "", err
 	}
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id WHERE a.user_id = ? AND r.agent_id = ? AND a.status = 'pending' AND a.origin = 'web'`, userID, agentID).Scan(&n); err != nil {
-		return false, err
+	reason, oldest, err := s.deferReason(ctx, userID, agentID, runID)
+	if err != nil || reason == "" {
+		return false, "", err
 	}
-	if n > 0 {
-		return true, nil
+	if !oldest.IsZero() && !s.Now().Before(oldest.Add(DeferRestartLimit)) {
+		return false, "bound:" + reason, nil
 	}
-	q := `SELECT COUNT(*) FROM runs WHERE user_id = ? AND agent_id = ? AND status IN ('streaming', 'waiting_approval')`
+	return true, reason, nil
+}
+
+func (s *Store) deferReason(ctx context.Context, userID, agentID, runID string) (string, time.Time, error) {
+	var reason string
+	var oldest time.Time
+	consider := func(why, stamp string) error {
+		if stamp == "" {
+			return nil
+		}
+		t, err := parseTime(stamp)
+		if err != nil {
+			return err
+		}
+		if reason == "" {
+			reason = why
+		}
+		if oldest.IsZero() || t.Before(oldest) {
+			oldest = t
+		}
+		return nil
+	}
+	var created string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MIN(a.created_at), '') FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id WHERE a.user_id = ? AND r.agent_id = ? AND a.status = 'pending' AND a.origin = 'web'`, userID, agentID).Scan(&created); err != nil {
+		return "", time.Time{}, err
+	}
+	if err := consider("pending approval", created); err != nil {
+		return "", time.Time{}, err
+	}
+	q := `SELECT COALESCE(MIN(started_at), '') FROM runs WHERE user_id = ? AND agent_id = ? AND status IN ('streaming', 'waiting_approval')`
 	args := []any{userID, agentID}
 	if runID != "" {
 		q += ` AND id != ?`
 		args = append(args, runID)
 	}
-	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
-		return false, err
+	var started string
+	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&started); err != nil {
+		return "", time.Time{}, err
 	}
-	if n > 0 {
-		return true, nil
+	if err := consider("another run is open", started); err != nil {
+		return "", time.Time{}, err
 	}
-	if runID == "" {
-		return false, nil
+	if runID != "" {
+		var status, runStarted string
+		var offset int
+		err := s.db.QueryRowContext(ctx, `SELECT status, stream_offset, started_at FROM runs WHERE id = ? AND user_id = ?`, runID, userID).Scan(&status, &offset, &runStarted)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", time.Time{}, err
+		}
+		if err == nil && (status == "waiting_approval" || offset > 0) {
+			if err := consider("this run has already started", runStarted); err != nil {
+				return "", time.Time{}, err
+			}
+		}
 	}
-	var status string
-	var offset int
-	err := s.db.QueryRowContext(ctx, `SELECT status, stream_offset FROM runs WHERE id = ? AND user_id = ?`, runID, userID).Scan(&status, &offset)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if status == "waiting_approval" || offset > 0 {
-		return true, nil
-	}
-	return false, nil
+	return reason, oldest, nil
 }
 
 // SetMessageRun links one of the caller's messages to a run they own.

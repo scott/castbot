@@ -432,27 +432,51 @@ func SecretKey(key string) bool { return secretKey(key) }
 
 func secretKey(key string) bool {
 	k := normalizeSecretKey(key)
+	if publicOrCountKey(k) {
+		return false
+	}
+	switch k {
+	case "env", "headers", "token", "secret", "password", "api_key", "apikey",
+		"access_token", "refresh_token", "authorization", "private_key",
+		"client_secret", "credentials", "auth_token", "secret_key",
+		"cookie", "passphrase", "pwd", "access_key", "session_key":
+		return true
+	}
+	parts := strings.Split(k, "_")
+	for i, p := range parts {
+		switch p {
+		case "token", "tokens", "secret", "password", "passwd", "passphrase", "credential", "credentials":
+			return true
+		}
+		if i+1 < len(parts) {
+			switch parts[i] + "_" + parts[i+1] {
+			case "api_key", "private_key", "secret_key", "access_key", "session_key", "client_secret":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// publicOrCountKey keeps ordinary names that only look like secrets.
+// A public key and a token count stay visible. Matching is by whole segment.
+func publicOrCountKey(k string) bool {
 	switch k {
 	case "max_tokens", "max_output_tokens", "max_input_tokens",
 		"max_completion_tokens", "max_new_tokens",
 		"prompt_tokens", "completion_tokens", "input_tokens", "output_tokens",
-		"total_tokens", "sort_key":
-		return false
-	case "env", "headers", "token", "secret", "password", "api_key", "apikey",
-		"access_token", "refresh_token", "authorization", "private_key",
-		"client_secret", "credentials", "auth_token", "secret_key",
-		"cookie", "passphrase", "auth", "session", "pass", "pwd":
+		"total_tokens", "sort_key", "tokens", "tokenizer":
 		return true
-	default:
-		if strings.Contains(k, "token") || strings.Contains(k, "secret") ||
-			strings.Contains(k, "password") || strings.Contains(k, "passwd") ||
-			strings.Contains(k, "passphrase") || strings.Contains(k, "cookie") ||
-			strings.Contains(k, "api_key") || strings.Contains(k, "apikey") ||
-			strings.Contains(k, "credential") || strings.HasSuffix(k, "_key") {
+	}
+	if strings.HasPrefix(k, "num_") || strings.HasPrefix(k, "max_") {
+		return true
+	}
+	for _, p := range strings.Split(k, "_") {
+		if p == "public" || p == "count" {
 			return true
 		}
-		return false
 	}
+	return false
 }
 
 // normalizeSecretKey folds camelCase and dashes so privateKey matches private_key.

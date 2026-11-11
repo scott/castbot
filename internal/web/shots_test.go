@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -169,6 +170,82 @@ func TestShots(t *testing.T) {
 			}
 		}
 	}
+	for _, vp := range []struct {
+		w, h int
+		name string
+	}{{1280, 800, "1280"}, {390, 844, "390"}} {
+		vp := vp
+		t.Run("s07b-bar-"+vp.name, func(t *testing.T) {
+			shootDecisionBar(t, browserCtx, vp.w, vp.h, 12)
+		})
+	}
+}
+
+// shootDecisionBar clicks Approve on a live card and checks the waiting bar
+// and the nav badges clear. The stream can swap the card before the click
+// response lands, so the bar has to ride the stream event.
+func shootDecisionBar(t *testing.T, browser context.Context, width, height, n int) {
+	t.Helper()
+	stale := 0
+	for i := 0; i < n; i++ {
+		h := newHarness(t)
+		ask := runtime.NewAsk(runtime.AskOptions{Tool: "bash", Args: map[string]any{"command": "ls demo"}})
+		up := httptest.NewServer(ask)
+		t.Cleanup(up.Close)
+		h.srv.SetClient(runtime.NewHTTP(up.URL))
+		email := "bar-" + strconv.Itoa(width) + "-" + strconv.Itoa(i) + "@example.com"
+		user, secret := h.account(email, "Demo User", "correct-horse-1")
+		ip := "203.0.113.70:9"
+		h.login(email, "correct-horse-1", secret, ip, false)
+		agent := h.newAgent(ip, "Atlas")
+		sendPrompt(t, h, agent, ip, "go")
+		ap := waitPending(t, h, user.ID)
+		ts := httptest.NewTLSServer(h.srv.Handler())
+		t.Cleanup(ts.Close)
+		token := sessionToken(t, h, user.ID)
+		sel := "#appr-" + ap.ID + " button.pri"
+		ctx := tab(t, browser)
+		if err := chromedp.Run(ctx, cliOpen(ts.URL, token, ts.URL+"/agents/"+agent.ID, width, height)...); err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		if err := chromedp.Run(ctx, chromedp.WaitVisible(sel, chromedp.ByQuery)); err != nil {
+			var url, text string
+			_ = chromedp.Run(ctx, chromedp.Location(&url), chromedp.Evaluate(js(`document.body?document.body.innerText:''`), &text))
+			t.Fatalf("button %d: %v url %s text %s", i, err, url, text)
+		}
+		time.Sleep(300 * time.Millisecond)
+		var ready bool
+		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`!!(window.htmx&&document.querySelector('`+sel+`'))`), &ready)); err != nil || !ready {
+			t.Fatalf("htmx %d ready %v %v", i, ready, err)
+		}
+		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.querySelector('`+sel+`').click()`), nil)); err != nil {
+			t.Fatalf("click %d: %v", i, err)
+		}
+		if err := chromedp.Run(ctx, chromedp.Poll(js(`(document.body.innerText||'').indexOf('bash finished.')>=0`), nil, chromedp.WithPollingTimeout(10*time.Second))); err != nil {
+			t.Fatalf("finish %d: %v", i, err)
+		}
+		time.Sleep(700 * time.Millisecond)
+		var res struct {
+			Vis  bool   `json:"vis"`
+			Nav  string `json:"nav"`
+			Bnav string `json:"bnav"`
+		}
+		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var e=document.querySelector('#pending-bar');var nav=document.querySelector('#nav-approvals');var bnav=document.querySelector('#bnav-approvals');return {vis:!!(e&&e.offsetParent!==null),nav:(nav&&nav.innerText||'').trim(),bnav:(bnav&&bnav.innerText||'').trim()};})()`), &res)); err != nil {
+			t.Fatal(err)
+		}
+		if res.Vis || res.Nav != "" || res.Bnav != "" {
+			stale++
+			t.Logf("stale click %d vis=%v nav=%q bnav=%q", i, res.Vis, res.Nav, res.Bnav)
+		}
+		if calls := ask.Calls(); len(calls) != 1 || !calls[0] {
+			t.Fatalf("calls %#v", calls)
+		}
+		_ = chromedp.Run(ctx, chromedp.Navigate("about:blank"))
+	}
+	if stale != 0 {
+		t.Fatalf("%d of %d left the waiting bar or a badge visible at %d px", stale, n, width)
+	}
+	t.Logf("0 of %d stale at %d px", n, width)
 }
 
 func shootStream(t *testing.T, browser context.Context, dir string, width, height int, name string) {
@@ -938,7 +1015,7 @@ func shootApproval(t *testing.T, browser context.Context, dir string, width, hei
 	if kind == "cli" {
 		if _, err := h.st.IngestJournal(context.Background(), user.ID, agent.ID, []store.JournalEntry{
 			{Seq: 1, At: "2026-11-10T20:40:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "request", Text: "List the demo folder"},
-			{Seq: 2, At: "2026-11-10T20:41:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "decision", RequestID: "req-shot", Decision: "approved"},
+			{Seq: 2, At: "2026-11-10T20:41:00Z", SessionID: "", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "decision", RequestID: "req-shot", Decision: "approved"},
 			{Seq: 3, At: "2026-11-10T20:42:00Z", SessionID: "sess-shot", Caller: "cli:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "permission", Tool: "bash", RequestID: "req-shot"},
 		}); err != nil {
 			t.Fatal(err)
@@ -1016,10 +1093,19 @@ func shootApproval(t *testing.T, browser context.Context, dir string, width, hei
 	case "denied":
 		needle = "Denied"
 	case "cli":
-		needle = "An approval for bash was approved."
+		needle = "An approval was asked for bash."
 	}
 	if err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("`+needle+`")>=0&&t.indexOf("demo-secret-value")<0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second))); err != nil {
 		t.Fatal(err)
+	}
+	if kind == "cli" {
+		var ordered bool
+		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var t=document.body.innerText||"";var a=t.indexOf("An approval was asked for bash.");var d=t.indexOf("An approval for bash was approved.");return a>=0&&d>a;})()`), &ordered)); err != nil {
+			t.Fatal(err)
+		}
+		if !ordered {
+			t.Fatal("cli cards are not asked then decided")
+		}
 	}
 	if kind == "cli" {
 		var writable bool

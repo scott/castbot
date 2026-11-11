@@ -68,10 +68,33 @@ func (s *Server) expireLoop() {
 		case <-s.base.Done():
 			return
 		case <-tick.C:
-			s.ExpireDue(context.Background())
-			s.recoverDecisions(context.Background(), confirmGrace)
+			// Mark expirations even while a post is still running, so a slow
+			// or unreachable guest cannot hold the next deadline back.
+			_, _ = s.store.ExpireDue(s.base)
+			s.kickApprovalFollowUp()
 		}
 	}
+}
+
+// kickApprovalFollowUp posts at most one denial and one recovery at a time.
+// The ticker keeps marking rows due while that post is in flight.
+func (s *Server) kickApprovalFollowUp() {
+	s.sweepMu.Lock()
+	if s.sweeping {
+		s.sweepMu.Unlock()
+		return
+	}
+	s.sweeping = true
+	s.sweepMu.Unlock()
+	go func() {
+		defer func() {
+			s.sweepMu.Lock()
+			s.sweeping = false
+			s.sweepMu.Unlock()
+		}()
+		s.ExpireDue(context.Background())
+		s.recoverDecisions(context.Background(), confirmGrace)
+	}()
 }
 
 // ExpireDue posts Deny for approvals whose wait has elapsed.
@@ -104,9 +127,12 @@ func (s *Server) postDenials(ctx context.Context, rows []store.Approval, resume 
 		s.clearBusy(row.ID)
 		if err != nil {
 			s.noteDenyFail(row.ID)
-			continue
+		} else {
+			s.clearDeny(row.ID)
 		}
-		s.clearDeny(row.ID)
+		// One post per call. The next tick takes the next row, so a slow
+		// guest cannot hold every other denial behind it.
+		return
 	}
 }
 
@@ -154,9 +180,10 @@ func (s *Server) recoverDecisions(ctx context.Context, grace time.Duration) {
 		s.clearBusy(row.ID)
 		if err != nil {
 			s.noteDenyFail(row.ID)
-			continue
+		} else {
+			s.clearDeny(row.ID)
 		}
-		s.clearDeny(row.ID)
+		return
 	}
 }
 
@@ -169,6 +196,11 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 	if err != nil {
 		return err
 	}
+	// A failed or finished run must not be approved. Deny if the prompt is
+	// still live, then mark the row inactive with no approved audit.
+	if runTerminal(runRow.Status) && row.Status == "approved" {
+		return s.settleLostClaim(ctx, user, runRow, row, true)
+	}
 	allow := row.Status == "approved"
 	action := "approval.denied"
 	if allow {
@@ -176,7 +208,10 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 	}
 	if !row.Sent {
 		postErr := s.postPermission(ctx, user, runRow, row.RequestID, allow, false)
-		if postErr != nil && !lostPermission(postErr) {
+		if lostPermission(postErr) {
+			return s.settleLostClaim(ctx, user, runRow, row, false)
+		}
+		if postErr != nil {
 			return postErr
 		}
 	}
@@ -188,6 +223,22 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 	}
 	if !runTerminal(runRow.Status) {
 		_ = s.store.ResumeAfterApproval(ctx, row.UserID, row.RunID)
+	}
+	s.runs.Hub.Notify(row.RunID)
+	return nil
+}
+
+// settleLostClaim matches the click path when the prompt is gone or the run
+// has already failed. deny posts Deny first when the guest may still be waiting.
+func (s *Server) settleLostClaim(ctx context.Context, user store.User, runRow store.Run, row store.Approval, deny bool) error {
+	if deny && !row.Sent {
+		postErr := s.postPermission(ctx, user, runRow, row.RequestID, false, false)
+		if postErr != nil && !lostPermission(postErr) {
+			return postErr
+		}
+	}
+	if _, err := s.store.MarkInactive(ctx, row.UserID, row.ID, "user", row.DecidedBy); err != nil {
+		return err
 	}
 	s.runs.Hub.Notify(row.RunID)
 	return nil

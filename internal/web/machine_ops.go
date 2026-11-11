@@ -66,9 +66,12 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 					}
 				}
 			}
-			deferRestart, err := s.store.DeferGuestRestart(ctx, job.UserID, job.AgentID, job.RunID)
+			deferRestart, reason, err := s.store.DeferGuestRestart(ctx, job.UserID, job.AgentID, job.RunID)
 			if err != nil {
 				return nil, err
+			}
+			if reason != "" {
+				s.noteGuestDefer(ctx, job.UserID, job.AgentID, reason)
 			}
 			if !deferRestart {
 				if err := s.runReloadExcept(ctx, job.UserID, job.AgentID, job.RunID); err != nil {
@@ -522,7 +525,11 @@ func (s *Server) applyPending(ctx context.Context, userID, agentID string) error
 }
 
 func (s *Server) applyPendingExcept(ctx context.Context, userID, agentID, exceptRun string) error {
-	if deferRestart, err := s.store.DeferGuestRestart(ctx, userID, agentID, exceptRun); err != nil || deferRestart {
+	deferRestart, reason, err := s.store.DeferGuestRestart(ctx, userID, agentID, exceptRun)
+	if reason != "" {
+		s.noteGuestDefer(ctx, userID, agentID, reason)
+	}
+	if err != nil || deferRestart {
 		return err
 	}
 	version, err := s.store.PendingBundle(ctx, userID, agentID)
@@ -639,6 +646,28 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 		}
 	}
 	return view
+}
+
+// noteGuestDefer logs a reload that is waiting, or one the time bound released.
+// Fingerprints are hashes. Only a short prefix is logged, never a secret.
+func (s *Server) noteGuestDefer(ctx context.Context, userID, agentID, reason string) {
+	oldFP, _ := s.store.SecretFP(ctx, userID, agentID)
+	newFP := ""
+	if agent, err := s.store.GetAgent(ctx, userID, agentID); err == nil {
+		newFP, _ = s.secretFingerprint(ctx, userID, agent)
+	}
+	event := "guest_restart_deferred"
+	if strings.HasPrefix(reason, "bound:") {
+		event = "guest_restart_forced"
+	}
+	s.logger().Info("vm", "event", event, "agent_id", agentID, "reason", reason, "old_fp", fpPrefix(oldFP), "new_fp", fpPrefix(newFP))
+}
+
+func fpPrefix(fp string) string {
+	if len(fp) > 8 {
+		return fp[:8]
+	}
+	return fp
 }
 
 // refreshSecrets reloads Cast when the granted secrets or the provider key

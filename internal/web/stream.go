@@ -130,6 +130,15 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		// A decision's card swap can detach the click's target, and the done
+		// swap then closes this stream. Send the bar and badges first, while
+		// the listener is still attached, and again on the done event.
+		if batchTerminal(events) {
+			if err := s.writeLiveCards(r.Context(), w, user, runRow, from(r).CSRF, &lastCards); err != nil {
+				return
+			}
+			flush()
+		}
 		for _, ev := range events {
 			if err := s.writeRunEvent(r.Context(), w, user, runRow, ev, from(r).CSRF); err != nil {
 				return
@@ -145,13 +154,10 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			flush()
 			return
 		}
-		if cards, err := s.cardsHTML(r.Context(), user, runRow.ID, from(r).CSRF); err == nil && cards != "" && cards != lastCards {
-			if err := writeSSE(w, 0, "card", cards); err != nil {
-				return
-			}
-			lastCards = cards
-			flush()
+		if err := s.writeLiveCards(r.Context(), w, user, runRow, from(r).CSRF, &lastCards); err != nil {
+			return
 		}
+		flush()
 		current, err := s.store.GetRun(r.Context(), user.ID, runRow.ID)
 		if err != nil {
 			return
@@ -320,7 +326,31 @@ func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user stor
 	if err != nil {
 		return err
 	}
+	if chrome, cerr := s.approvalChrome(ctx, user, runRow.AgentID, runRow.ID); cerr == nil {
+		body += chrome
+	}
 	return writeSSE(w, seq, "done", body)
+}
+
+func batchTerminal(events []store.RunEvent) bool {
+	for _, ev := range events {
+		if ev.Kind == "done" || ev.Kind == "error" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) writeLiveCards(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, csrf string, last *string) error {
+	cards, err := s.cardsHTML(ctx, user, runRow.ID, csrf)
+	if err != nil || cards == "" || cards == *last {
+		return nil
+	}
+	if err := writeSSE(w, 0, "card", cards); err != nil {
+		return err
+	}
+	*last = cards
+	return nil
 }
 
 func writeSSE(w http.ResponseWriter, id int, event, data string) error {

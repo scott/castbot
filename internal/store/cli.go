@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"time"
 )
 
 // CLIToken is one Cast CLI credential. The raw value is never stored.
@@ -339,7 +340,22 @@ func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmK
 	// Only a CLI token may open a Cast CLI thread. A control-plane turn
 	// whose session is the web thread id is already stored there.
 	if _, ok := cliCaller(e.Caller); ok {
-		session := e.SessionID
+		session := strings.TrimSpace(e.SessionID)
+		if session == "" && e.Kind == "decision" && e.RequestID != "" {
+			// castlet journals the decision before the permission, with an
+			// empty session. Use the permission's session when it is already
+			// stored. Otherwise wait for that permission to place this row.
+			var permSession string
+			err := tx.QueryRowContext(ctx, `SELECT session_id FROM journal_entries WHERE agent_vm_id = ? AND user_id = ? AND request_id = ? AND kind = 'permission' AND session_id != '' ORDER BY seq DESC LIMIT 1`, vmKey, agent.UserID, e.RequestID).Scan(&permSession)
+			if err == nil {
+				session = permSession
+			} else if err != sql.ErrNoRows {
+				return err
+			}
+			if session == "" {
+				return nil
+			}
+		}
 		if session == "" {
 			session = "cli"
 		}
@@ -402,12 +418,52 @@ func (s *Store) backfillDecisionTool(ctx context.Context, tx *sql.Tx, agent Agen
 		return err
 	}
 	rows.Close()
+	session := strings.TrimSpace(e.SessionID)
+	var th Thread
+	if session != "" {
+		if _, ok := cliCaller(e.Caller); ok {
+			th, err = s.cliThreadTx(ctx, tx, agent, session)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	// The decision was journaled first. Place it after the ask so the thread
+	// reads asked, then decided.
+	follow := entryStamp(s, e.At)
+	if t, err := parseTime(follow); err == nil && !t.IsZero() {
+		follow = s.stamp(t.Add(time.Second))
+	}
 	for _, row := range found {
 		body := journalBody(JournalEntry{Kind: "decision", Tool: e.Tool, Decision: row.decision})
 		if _, err := tx.ExecContext(ctx, `UPDATE journal_entries SET tool = ? WHERE agent_vm_id = ? AND seq = ? AND user_id = ?`, e.Tool, vmKey, row.seq, agent.UserID); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE messages SET body_md = ? WHERE user_id = ? AND journal_seq = ? AND author_kind = 'system'`, body, agent.UserID, row.seq); err != nil {
+		var msgID, threadID string
+		err := tx.QueryRowContext(ctx, `SELECT id, thread_id FROM messages WHERE user_id = ? AND journal_seq = ? AND author_kind = 'system' ORDER BY rowid LIMIT 1`, agent.UserID, row.seq).Scan(&msgID, &threadID)
+		if err == sql.ErrNoRows {
+			if th.ID == "" {
+				continue
+			}
+			placed := JournalEntry{Seq: row.seq, Kind: "decision", Tool: e.Tool, Decision: row.decision, At: follow}
+			if err := s.insertJournalMessage(ctx, tx, agent, th, placed, body, "cli"); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET created_at = ? WHERE user_id = ? AND thread_id = ? AND journal_seq = ?`, follow, agent.UserID, th.ID, row.seq); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if th.ID != "" && threadID != th.ID {
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET thread_id = ?, body_md = ?, created_at = ? WHERE id = ? AND user_id = ?`, th.ID, body, follow, msgID, agent.UserID); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE messages SET body_md = ?, created_at = ? WHERE id = ? AND user_id = ?`, body, follow, msgID, agent.UserID); err != nil {
 			return err
 		}
 	}

@@ -77,6 +77,8 @@ type Server struct {
 
 	approvalFor time.Duration
 	expireMu    sync.Mutex
+	sweepMu     sync.Mutex
+	sweeping    bool
 	busyMu      sync.Mutex
 	busy        map[string]struct{}
 	denyMu      sync.Mutex
