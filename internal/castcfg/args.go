@@ -81,38 +81,118 @@ func shellSpace(c byte) bool {
 	return shellStop(c) && unicode.IsSpace(rune(c))
 }
 
+func writeShellSpace(b *strings.Builder) {
+	for i := 0; i < len(shellMeta); i++ {
+		if !shellSpace(shellMeta[i]) {
+			continue
+		}
+		switch shellMeta[i] {
+		case '\t':
+			b.WriteString(`\t`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\v':
+			b.WriteString(`\v`)
+		case '\f':
+			b.WriteString(`\f`)
+		default:
+			b.WriteByte(shellMeta[i])
+		}
+	}
+}
+
+// shellSpaces is the whitespace in shellMeta, as a regex class.
+func shellSpaceClass() string {
+	var b strings.Builder
+	b.WriteByte('[')
+	writeShellSpace(&b)
+	b.WriteByte(']')
+	return b.String()
+}
+
+// shellIntroClass is where a flag may start: shell whitespace, or ; | &.
+func shellIntroClass() string {
+	var b strings.Builder
+	b.WriteByte('[')
+	writeShellSpace(&b)
+	b.WriteString(`;|&`)
+	b.WriteByte(']')
+	return b.String()
+}
+
+var (
+	shellSpaces = shellSpaceClass()
+	shellIntro  = shellIntroClass()
+)
+
 var (
 	// Any value after Bearer or Basic is hidden, including short and letters-only tokens.
-	// A URL is not a credential.
-	bearerAny = regexp.MustCompile(`(?i)\bbearer\s+` + shellToken)
-	basicAny  = regexp.MustCompile(`(?i)\bbasic\s+` + shellToken)
+	// The gap is any whitespace in shellMeta. A URL is not a credential.
+	bearerAny = regexp.MustCompile(`(?i)\bbearer` + shellSpaces + `+` + shellToken)
+	basicAny  = regexp.MustCompile(`(?i)\bbasic` + shellSpaces + `+` + shellToken)
 	// authorization: token VALUE hides one token. Bearer and Basic are above.
-	authTokenScheme = regexp.MustCompile(`(?i)((?:proxy-)?authorization\s*:\s*token\s+)(` + shellToken + `)`)
+	authTokenScheme = regexp.MustCompile(`(?i)((?:proxy-)?authorization` + shellSpaces + `*:` + shellSpaces + `*token` + shellSpaces + `+)(` + shellToken + `)`)
 	// A private key body. The BEGIN and END lines stay so the command is recognizable.
 	pemPrivate = regexp.MustCompile(`(?s)(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)(.*?)(-----END [A-Z0-9 ]*PRIVATE KEY-----)`)
 	// Token shapes that are secrets even with no name beside them.
 	knownToken = regexp.MustCompile(`\b(?:ghp_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|sk-[A-Za-z0-9_-]{8,})`)
 	// --name value and --name=value. The value uses shellToken. A quoted value stays whole.
-	longFlag = regexp.MustCompile(`(?i)(^|[\s;|&])(--)([A-Za-z0-9][A-Za-z0-9-]*)(=|[ \t]+)("[^"]*"|'[^']*'|` + shellToken + `)`)
+	longFlag = regexp.MustCompile(`(?i)(^|` + shellIntro + `)(--)([A-Za-z0-9][A-Za-z0-9-]*)(=` + shellSpaces + `*|` + shellSpaces + `+)("[^"]*"|'[^']*'|` + shellToken + `)`)
 	// Short flags. Only a known credential tool uses these. The value uses shellToken.
-	shortFlag = regexp.MustCompile(`(?i)(^|[\s;|&])(-u|-p|-a)([ \t]*)(` + shellToken + `)`)
+	shortFlag = regexp.MustCompile(`(?i)(^|` + shellIntro + `)(-u|-p|-a)(` + shellSpaces + `*)(` + shellToken + `)`)
 )
 
 // scrubString hides credential values inside a string and keeps the rest.
 // Only the secret token is replaced. The rest of the command stays visible.
 func scrubScheme(s string, re *regexp.Regexp, label string) string {
-	return re.ReplaceAllStringFunc(s, func(m string) string {
-		trimmed := strings.TrimRight(m, `"'`)
-		quote := m[len(trimmed):]
-		val := trimmed
-		if i := strings.LastIndexAny(trimmed, " \t"); i >= 0 {
-			val = trimmed[i+1:]
+	locs := re.FindAllStringIndex(s, -1)
+	if len(locs) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, loc := range locs {
+		if loc[0] < last {
+			continue
 		}
-		if strings.Contains(val, "://") {
-			return m
+		end := loc[1]
+		valStart := end
+		for valStart > loc[0] && !shellSpace(s[valStart-1]) {
+			valStart--
 		}
-		return label + quote
-	})
+		end = cutRedirectFD(s, valStart, end)
+		if strings.Contains(s[valStart:end], "://") {
+			continue
+		}
+		b.WriteString(s[last:loc[0]])
+		b.WriteString(label)
+		last = end
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// cutRedirectFD leaves a file-descriptor digit run on the tail of `n>&` and `n<&`.
+// `echo Bearer x12>&1` keeps the `12`. A plain `>` redirect does not, so
+// `token=t1>f` still hides the whole value.
+func cutRedirectFD(s string, valStart, valEnd int) int {
+	if valEnd <= valStart || valEnd+1 >= len(s) {
+		return valEnd
+	}
+	redir := s[valEnd]
+	if (redir != '>' && redir != '<') || s[valEnd+1] != '&' {
+		return valEnd
+	}
+	i := valEnd
+	for i > valStart && s[i-1] >= '0' && s[i-1] <= '9' {
+		i--
+	}
+	if i == valEnd || i == valStart {
+		return valEnd
+	}
+	return i
 }
 
 func scrubString(s string) (string, bool) {
@@ -155,40 +235,51 @@ func scrubURLUserinfo(s string) string {
 		scheme := s[start : j+3]
 		p := j + 3
 		userEnd := scanURLPart(s, p)
-		if userEnd == p {
-			b.WriteString(scheme)
-			i = j + 3
-			continue
-		}
-		if userEnd < len(s) && s[userEnd] == ':' {
-			passStart := userEnd + 1
-			passEnd := scanURLPart(s, passStart)
-			if passEnd < len(s) && s[passEnd] == '@' {
-				b.WriteString(scheme)
-				b.WriteString("Hidden@")
-				i = passEnd + 1
-				continue
-			}
-			if passEnd > passStart && passEnd < len(s) && shellStop(s[passEnd]) && atSignBeforeSpace(s, passEnd+1) {
-				b.WriteString(scheme)
-				b.WriteString("Hidden")
-				i = passEnd
-				continue
-			}
-			b.WriteString(scheme)
-			i = j + 3
-			continue
-		}
-		if userEnd < len(s) && s[userEnd] == '@' {
+		passAt := -1
+		if userEnd == p && p < len(s) && s[p] == ':' {
+			// scheme://:password@host has an empty user. The colon starts the password.
+			passAt = p + 1
+		} else if userEnd > p && userEnd < len(s) && s[userEnd] == ':' {
+			passAt = userEnd + 1
+		} else if userEnd > p && userEnd < len(s) && s[userEnd] == '@' {
 			b.WriteString(scheme)
 			b.WriteString("Hidden@")
 			i = userEnd + 1
 			continue
 		}
+		if passAt >= 0 {
+			if repl, next, ok := takePassword(s, scheme, passAt); ok {
+				b.WriteString(repl)
+				i = next
+				continue
+			}
+		}
 		b.WriteString(scheme)
 		i = j + 3
 	}
 	return b.String()
+}
+
+// takePassword hides the password that starts at i, just after ':'.
+// Whitespace there is a separator. @ ends the authority. A shell mark ends
+// the password and stays in the result when @ still follows.
+func takePassword(s, scheme string, i int) (string, int, bool) {
+	for i < len(s) && shellSpace(s[i]) {
+		i++
+	}
+	start := i
+	end := scanURLPart(s, start)
+	if end < len(s) && s[end] == '@' {
+		return scheme + "Hidden@", end + 1, true
+	}
+	if end > start && end < len(s) && shellStop(s[end]) && atSignBeforeSpace(s, end+1) {
+		cut := cutRedirectFD(s, start, end)
+		if cut == start {
+			cut = end
+		}
+		return scheme + "Hidden", cut, true
+	}
+	return "", 0, false
 }
 
 func schemeStart(s string, colon int) (int, bool) {
@@ -322,6 +413,13 @@ func replaceFlagValues(s string, re *regexp.Regexp, decide func(m []string, cmd 
 		if m == nil {
 			continue
 		}
+		end := loc[1]
+		val := m[len(m)-1]
+		valStart := end - len(val)
+		if cut := cutRedirectFD(s, valStart, end); cut != end {
+			m[len(m)-1] = s[valStart:cut]
+			end = cut
+		}
 		cmd := commandBefore(s, loc[0])
 		repl, ok := decide(m, cmd)
 		if !ok {
@@ -329,7 +427,7 @@ func replaceFlagValues(s string, re *regexp.Regexp, decide func(m []string, cmd 
 		}
 		b.WriteString(s[last:loc[0]])
 		b.WriteString(repl)
-		last = loc[1]
+		last = end
 	}
 	b.WriteString(s[last:])
 	return b.String()
@@ -396,7 +494,7 @@ func scrubLabeled(s string) string {
 			continue
 		}
 		raw := sep
-		for raw > i && (s[raw-1] == ' ' || s[raw-1] == '\t' || s[raw-1] == '"' || s[raw-1] == '\'') {
+		for raw > i && (shellSpace(s[raw-1]) || s[raw-1] == '"' || s[raw-1] == '\'') {
 			raw--
 		}
 		for raw > i && isLabelChar(s[raw-1]) {
@@ -407,7 +505,7 @@ func scrubLabeled(s string) string {
 			nameStart++
 		}
 		nameEnd := sep
-		for nameEnd > nameStart && (s[nameEnd-1] == ' ' || s[nameEnd-1] == '\t' || s[nameEnd-1] == '"' || s[nameEnd-1] == '\'') {
+		for nameEnd > nameStart && (shellSpace(s[nameEnd-1]) || s[nameEnd-1] == '"' || s[nameEnd-1] == '\'') {
 			nameEnd--
 		}
 		if nameStart >= nameEnd || !isLabelStart(s[nameStart]) {
@@ -417,7 +515,7 @@ func scrubLabeled(s string) string {
 		}
 		name := s[nameStart:nameEnd]
 		vStart := sep + 1
-		for vStart < len(s) && (s[vStart] == ' ' || s[vStart] == '\t') {
+		for vStart < len(s) && shellSpace(s[vStart]) {
 			vStart++
 		}
 		vEnd := vStart
@@ -434,6 +532,7 @@ func scrubLabeled(s string) string {
 			for vEnd < len(s) && !shellStop(s[vEnd]) {
 				vEnd++
 			}
+			vEnd = cutRedirectFD(s, vStart, vEnd)
 		}
 		if vEnd < i {
 			vEnd = i
@@ -448,9 +547,13 @@ func scrubLabeled(s string) string {
 			i = vEnd
 			continue
 		}
-		if strings.Contains(s[vStart:vEnd], "$(") || strings.Contains(s[vStart:vEnd], "`") {
+		if vEnd == vStart || strings.Contains(s[vStart:vEnd], "$(") || strings.Contains(s[vStart:vEnd], "`") {
 			b.WriteString(s[i:vEnd])
-			i = vEnd
+			if vEnd <= i {
+				i = sep + 1
+			} else {
+				i = vEnd
+			}
 			continue
 		}
 		b.WriteString(s[i:sep])

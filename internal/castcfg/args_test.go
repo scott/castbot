@@ -239,39 +239,147 @@ func TestScrubStopsAtShellMeta(t *testing.T) {
 	const secret = "zzSecret"
 	const tail = "kept-tail"
 	rules := []struct {
-		name  string
-		build func(meta string) string
+		name string
+		line func(meta string) (in, want string)
 	}{
-		{"bearer", func(meta string) string { return "echo Bearer " + secret + meta + tail }},
-		{"basic", func(meta string) string { return "echo Basic " + secret + meta + tail }},
-		{"token scheme", func(meta string) string { return "Authorization: token " + secret + meta + tail }},
-		{"long flag", func(meta string) string { return "tool --token " + secret + meta + tail }},
-		{"long flag equals", func(meta string) string { return "tool --token=" + secret + meta + tail }},
-		{"long user", func(meta string) string { return "curl --user user:" + secret + meta + tail }},
-		{"long user equals", func(meta string) string { return "curl --user=user:" + secret + meta + tail }},
-		{"assignment", func(meta string) string { return "API_KEY=" + secret + meta + tail }},
-		{"url userinfo", func(meta string) string {
-			return "https://user:" + secret + meta + tail + "@host.example/x"
+		{"bearer", func(meta string) (string, string) {
+			return "echo Bearer " + secret + meta + tail, "echo Bearer Hidden" + meta + tail
 		}},
-		{"query token", func(meta string) string { return "https://example.com/cb?token=" + secret + meta + tail }},
-		{"curl -u", func(meta string) string { return "curl -u user:" + secret + meta + tail }},
-		{"curl -u stuck", func(meta string) string { return "curl -uuser:" + secret + meta + tail }},
-		{"mysql -p", func(meta string) string { return "mysql -p" + secret + meta + tail }},
-		{"sshpass -p", func(meta string) string { return "sshpass -p " + secret + meta + tail }},
-		{"docker login -p", func(meta string) string { return "docker login -p " + secret + meta + tail }},
-		{"redis-cli -a", func(meta string) string { return "redis-cli -a " + secret + meta + tail }},
+		{"basic", func(meta string) (string, string) {
+			return "echo Basic " + secret + meta + tail, "echo Basic Hidden" + meta + tail
+		}},
+		{"token scheme", func(meta string) (string, string) {
+			return "Authorization: token " + secret + meta + tail, "Authorization: token Hidden" + meta + tail
+		}},
+		{"long flag", func(meta string) (string, string) {
+			return "tool --token " + secret + meta + tail, "tool --token Hidden" + meta + tail
+		}},
+		{"long flag equals", func(meta string) (string, string) {
+			return "tool --token=" + secret + meta + tail, "tool --token=Hidden" + meta + tail
+		}},
+		{"long user", func(meta string) (string, string) {
+			return "curl --user user:" + secret + meta + tail, "curl --user Hidden" + meta + tail
+		}},
+		{"long user equals", func(meta string) (string, string) {
+			return "curl --user=user:" + secret + meta + tail, "curl --user=Hidden" + meta + tail
+		}},
+		{"assignment", func(meta string) (string, string) {
+			return "API_KEY=" + secret + meta + tail, "API_KEY=Hidden" + meta + tail
+		}},
+		{"url userinfo", func(meta string) (string, string) {
+			rest := tail + "@host.example/x"
+			return "https://user:" + secret + meta + rest, "https://Hidden" + meta + rest
+		}},
+		{"url empty user", func(meta string) (string, string) {
+			rest := tail + "@host.example/x"
+			return "https://:" + secret + meta + rest, "https://Hidden" + meta + rest
+		}},
+		{"query token", func(meta string) (string, string) {
+			return "https://example.com/cb?token=" + secret + meta + tail, "https://example.com/cb?token=Hidden" + meta + tail
+		}},
+		{"curl -u", func(meta string) (string, string) {
+			return "curl -u user:" + secret + meta + tail, "curl -u Hidden" + meta + tail
+		}},
+		{"curl -u stuck", func(meta string) (string, string) {
+			return "curl -uuser:" + secret + meta + tail, "curl -uHidden" + meta + tail
+		}},
+		{"mysql -p", func(meta string) (string, string) {
+			return "mysql -p" + secret + meta + tail, "mysql -pHidden" + meta + tail
+		}},
+		{"sshpass -p", func(meta string) (string, string) {
+			return "sshpass -p " + secret + meta + tail, "sshpass -p Hidden" + meta + tail
+		}},
+		{"docker login -p", func(meta string) (string, string) {
+			return "docker login -p " + secret + meta + tail, "docker login -p Hidden" + meta + tail
+		}},
+		{"redis-cli -a", func(meta string) (string, string) {
+			return "redis-cli -a " + secret + meta + tail, "redis-cli -a Hidden" + meta + tail
+		}},
 	}
 	for _, rule := range rules {
 		for i := 0; i < len(shellMeta); i++ {
 			meta := shellMeta[i : i+1]
-			in := rule.build(meta)
+			in, want := rule.line(meta)
 			got, _ := scrubString(in)
-			if strings.Contains(got, secret) {
-				t.Errorf("%s meta %q left the secret in %q", rule.name, meta, got)
+			if got != want {
+				t.Errorf("%s meta %q\n got %q\nwant %q", rule.name, meta, got, want)
 			}
-			if !strings.Contains(got, meta+tail) {
-				t.Errorf("%s meta %q lost %q from %q", rule.name, meta, meta+tail, got)
+		}
+	}
+	// Separators are listed here, not read from shellMeta, so dropping VT or LF still fails.
+	seps := " \t\n\r\v\f"
+	sepRules := []struct {
+		name string
+		line func(sep string) (in, want string)
+	}{
+		{"bearer", func(sep string) (string, string) {
+			return "echo Bearer" + sep + secret + " kept", "echo Bearer Hidden kept"
+		}},
+		{"basic", func(sep string) (string, string) {
+			return "echo Basic" + sep + secret + " kept", "echo Basic Hidden kept"
+		}},
+		{"token scheme", func(sep string) (string, string) {
+			return "Authorization: token" + sep + secret + " kept", "Authorization: token" + sep + "Hidden kept"
+		}},
+		{"token scheme colon", func(sep string) (string, string) {
+			return "Authorization:" + sep + "token " + secret + " kept", "Authorization:" + sep + "token Hidden kept"
+		}},
+		{"long flag", func(sep string) (string, string) {
+			return "tool --token" + sep + secret + " kept", "tool --token" + sep + "Hidden kept"
+		}},
+		{"long flag equals", func(sep string) (string, string) {
+			return "tool --token=" + sep + secret + " kept", "tool --token=" + sep + "Hidden kept"
+		}},
+		{"long user", func(sep string) (string, string) {
+			return "curl --user" + sep + "user:" + secret + " kept", "curl --user" + sep + "Hidden kept"
+		}},
+		{"long user equals", func(sep string) (string, string) {
+			return "curl --user=" + sep + "user:" + secret + " kept", "curl --user=" + sep + "Hidden kept"
+		}},
+		{"assignment", func(sep string) (string, string) {
+			return "API_KEY=" + sep + secret + " kept", "API_KEY=" + sep + "Hidden kept"
+		}},
+		{"query token", func(sep string) (string, string) {
+			return "https://example.com/cb?token=" + sep + secret + " kept", "https://example.com/cb?token=" + sep + "Hidden kept"
+		}},
+		{"url userinfo", func(sep string) (string, string) {
+			return "https://user:" + sep + secret + "@host.example/x", "https://Hidden@host.example/x"
+		}},
+		{"url empty user", func(sep string) (string, string) {
+			return "https://:" + sep + secret + "@host.example/x", "https://Hidden@host.example/x"
+		}},
+		{"curl -u", func(sep string) (string, string) {
+			return "curl -u" + sep + "user:" + secret + " kept", "curl -u" + sep + "Hidden kept"
+		}},
+		{"sshpass -p", func(sep string) (string, string) {
+			return "sshpass -p" + sep + secret + " kept", "sshpass -p" + sep + "Hidden kept"
+		}},
+		{"docker login -p", func(sep string) (string, string) {
+			return "docker login -p" + sep + secret + " kept", "docker login -p" + sep + "Hidden kept"
+		}},
+		{"redis-cli -a", func(sep string) (string, string) {
+			return "redis-cli -a" + sep + secret + " kept", "redis-cli -a" + sep + "Hidden kept"
+		}},
+	}
+	for _, rule := range sepRules {
+		for i := 0; i < len(seps); i++ {
+			sep := seps[i : i+1]
+			in, want := rule.line(sep)
+			got, _ := scrubString(in)
+			if got != want {
+				t.Errorf("%s sep %q\n got %q\nwant %q", rule.name, sep, got, want)
 			}
+		}
+	}
+	for _, scheme := range []string{"redis", "postgres", "mysql", "amqp", "mongodb", "http"} {
+		empty := scheme + "://:" + secret + "@host"
+		withUser := scheme + "://user:" + secret + "@host"
+		want := scheme + "://Hidden@host"
+		if got, _ := scrubString(empty); got != want {
+			t.Errorf("empty user %q -> %q", empty, got)
+		}
+		if got, _ := scrubString(withUser); got != want {
+			t.Errorf("user %q -> %q", withUser, got)
 		}
 	}
 	exact := []struct{ in, want string }{
@@ -284,6 +392,14 @@ func TestScrubStopsAtShellMeta(t *testing.T) {
 		{"https://example.com/cb?token=t1>f", "https://example.com/cb?token=Hidden>f"},
 		{"Bearer $(curl https://example.com/x)", "Bearer $(curl https://example.com/x)"},
 		{"curl https://example.com:8080>out", "curl https://example.com:8080>out"},
+		{"redis://:FAKErd99@cache:6379", "redis://Hidden@cache:6379"},
+		{"postgres://:FAKEpg77@db:5432/x", "postgres://Hidden@db:5432/x"},
+		{"mysql://:FAKEmw99@db", "mysql://Hidden@db"},
+		{"amqp://:FAKEam99@mq", "amqp://Hidden@mq"},
+		{"mongodb://:FAKEmd99@db", "mongodb://Hidden@db"},
+		{"http://:FAKEht99@h", "http://Hidden@h"},
+		{"echo Bearer x12>&1", "echo Bearer Hidden12>&1"},
+		{"TOKEN=$(curl)", "TOKEN=$(curl)"},
 	}
 	for _, c := range exact {
 		got, _ := scrubString(c.in)
