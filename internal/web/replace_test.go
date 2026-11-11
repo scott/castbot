@@ -102,10 +102,10 @@ func TestReplacePageCopyAndRefusals(t *testing.T) {
 	}
 	waitReplace(t, h, agent, ip, "Machine replaced.")
 	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
-	if !strings.Contains(body, "Machine replaced.") || !strings.Contains(body, "Copied memory and 1 files.") {
+	if !strings.Contains(body, "Machine replaced.") || !strings.Contains(body, "Copied memory and 1 file.") || strings.Contains(body, "1 files.") {
 		t.Fatalf("success copy missing")
 	}
-	if strings.Contains(body, "mem") && strings.Contains(body, "aaa") {
+	if strings.Contains(body, ">aaa<") || strings.Contains(body, ">mem<") {
 		t.Fatal("page shows file contents")
 	}
 	for _, path := range []string{"/bundle", "/secrets", "/cli-tokens"} {

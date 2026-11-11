@@ -51,6 +51,25 @@ func TestAdminMachinesAndDryRunMakeNoAPICall(t *testing.T) {
 	}
 }
 
+func TestAdminMachinesShowsCleanupPending(t *testing.T) {
+	st, agent := adminAgent(t, "running")
+	ctx := context.Background()
+	row, _, err := st.BeginReplacement(ctx, agent.UserID, agent.ID, "cli", "example.invalid/castbot-runtime:ff6d7ea", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkCleanupPending(ctx, agent.UserID, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if listMachines(ctx, st, "example.invalid/castbot-runtime:ff6d7ea", &out) != 0 {
+		t.Fatal(out.String())
+	}
+	if !strings.Contains(out.String(), "cleanup pending") {
+		t.Fatal(out.String())
+	}
+}
+
 func TestAdminReplaceExitCodes(t *testing.T) {
 	st, agent := adminAgent(t, "paused")
 	fake := host.NewFake()

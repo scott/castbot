@@ -11,34 +11,35 @@ import (
 // Replacement is one in-progress or finished machine replace.
 // It holds no token, bootstrap value, or file contents.
 type Replacement struct {
-	ID            string
-	WorkspaceID   string
-	UserID        string
-	AgentID       string
-	State         string
-	Step          string
-	Class         string
-	OldVMID       string
-	OldMicro      string
-	OldImage      string
-	OldState      string
-	NewVMID       string
-	NewMicro      string
-	NewEndpoint   string
-	NewTokenHash  string
-	NewImage      string
-	NewName       string
-	Actor         string
-	NoCopy        bool
-	Woke          bool
-	MemoryBytes   int64
-	FilesDone     int
-	FilesTotal    int
-	FileBytes     int64
-	DeletePending bool
-	CreatedAt     string
-	UpdatedAt     string
-	FinishedAt    string
+	ID             string
+	WorkspaceID    string
+	UserID         string
+	AgentID        string
+	State          string
+	Step           string
+	Class          string
+	OldVMID        string
+	OldMicro       string
+	OldImage       string
+	OldState       string
+	NewVMID        string
+	NewMicro       string
+	NewEndpoint    string
+	NewTokenHash   string
+	NewImage       string
+	NewName        string
+	Actor          string
+	NoCopy         bool
+	Woke           bool
+	MemoryBytes    int64
+	FilesDone      int
+	FilesTotal     int
+	FileBytes      int64
+	DeletePending  bool
+	CleanupPending bool
+	CreatedAt      string
+	UpdatedAt      string
+	FinishedAt     string
 }
 
 // ReplaceBlock is a precondition the caller can show as a single line.
@@ -92,6 +93,7 @@ func (s *Store) migrateReplace() error {
   files_total INTEGER NOT NULL DEFAULT 0,
   file_bytes INTEGER NOT NULL DEFAULT 0,
   delete_pending INTEGER NOT NULL DEFAULT 0,
+  cleanup_pending INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   finished_at TEXT
@@ -102,6 +104,9 @@ func (s *Store) migrateReplace() error {
 		return err
 	}
 	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_vm_repl_user ON vm_replacements(user_id, agent_id, created_at)`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("vm_replacements", "cleanup_pending", `ALTER TABLE vm_replacements ADD COLUMN cleanup_pending INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
 	// The staged agent token is plaintext until the switch copies it onto agent_vms.
@@ -257,26 +262,27 @@ WHERE a.user_id = ? AND r.agent_id = ? AND (a.status = 'pending' OR (a.sent = 0 
 
 func scanReplacement(row interface{ Scan(...any) error }) (Replacement, error) {
 	var r Replacement
-	var noCopy, woke, pending int
+	var noCopy, woke, pending, cleanup int
 	var finished sql.NullString
 	err := row.Scan(&r.ID, &r.WorkspaceID, &r.UserID, &r.AgentID, &r.State, &r.Step, &r.Class,
 		&r.OldVMID, &r.OldMicro, &r.OldImage, &r.OldState, &r.NewVMID, &r.NewMicro, &r.NewEndpoint, &r.NewTokenHash,
 		&r.NewImage, &r.NewName, &r.Actor, &noCopy, &woke, &r.MemoryBytes, &r.FilesDone, &r.FilesTotal, &r.FileBytes,
-		&pending, &r.CreatedAt, &r.UpdatedAt, &finished)
+		&pending, &cleanup, &r.CreatedAt, &r.UpdatedAt, &finished)
 	if err != nil {
 		return Replacement{}, scanErr(err)
 	}
 	r.NoCopy = noCopy != 0
 	r.Woke = woke != 0
 	r.DeletePending = pending != 0
+	r.CleanupPending = cleanup != 0
 	r.FinishedAt = finished.String
 	return r, nil
 }
 
 const replSelect = `SELECT id, workspace_id, user_id, agent_id, state, step, error_class,
   old_vm_id, old_microvm_id, old_image, old_state, new_vm_id, new_microvm_id, new_endpoint, new_token_hash,
-  new_image, new_name, actor, no_copy, woke, memory_bytes, files_done, files_total, file_bytes,
-  delete_pending, created_at, updated_at, finished_at FROM vm_replacements`
+  new_image, new_name, actor, no_copy, woke, memory_bytes, files_done, files_total,   file_bytes,
+  delete_pending, cleanup_pending, created_at, updated_at, finished_at FROM vm_replacements`
 
 // GetReplacement returns one replacement owned by the caller.
 func (s *Store) GetReplacement(ctx context.Context, userID, id string) (Replacement, error) {
@@ -377,14 +383,27 @@ WHERE id = ? AND user_id = ? AND state = 'running'`,
 }
 
 // FailReplacement marks a replace failed before the switch. The live machine row is left alone.
+// Tokens bound to the new row are revoked. A switched row is left for the forward path.
 func (s *Store) FailReplacement(ctx context.Context, userID, id, step, class string) error {
 	step = strings.TrimSpace(step)
 	class = strings.TrimSpace(class)
 	if step == "" || class == "" {
 		return ErrInvalid
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	row, err := scanReplacement(tx.QueryRowContext(ctx, replSelect+` WHERE id = ? AND user_id = ? AND state = 'running' AND step NOT IN ('switched', 'delete')`, id, userID))
+	if err != nil {
+		return err
+	}
 	stamp := s.stamp(s.Now())
-	res, err := s.db.ExecContext(ctx, `UPDATE vm_replacements SET state = 'failed', step = ?, error_class = ?, finished_at = ?, updated_at = ?
+	if err := revokeBound(ctx, tx, userID, row.AgentID, row.NewVMID, stamp); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE vm_replacements SET state = 'failed', step = ?, error_class = ?, cleanup_pending = 0, finished_at = ?, updated_at = ?
 WHERE id = ? AND user_id = ? AND state = 'running' AND step NOT IN ('switched', 'delete')`,
 		step, class, stamp, stamp, id, userID)
 	if err != nil {
@@ -393,8 +412,48 @@ WHERE id = ? AND user_id = ? AND state = 'running' AND step NOT IN ('switched', 
 	if err := rowsAffected(res); err != nil {
 		return err
 	}
-	_, _ = s.db.ExecContext(ctx, `DELETE FROM vm_replacement_tokens WHERE replacement_id = ? AND user_id = ?`, id, userID)
-	return nil
+	if _, err := tx.ExecContext(ctx, `DELETE FROM vm_replacement_tokens WHERE replacement_id = ? AND user_id = ?`, id, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// MarkCleanupPending leaves a pre-switch replace running so recovery can retry the new machine.
+// The token bound to the new row is revoked. The row is not marked failed while that machine may still exist.
+func (s *Store) MarkCleanupPending(ctx context.Context, userID, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	row, err := scanReplacement(tx.QueryRowContext(ctx, replSelect+` WHERE id = ? AND user_id = ? AND state = 'running' AND step NOT IN ('switched', 'delete')`, id, userID))
+	if err != nil {
+		return err
+	}
+	stamp := s.stamp(s.Now())
+	if err := revokeBound(ctx, tx, userID, row.AgentID, row.NewVMID, stamp); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE vm_replacements SET cleanup_pending = 1, updated_at = ? WHERE id = ? AND user_id = ? AND state = 'running'`,
+		stamp, id, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// TouchReplacement records that the owner process is still working.
+func (s *Store) TouchReplacement(ctx context.Context, userID, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE vm_replacements SET updated_at = ? WHERE id = ? AND user_id = ? AND state = 'running'`,
+		s.stamp(s.Now()), id, userID)
+	return err
+}
+
+// CleanupPending reports a pre-switch replace whose new machine still needs to be deleted.
+func (s *Store) CleanupPending(ctx context.Context, userID, agentID string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vm_replacements WHERE user_id = ? AND agent_id = ? AND state = 'running' AND cleanup_pending = 1`,
+		userID, agentID).Scan(&n)
+	return n > 0, err
 }
 
 // SwitchReplacement inserts the new live row, retires the old one, and revokes the old token.
@@ -424,6 +483,12 @@ func (s *Store) SwitchReplacement(ctx context.Context, userID, id, token, health
 	}
 	stamp := s.stamp(s.Now())
 	hash := tokenHash(token)
+	vmState := "running"
+	agentStatus := "ready"
+	if row.OldState == "paused" {
+		vmState = "paused"
+		agentStatus = "paused"
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = 'replaced', deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
 		stamp, row.OldVMID, userID); err != nil {
 		return err
@@ -431,12 +496,12 @@ func (s *Store) SwitchReplacement(ctx context.Context, userID, id, token, health
 	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_vms(
   id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure,
   agent_token, agent_token_hash, created_at, last_wake_at, created_running_at, observe_boot)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', '', ?, ?, ?, ?, ?, 1)`,
-		row.NewVMID, row.WorkspaceID, userID, row.AgentID, row.NewMicro, row.NewName, row.NewEndpoint, row.NewImage,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, 1)`,
+		row.NewVMID, row.WorkspaceID, userID, row.AgentID, row.NewMicro, row.NewName, row.NewEndpoint, row.NewImage, vmState,
 		token, hash, stamp, stamp, stamp); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE agents SET status = 'ready', activity = '' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, row.AgentID, userID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE agents SET status = ?, activity = '' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentStatus, row.AgentID, userID); err != nil {
 		return err
 	}
 	healthVersion = strings.TrimSpace(healthVersion)
@@ -454,6 +519,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', '', ?, ?, ?, ?, ?, 1)`,
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM vm_replacement_tokens WHERE replacement_id = ? AND user_id = ?`, id, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO vm_events(agent_vm_id, workspace_id, user_id, agent_id, kind, at, duration_ms)
+VALUES (?, ?, ?, ?, ?, ?, 0)`,
+		row.NewVMID, row.WorkspaceID, userID, row.AgentID, EventReplaceSwitch, stamp); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -513,6 +583,19 @@ func (s *Store) ReplacementToken(ctx context.Context, userID, id string) (string
 		return "", scanErr(err)
 	}
 	return token, nil
+}
+
+// revokeBound retires agent and bootstrap tokens bound to one replacement row.
+// The live token has an empty agent_vm_id and is left in place.
+func revokeBound(ctx context.Context, tx *sql.Tx, userID, agentID, vmID, stamp string) error {
+	vmID = strings.TrimSpace(vmID)
+	if vmID == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE agent_tokens SET revoked_at = ?
+WHERE user_id = ? AND agent_id = ? AND agent_vm_id = ? AND revoked_at IS NULL`,
+		stamp, userID, agentID, vmID)
+	return err
 }
 
 // revokeAgentTokens retires agent tokens other than keepHash.

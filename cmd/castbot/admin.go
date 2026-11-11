@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/scott/castbot/internal/host"
@@ -61,6 +63,9 @@ func listMachines(ctx context.Context, st *store.Store, image string, out io.Wri
 		if target != "" && tag != target {
 			line += "  update available"
 		}
+		if pending, err := st.CleanupPending(ctx, vm.UserID, vm.AgentID); err == nil && pending {
+			line += "  cleanup pending"
+		}
 		fmt.Fprintln(out, line)
 	}
 	return 0
@@ -81,7 +86,8 @@ func adminReplace(args []string) int {
 	}
 	cfg, st := openStore()
 	defer st.Close()
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	agent, err := st.AgentByIDOrSlug(ctx, fs.Arg(0))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "agent not found")

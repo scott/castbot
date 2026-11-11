@@ -186,13 +186,20 @@ func (s *Server) progressView(out replaceView, row store.Replacement, user store
 	return out
 }
 
+func copiedFiles(n int) string {
+	if n == 1 {
+		return "1 file"
+	}
+	return fmt.Sprintf("%d files", n)
+}
+
 func (s *Server) resultView(ctx context.Context, out replaceView, row store.Replacement, userID string, agent store.Agent) replaceView {
 	if row.State == "succeeded" {
 		out.Banner = "ok"
 		out.BannerBold = "Machine replaced."
 		rest := "Now on " + replace.ImageTag(row.NewImage) + "."
 		if !row.NoCopy {
-			rest = "Now on " + replace.ImageTag(row.NewImage) + ". Copied memory and " + fmt.Sprintf("%d", row.FilesTotal) + " files."
+			rest = "Now on " + replace.ImageTag(row.NewImage) + ". Copied memory and " + copiedFiles(row.FilesTotal) + "."
 		}
 		out.BannerRest = rest
 		if s.hasActiveCLI(ctx, userID, agent.ID) {
@@ -452,13 +459,14 @@ func (s *Server) SetDataDir(dir string) {
 	s.mu.Unlock()
 }
 
-// RecoverReplacements finishes or rolls back replaces that were in progress.
+// RecoverReplacements finishes or rolls back replaces that have gone stale.
+// A replace that is still heartbeating is left for its owner.
 func (s *Server) RecoverReplacements(ctx context.Context) {
 	h, _, _ := s.hostConfig()
 	if h == nil {
 		return
 	}
-	if err := replace.Recover(ctx, s.store, h); err != nil {
+	if err := replace.RecoverStale(ctx, s.store, h, replace.StaleAfter); err != nil {
 		log.Printf("replace recovery failed")
 	}
 }
@@ -474,7 +482,10 @@ func (s *Server) RetryReplaceDeletes(ctx context.Context) {
 		}
 		h, _, _ := s.hostConfig()
 		if h != nil {
-			_ = replace.RetryDeletes(context.Background(), s.store, h)
+			cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = replace.RetryDeletes(cctx, s.store, h)
+			_ = replace.RecoverStale(cctx, s.store, h, replace.StaleAfter)
+			cancel()
 		}
 		if delay < 60*time.Second {
 			delay *= 2

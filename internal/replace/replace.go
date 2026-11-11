@@ -30,7 +30,11 @@ const (
 	MaxFiles = 500
 	MaxBytes = 64 << 20
 
-	bootDefault = 4 * time.Minute
+	bootDefault    = 4 * time.Minute
+	cleanupTimeout = 30 * time.Second
+	beatEvery      = 30 * time.Second
+	// StaleAfter is how long a running replace can sit without a heartbeat before recovery takes it.
+	StaleAfter = 10 * time.Minute
 )
 
 // Blocked is a precondition. The old machine is unchanged.
@@ -205,16 +209,27 @@ func Run(ctx context.Context, st *store.Store, h host.AgentHost, opt Options) (R
 	res := Result{ID: row.ID, AgentName: agent.Name, OldImage: vm.Image, NewImage: opt.Image, NoCopy: opt.NoCopy}
 	_ = st.AddVMEventFor(ctx, opt.UserID, opt.AgentID, row.OldVMID, store.EventReplaceRequest, 0)
 	_ = st.WriteMachineAudit(ctx, opt.UserID, opt.ActorKind, opt.ActorID, "machine.replace_requested", opt.AgentID, ImageTag(vm.Image), ImageTag(opt.Image), opt.Actor)
+	stopBeat := make(chan struct{})
+	go heartbeat(stopBeat, st, opt.UserID, row.ID)
+	defer close(stopBeat)
 	if opt.HaltAt == "lock" {
 		return res, ErrHalted
 	}
 	r := &runner{ctx: ctx, st: st, h: h, opt: opt, row: row, vm: vm, agent: agent, res: res}
+	defer func() {
+		if r.stopFwd != nil {
+			r.stopFwd()
+		}
+	}()
 	out, err := r.run()
 	if errors.Is(err, ErrHalted) {
 		return out, err
 	}
 	var ce *classError
 	if errors.As(err, &ce) {
+		if r.row.Step == "switched" || r.row.Step == "delete" {
+			return out, err
+		}
 		r.rollback(ce.step, ce.class)
 		out.Files = 0
 		return out, &Kept{Line: Reason(ce.class)}
@@ -227,16 +242,17 @@ type classError struct{ step, class string }
 func (e *classError) Error() string { return e.class }
 
 type runner struct {
-	ctx   context.Context
-	st    *store.Store
-	h     host.AgentHost
-	opt   Options
-	row   store.Replacement
-	vm    store.VM
-	agent store.Agent
-	res   Result
-	token string
-	ui    string
+	ctx     context.Context
+	st      *store.Store
+	h       host.AgentHost
+	opt     Options
+	row     store.Replacement
+	vm      store.VM
+	agent   store.Agent
+	res     Result
+	token   string
+	ui      string
+	stopFwd context.CancelFunc
 }
 
 func (r *runner) run() (Result, error) {
@@ -290,16 +306,18 @@ func (r *runner) run() (Result, error) {
 		}
 	}
 	version, _ := r.healthy(r.row.NewEndpoint, r.token)
+	if err := r.restPause(); err != nil {
+		return r.res, err
+	}
 	if err := r.switchTo(version); err != nil {
 		return r.res, err
 	}
+	r.useForward()
 	if err := r.halt("switch"); err != nil {
 		return r.res, err
 	}
 	r.uiStep("delete")
-	if err := r.step("delete"); err != nil {
-		return r.res, err
-	}
+	_ = r.step("delete")
 	if err := r.halt("delete"); err != nil {
 		return r.res, err
 	}
@@ -309,7 +327,6 @@ func (r *runner) run() (Result, error) {
 	if err := r.st.FinishReplacement(r.ctx, r.opt.UserID, r.row.ID, pending); err != nil {
 		return r.res, err
 	}
-	_ = r.st.AddVMEventFor(r.ctx, r.opt.UserID, r.opt.AgentID, r.row.NewVMID, store.EventReplaceSwitch, 0)
 	_ = r.st.WriteMachineAudit(r.ctx, r.opt.UserID, r.opt.ActorKind, r.opt.ActorID, "machine.replace_succeeded", r.opt.AgentID, ImageTag(r.vm.Image), ImageTag(r.opt.Image), r.opt.Actor)
 	if pending {
 		_ = r.st.AddVMEventFor(r.ctx, r.opt.UserID, r.opt.AgentID, r.row.OldVMID, store.EventReplaceDelete, 0)
@@ -559,18 +576,65 @@ func (r *runner) pullJournal(endpoint, token string) {
 	_, _ = r.st.IngestJournal(r.ctx, r.opt.UserID, r.opt.AgentID, body.Entries)
 }
 
-func (r *runner) rollback(step, class string) {
-	if r.row.NewMicro != "" {
-		_, _ = deleteMachine(r.ctx, r.h, r.row.NewMicro, r.opt.AgentID, host.ReplaceTag(r.row.ID))
-	} else {
-		_ = deleteByTag(r.ctx, r.h, host.ReplaceTag(r.row.ID))
+func (r *runner) restPause() error {
+	if r.row.OldState != "paused" {
+		return nil
 	}
-	if err := r.st.FailReplacement(r.ctx, r.opt.UserID, r.row.ID, step, class); err != nil {
+	if _, err := r.h.Pause(r.ctx, r.row.NewMicro); err != nil {
+		return &classError{step: "verify", class: "verify"}
+	}
+	return nil
+}
+
+func (r *runner) useForward() {
+	if r.stopFwd != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	r.ctx = ctx
+	r.stopFwd = cancel
+}
+
+func (r *runner) rollback(step, class string) {
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	row, err := r.st.GetReplacement(ctx, r.opt.UserID, r.row.ID)
+	if err != nil || row.State != "running" || row.Step == "switched" || row.Step == "delete" {
+		return
+	}
+	live, err := r.st.LiveVM(ctx, r.opt.UserID, r.opt.AgentID)
+	if err != nil {
+		return
+	}
+	if r.row.NewMicro != "" && r.row.NewMicro == live.MicroVMID {
+		return
+	}
+	ok, gone := removeNewMachine(ctx, r.h, r.row.NewMicro, r.opt.AgentID, host.ReplaceTag(r.row.ID))
+	if !ok && !gone {
+		_ = r.st.MarkCleanupPending(ctx, r.opt.UserID, r.row.ID)
+		return
+	}
+	if err := r.st.FailReplacement(ctx, r.opt.UserID, r.row.ID, step, class); err != nil {
 		r.opt.Logger.Info("replace fail row", "agent", r.opt.AgentID, "class", class)
 		return
 	}
-	_ = r.st.AddVMEventFor(r.ctx, r.opt.UserID, r.opt.AgentID, r.row.OldVMID, store.EventReplaceFailed, 0)
-	_ = r.st.WriteMachineAudit(r.ctx, r.opt.UserID, r.opt.ActorKind, r.opt.ActorID, "machine.replace_failed", r.opt.AgentID, ImageTag(r.vm.Image), ImageTag(r.opt.Image), r.opt.Actor)
+	_ = r.st.AddVMEventFor(ctx, r.opt.UserID, r.opt.AgentID, r.row.OldVMID, store.EventReplaceFailed, 0)
+	_ = r.st.WriteMachineAudit(ctx, r.opt.UserID, r.opt.ActorKind, r.opt.ActorID, "machine.replace_failed", r.opt.AgentID, ImageTag(r.vm.Image), ImageTag(r.opt.Image), r.opt.Actor)
+}
+
+func heartbeat(stop <-chan struct{}, st *store.Store, userID, id string) {
+	tick := time.NewTicker(beatEvery)
+	defer tick.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-tick.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = st.TouchReplacement(ctx, userID, id)
+			cancel()
+		}
+	}
 }
 
 func (r *runner) step(name string) error {
@@ -599,9 +663,11 @@ func (r *runner) uiStep(name string) {
 }
 
 type saved struct {
-	path string
-	sum  [32]byte
-	size int64
+	path    string
+	sum     [32]byte
+	size    int64
+	content [32]byte
+	tarOK   bool
 }
 
 type savedFile struct {
@@ -621,7 +687,17 @@ func (r *runner) saveMemory(endpoint, token string) (*saved, error) {
 	if err != nil {
 		return &saved{path: path}, err
 	}
-	return &saved{path: path, sum: sum, size: n}, nil
+	out := &saved{path: path, sum: sum, size: n}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out, err
+	}
+	digest, err := tarDigest(raw)
+	if err == nil {
+		out.content = digest
+		out.tarOK = true
+	}
+	return out, nil
 }
 
 func (r *runner) saveFiles(endpoint, token string) ([]savedFile, error) {
@@ -682,16 +758,12 @@ func (r *runner) sameMemory(mem *saved) bool {
 		return true
 	}
 	// A guest re-packs the tar, so headers can differ while the files match.
+	// The content digest was stored before the temp file was deleted.
+	if !mem.tarOK {
+		return false
+	}
 	got, err := tarDigest(raw)
-	if err != nil {
-		return false
-	}
-	saved, err := os.ReadFile(mem.path)
-	if err != nil {
-		return false
-	}
-	want, err := tarDigest(saved)
-	return err == nil && got == want
+	return err == nil && got == mem.content
 }
 
 func tarDigest(raw []byte) ([32]byte, error) {
@@ -842,6 +914,38 @@ func Recover(ctx context.Context, st *store.Store, h host.AgentHost) error {
 	if err != nil {
 		return err
 	}
+	if err := recoverRows(ctx, st, h, rows); err != nil {
+		return err
+	}
+	return RetryDeletes(ctx, st, h)
+}
+
+// RecoverStale is the periodic pass. A row still being heartbeated is left alone.
+// A cleanup that already failed is retried even when the row is fresh.
+func RecoverStale(ctx context.Context, st *store.Store, h host.AgentHost, stale time.Duration) error {
+	if st == nil || h == nil {
+		return nil
+	}
+	if stale <= 0 {
+		stale = StaleAfter
+	}
+	rows, err := st.RunningReplacements(ctx)
+	if err != nil {
+		return err
+	}
+	var due []store.Replacement
+	for _, row := range rows {
+		if row.CleanupPending || st.ReplacementAge(row.UpdatedAt) >= stale {
+			due = append(due, row)
+		}
+	}
+	if err := recoverRows(ctx, st, h, due); err != nil {
+		return err
+	}
+	return RetryDeletes(ctx, st, h)
+}
+
+func recoverRows(ctx context.Context, st *store.Store, h host.AgentHost, rows []store.Replacement) error {
 	for _, row := range rows {
 		if row.Step == "switched" || row.Step == "delete" {
 			if err := finishDelete(ctx, st, h, row); err != nil {
@@ -849,10 +953,12 @@ func Recover(ctx context.Context, st *store.Store, h host.AgentHost) error {
 			}
 			continue
 		}
-		if row.NewMicro != "" {
-			_, _ = deleteMachine(ctx, h, row.NewMicro, row.AgentID, host.ReplaceTag(row.ID))
-		} else {
-			_ = deleteByTag(ctx, h, host.ReplaceTag(row.ID))
+		ok, gone := removeNewMachine(ctx, h, row.NewMicro, row.AgentID, host.ReplaceTag(row.ID))
+		if !ok && !gone {
+			if err := st.MarkCleanupPending(ctx, row.UserID, row.ID); err != nil {
+				return err
+			}
+			continue
 		}
 		class := classForStep(row.Step)
 		if err := st.FailReplacement(ctx, row.UserID, row.ID, row.Step, class); err != nil {
@@ -862,7 +968,7 @@ func Recover(ctx context.Context, st *store.Store, h host.AgentHost) error {
 		kind, id := auditActor(row)
 		_ = st.WriteMachineAudit(ctx, row.UserID, kind, id, "machine.replace_failed", row.AgentID, ImageTag(row.OldImage), ImageTag(row.NewImage), row.Actor)
 	}
-	return RetryDeletes(ctx, st, h)
+	return nil
 }
 
 // RetryDeletes tries once more to remove old machines whose switch already stands.
@@ -889,7 +995,6 @@ func finishDelete(ctx context.Context, st *store.Store, h host.AgentHost, row st
 	if err := st.FinishReplacement(ctx, row.UserID, row.ID, pending); err != nil {
 		return err
 	}
-	_ = st.AddVMEventFor(ctx, row.UserID, row.AgentID, row.NewVMID, store.EventReplaceSwitch, 0)
 	kind, id := auditActor(row)
 	_ = st.WriteMachineAudit(ctx, row.UserID, kind, id, "machine.replace_succeeded", row.AgentID, ImageTag(row.OldImage), ImageTag(row.NewImage), row.Actor)
 	if pending {
@@ -930,27 +1035,49 @@ func deleteMachine(ctx context.Context, h host.AgentHost, id, agentID, extraTag 
 	return true, false
 }
 
-func deleteByTag(ctx context.Context, h host.AgentHost, tag string) error {
-	lister, ok := h.(interface {
+func removeNewMachine(ctx context.Context, h host.AgentHost, id, agentID, tag string) (ok, gone bool) {
+	if id != "" {
+		ok, gone = deleteMachine(ctx, h, id, agentID, tag)
+		if ok || gone {
+			return
+		}
+	}
+	return deleteByTag(ctx, h, tag)
+}
+
+func deleteByTag(ctx context.Context, h host.AgentHost, tag string) (ok, gone bool) {
+	lister, isLister := h.(interface {
 		List(context.Context) ([]host.Machine, error)
 	})
-	if !ok {
-		return nil
+	if !isLister || tag == "" {
+		return false, false
 	}
 	machines, err := lister.List(ctx)
 	if err != nil {
-		return err
+		return false, false
 	}
+	matched := false
+	failed := false
 	for _, m := range machines {
 		if !hasTag(m, tag) {
 			continue
 		}
+		matched = true
 		if host.GuardDelete(m) != nil {
+			failed = true
 			continue
 		}
-		_ = h.Delete(ctx, m.ID)
+		if err := h.Delete(ctx, m.ID); err != nil {
+			failed = true
+		}
 	}
-	return nil
+	if !matched {
+		return false, true
+	}
+	if failed {
+		return false, false
+	}
+	return true, false
 }
 
 func hasTag(m host.Machine, tag string) bool {

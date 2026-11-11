@@ -10,7 +10,7 @@ The server must be up before a command that can change a machine. `castbot admin
 castbot admin machines
 ```
 
-One line per live machine: agent name, state, image tag, and `update available` when that tag differs from `CASTBOT_IMAGE`. This command does not call the machine API.
+One line per live machine: agent name, state, image tag, and `update available` when that tag differs from `CASTBOT_IMAGE`. A line also says `cleanup pending` when a new machine from a failed replace still needs to be deleted. This command does not call the machine API.
 
 ## replace-machine
 
@@ -26,4 +26,4 @@ Without `--yes`, the command prints the plan and waits until the agent name is t
 
 `--no-copy` skips the memory and file copy. It is not in the web UI. The command writes a `replace_no_copy` machine event. The history list does not show that event.
 
-Exit 0 means the agent is on the new machine. Exit 1 means the old machine was kept. Exit 2 means the switch succeeded and the old machine still needs to be deleted. castbot retries that delete on its own.
+Exit 0 means the agent is on the new machine. Exit 1 means the old machine was kept. Exit 2 means the switch succeeded and the old machine still needs to be deleted. castbot retries that delete on its own. A paused agent stays paused. SIGINT or SIGTERM stops the command and rolls the replace back when the switch has not committed.

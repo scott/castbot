@@ -751,7 +751,12 @@ func workspacePath(name string) (string, bool) {
 }
 
 func (m *MicroVM) streamClient() *http.Client {
-	return &http.Client{}
+	return &http.Client{
+		Timeout: 60 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 func (m *MicroVM) streamOpen(ctx context.Context, method, target, agentToken string, body io.Reader) (io.ReadCloser, error) {
@@ -764,6 +769,10 @@ func (m *MicroVM) streamOpen(ctx context.Context, method, target, agentToken str
 	resp, err := m.streamClient().Do(req)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		resp.Body.Close()
+		return nil, ErrGuest
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
@@ -785,6 +794,9 @@ func (m *MicroVM) streamSend(ctx context.Context, method, target, agentToken str
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return resp.StatusCode, ErrGuest
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return resp.StatusCode, ErrGuest
 	}

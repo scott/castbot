@@ -160,7 +160,13 @@ func TestReplaceCopiesMemoryAndDeletesOldAfterHealth(t *testing.T) {
 		t.Fatal(err)
 	}
 	for k, v := range before {
-		if after[k] < v {
+		if k == "audit_log" {
+			if after[k] <= v {
+				t.Fatalf("audit_log %d -> %d", v, after[k])
+			}
+			continue
+		}
+		if after[k] != v {
 			t.Fatalf("%s %d -> %d", k, v, after[k])
 		}
 	}
@@ -195,8 +201,29 @@ func TestReplaceWakesPausedMachineOnce(t *testing.T) {
 	if wakes != 1 {
 		t.Fatalf("wakes %d", wakes)
 	}
+	pauses := 0
+	for _, call := range r.fake.Calls {
+		if call == "pause" {
+			pauses++
+		}
+	}
+	if pauses != 1 {
+		t.Fatalf("pauses %d", pauses)
+	}
 	if len(r.fake.Deletes) != 1 || r.fake.Deletes[0] != "vm-old" {
 		t.Fatalf("deletes %#v", r.fake.Deletes)
+	}
+	got, err := r.st.GetAgent(context.Background(), r.user.ID, r.agent.ID)
+	if err != nil || got.Status != "paused" {
+		t.Fatalf("status %s %v", got.Status, err)
+	}
+	live, err := r.st.LiveVM(context.Background(), r.user.ID, r.agent.ID)
+	if err != nil || live.State != "paused" {
+		t.Fatalf("live %+v %v", live, err)
+	}
+	m := r.fake.Machines[live.MicroVMID]
+	if m.State != "paused" {
+		t.Fatalf("machine state %s", m.State)
 	}
 }
 
