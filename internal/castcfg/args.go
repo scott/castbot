@@ -6,6 +6,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // ScrubJSON removes values stored under secret keys.
@@ -41,27 +42,60 @@ func scrubJSON(raw json.RawMessage, path string, redacted *[]string) (json.RawMe
 
 var errBadJSON = errors.New("bad json")
 
-// secretValue is one credential token. It stops at whitespace, a shell break,
-// a quote, a backtick, or a closing paren, so the next command stays visible.
-const secretValue = `[^\s;|&'"\x60)]+`
+// shellMeta is the one set of characters that ends a secret value.
+// Whitespace is space, tab, CR, LF, VT, and FF. A redirect, a quote, a
+// command substitution, or a shell break stays in the command.
+const shellMeta = " \t\n\r\v\f;|&<>'\"`()$"
+
+// shellToken is one credential token: every byte except shellMeta.
+var shellToken = shellValueClass()
+
+func shellValueClass() string {
+	var b strings.Builder
+	b.WriteString("[^")
+	for i := 0; i < len(shellMeta); i++ {
+		switch shellMeta[i] {
+		case '\t':
+			b.WriteString(`\t`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\v':
+			b.WriteString(`\v`)
+		case '\f':
+			b.WriteString(`\f`)
+		default:
+			b.WriteByte(shellMeta[i])
+		}
+	}
+	b.WriteString("]+")
+	return b.String()
+}
+
+func shellStop(c byte) bool {
+	return strings.IndexByte(shellMeta, c) >= 0
+}
+
+func shellSpace(c byte) bool {
+	return shellStop(c) && unicode.IsSpace(rune(c))
+}
 
 var (
 	// Any value after Bearer or Basic is hidden, including short and letters-only tokens.
 	// A URL is not a credential.
-	bearerAny = regexp.MustCompile(`(?i)\bbearer\s+` + secretValue)
-	basicAny  = regexp.MustCompile(`(?i)\bbasic\s+` + secretValue)
+	bearerAny = regexp.MustCompile(`(?i)\bbearer\s+` + shellToken)
+	basicAny  = regexp.MustCompile(`(?i)\bbasic\s+` + shellToken)
 	// authorization: token VALUE hides one token. Bearer and Basic are above.
-	authTokenScheme = regexp.MustCompile(`(?i)((?:proxy-)?authorization\s*:\s*token\s+)(` + secretValue + `)`)
+	authTokenScheme = regexp.MustCompile(`(?i)((?:proxy-)?authorization\s*:\s*token\s+)(` + shellToken + `)`)
 	// A private key body. The BEGIN and END lines stay so the command is recognizable.
 	pemPrivate = regexp.MustCompile(`(?s)(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)(.*?)(-----END [A-Z0-9 ]*PRIVATE KEY-----)`)
 	// Token shapes that are secrets even with no name beside them.
 	knownToken = regexp.MustCompile(`\b(?:ghp_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|sk-[A-Za-z0-9_-]{8,})`)
-	// --name value and --name=value. The value stops at whitespace or a shell break.
-	longFlag = regexp.MustCompile(`(?i)(^|[\s;|&])(--)([A-Za-z0-9][A-Za-z0-9-]*)(=|[ \t]+)("[^"]*"|'[^']*'|[^\s;|&]+)`)
-	// Short flags. Only a known credential tool uses these.
-	shortFlag = regexp.MustCompile(`(?i)(^|[\s;|&])(-u|-p|-a)([ \t]*)([^\s;|&]+)`)
-	// scheme://user:pass@host and scheme://token@host.
-	urlUserinfo = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+(?::[^\s/@]*)?@`)
+	// --name value and --name=value. The value uses shellToken. A quoted value stays whole.
+	longFlag = regexp.MustCompile(`(?i)(^|[\s;|&])(--)([A-Za-z0-9][A-Za-z0-9-]*)(=|[ \t]+)("[^"]*"|'[^']*'|` + shellToken + `)`)
+	// Short flags. Only a known credential tool uses these. The value uses shellToken.
+	shortFlag = regexp.MustCompile(`(?i)(^|[\s;|&])(-u|-p|-a)([ \t]*)(` + shellToken + `)`)
 )
 
 // scrubString hides credential values inside a string and keeps the rest.
@@ -88,13 +122,113 @@ func scrubString(s string) (string, bool) {
 	next = scrubScheme(next, basicAny, "Basic Hidden")
 	next = authTokenScheme.ReplaceAllString(next, "${1}Hidden")
 	next = scrubToolFlags(next)
-	next = urlUserinfo.ReplaceAllString(next, "${1}Hidden@")
+	next = scrubURLUserinfo(next)
 	next = scrubLabeled(next)
 	return next, next != s
 }
 
 func commandSubst(v string) bool {
 	return strings.Contains(v, "$(") || strings.Contains(v, "`")
+}
+
+// scrubURLUserinfo hides user:password and token userinfo.
+// The user and password stop at shellMeta. @ still ends the authority.
+// A redirect after the password stays. A host:port redirect is not userinfo
+// unless @ appears before the next space.
+func scrubURLUserinfo(s string) string {
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		j := strings.Index(s[i:], "://")
+		if j < 0 {
+			b.WriteString(s[i:])
+			break
+		}
+		j += i
+		start, ok := schemeStart(s, j)
+		if !ok || start < i {
+			b.WriteString(s[i : j+3])
+			i = j + 3
+			continue
+		}
+		b.WriteString(s[i:start])
+		scheme := s[start : j+3]
+		p := j + 3
+		userEnd := scanURLPart(s, p)
+		if userEnd == p {
+			b.WriteString(scheme)
+			i = j + 3
+			continue
+		}
+		if userEnd < len(s) && s[userEnd] == ':' {
+			passStart := userEnd + 1
+			passEnd := scanURLPart(s, passStart)
+			if passEnd < len(s) && s[passEnd] == '@' {
+				b.WriteString(scheme)
+				b.WriteString("Hidden@")
+				i = passEnd + 1
+				continue
+			}
+			if passEnd > passStart && passEnd < len(s) && shellStop(s[passEnd]) && atSignBeforeSpace(s, passEnd+1) {
+				b.WriteString(scheme)
+				b.WriteString("Hidden")
+				i = passEnd
+				continue
+			}
+			b.WriteString(scheme)
+			i = j + 3
+			continue
+		}
+		if userEnd < len(s) && s[userEnd] == '@' {
+			b.WriteString(scheme)
+			b.WriteString("Hidden@")
+			i = userEnd + 1
+			continue
+		}
+		b.WriteString(scheme)
+		i = j + 3
+	}
+	return b.String()
+}
+
+func schemeStart(s string, colon int) (int, bool) {
+	i := colon
+	for i > 0 {
+		c := s[i-1]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '+' || c == '.' || c == '-' {
+			i--
+			continue
+		}
+		break
+	}
+	if i == colon {
+		return 0, false
+	}
+	c := s[i]
+	if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+		return 0, false
+	}
+	return i, true
+}
+
+func scanURLPart(s string, i int) int {
+	for i < len(s) && !shellStop(s[i]) && s[i] != ':' && s[i] != '@' && s[i] != '/' && s[i] != '?' && s[i] != '#' {
+		i++
+	}
+	return i
+}
+
+func atSignBeforeSpace(s string, i int) bool {
+	for i < len(s) {
+		if s[i] == '@' {
+			return true
+		}
+		if shellSpace(s[i]) {
+			return false
+		}
+		i++
+	}
+	return false
 }
 
 func commandBefore(s string, pos int) string {
@@ -297,7 +431,7 @@ func scrubLabeled(s string) string {
 				vEnd++
 			}
 		} else {
-			for vEnd < len(s) && s[vEnd] != ' ' && s[vEnd] != '\t' && s[vEnd] != '\n' && s[vEnd] != '\r' && s[vEnd] != ';' && s[vEnd] != '&' && s[vEnd] != '|' && s[vEnd] != ',' {
+			for vEnd < len(s) && !shellStop(s[vEnd]) {
 				vEnd++
 			}
 		}

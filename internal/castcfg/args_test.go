@@ -2,6 +2,7 @@ package castcfg
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -223,6 +224,71 @@ func TestScrubJSONKeepsCommandTail(t *testing.T) {
 			if !strings.Contains(got["command"], k) {
 				t.Fatalf("lost %q from %q", k, got["command"])
 			}
+		}
+	}
+}
+
+func TestScrubStopsAtShellMeta(t *testing.T) {
+	re := regexp.MustCompile("^" + shellToken + "$")
+	for c := 0; c < 256; c++ {
+		s := string([]byte{byte(c)})
+		if shellStop(byte(c)) == re.MatchString(s) {
+			t.Fatalf("stop set and value class disagree on %q", c)
+		}
+	}
+	const secret = "zzSecret"
+	const tail = "kept-tail"
+	rules := []struct {
+		name  string
+		build func(meta string) string
+	}{
+		{"bearer", func(meta string) string { return "echo Bearer " + secret + meta + tail }},
+		{"basic", func(meta string) string { return "echo Basic " + secret + meta + tail }},
+		{"token scheme", func(meta string) string { return "Authorization: token " + secret + meta + tail }},
+		{"long flag", func(meta string) string { return "tool --token " + secret + meta + tail }},
+		{"long flag equals", func(meta string) string { return "tool --token=" + secret + meta + tail }},
+		{"long user", func(meta string) string { return "curl --user user:" + secret + meta + tail }},
+		{"long user equals", func(meta string) string { return "curl --user=user:" + secret + meta + tail }},
+		{"assignment", func(meta string) string { return "API_KEY=" + secret + meta + tail }},
+		{"url userinfo", func(meta string) string {
+			return "https://user:" + secret + meta + tail + "@host.example/x"
+		}},
+		{"query token", func(meta string) string { return "https://example.com/cb?token=" + secret + meta + tail }},
+		{"curl -u", func(meta string) string { return "curl -u user:" + secret + meta + tail }},
+		{"curl -u stuck", func(meta string) string { return "curl -uuser:" + secret + meta + tail }},
+		{"mysql -p", func(meta string) string { return "mysql -p" + secret + meta + tail }},
+		{"sshpass -p", func(meta string) string { return "sshpass -p " + secret + meta + tail }},
+		{"docker login -p", func(meta string) string { return "docker login -p " + secret + meta + tail }},
+		{"redis-cli -a", func(meta string) string { return "redis-cli -a " + secret + meta + tail }},
+	}
+	for _, rule := range rules {
+		for i := 0; i < len(shellMeta); i++ {
+			meta := shellMeta[i : i+1]
+			in := rule.build(meta)
+			got, _ := scrubString(in)
+			if strings.Contains(got, secret) {
+				t.Errorf("%s meta %q left the secret in %q", rule.name, meta, got)
+			}
+			if !strings.Contains(got, meta+tail) {
+				t.Errorf("%s meta %q lost %q from %q", rule.name, meta, meta+tail, got)
+			}
+		}
+	}
+	exact := []struct{ in, want string }{
+		{"echo Basic x1>>~/.ssh/authorized_keys", "echo Basic Hidden>>~/.ssh/authorized_keys"},
+		{"mysql -pFAKE</tmp/drop_all.sql", "mysql -pHidden</tmp/drop_all.sql"},
+		{"API_KEY=x</tmp/payload.sh bash", "API_KEY=Hidden</tmp/payload.sh bash"},
+		{"tool --token x>~/.bashrc", "tool --token Hidden>~/.bashrc"},
+		{"sshpass -p x<f", "sshpass -p Hidden<f"},
+		{"curl -u a:b>f", "curl -u Hidden>f"},
+		{"https://example.com/cb?token=t1>f", "https://example.com/cb?token=Hidden>f"},
+		{"Bearer $(curl https://example.com/x)", "Bearer $(curl https://example.com/x)"},
+		{"curl https://example.com:8080>out", "curl https://example.com:8080>out"},
+	}
+	for _, c := range exact {
+		got, _ := scrubString(c.in)
+		if got != c.want {
+			t.Errorf("%q -> %q, want %q", c.in, got, c.want)
 		}
 	}
 }
