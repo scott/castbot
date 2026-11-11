@@ -39,6 +39,9 @@ func (s *Server) exportCLI(w http.ResponseWriter, r *http.Request) {
 	if s.missing(w, err) {
 		return
 	}
+	if s.refuseReplacing(w, r, user.ID, agent.ID) {
+		return
+	}
 	vm, err := s.store.LiveVM(r.Context(), user.ID, agent.ID)
 	if err != nil && err != store.ErrNotFound {
 		http.Error(w, "Error", http.StatusInternalServerError)

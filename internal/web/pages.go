@@ -183,10 +183,21 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	}
 	p.Title = agent.Name
 	p.StartMachine = machine.CanStart && !machine.CanRetry
+	s.attachReplace(r.Context(), user, agent, machine, &p)
+	if wantsConfirm(r) && p.Replace.CanReplace {
+		p.Replace.Confirm = true
+		if vm, err := s.store.LiveVM(r.Context(), user.ID, agent.ID); err == nil && vm.State == "paused" {
+			p.Replace.PausedNote = true
+		}
+	}
 	if status == 0 {
 		status = http.StatusOK
 	}
-	return s.render(w, status, "app", finish(p))
+	name := "app"
+	if strings.HasSuffix(r.URL.Path, "/machine/card") {
+		name = "machinePanel"
+	}
+	return s.render(w, status, name, finish(p))
 }
 
 func tabCopy(tab string) (string, string) {
@@ -207,6 +218,9 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	agent, err := s.store.GetAgent(r.Context(), user.ID, r.PathValue("id"))
 	if s.missing(w, err) {
+		return
+	}
+	if s.refuseReplacing(w, r, user.ID, agent.ID) {
 		return
 	}
 	body := strings.TrimSpace(r.FormValue("body"))

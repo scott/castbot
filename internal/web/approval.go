@@ -488,6 +488,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, allow bool) {
 	if s.missing(w, err) {
 		return
 	}
+	if s.refuseReplacing(w, r, user.ID, runRow.AgentID) {
+		return
+	}
 	current, err := s.store.GetApproval(r.Context(), user.ID, r.PathValue("approval"))
 	if s.missing(w, err) {
 		return

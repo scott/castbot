@@ -193,16 +193,16 @@
 <header class="ch-h{{if .Pane}} pane-open{{end}}"><a class="ibtn back" href="/" aria-label="Back to agents">{{template "backsvg" .}}</a><a class="who-btn" href="/agents/{{.Agent.ID}}?pane=1" aria-label="Open {{.Agent.Name}} info"><span class="av {{.Agent.Color}}" aria-hidden="true">{{.Agent.Letter}}<span class="dot {{.Agent.Dot}}"></span></span><span class="grow"><span class="nm">{{.Agent.Name}}</span><span class="sub">{{.Agent.Title}}{{if .Agent.Model}} · {{.Agent.Model}}{{end}}</span></span></a><span class="vmchip"><span class="chip {{.Agent.ChipClass}}"><span class="pip"></span>{{.Agent.ChipLabel}}{{if .Agent.ChipMeta}} <span class="meta">{{.Agent.ChipMeta}}</span>{{end}}</span></span><nav class="tabs" aria-label="{{.Agent.Name}} views"><a href="/agents/{{.Agent.ID}}"{{if eq .Tab "chat"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v10H9l-5 4z"/></svg>Chat</a><a href="/agents/{{.Agent.ID}}/machine"{{if eq .Tab "machine"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12 15h5"/></svg>Machine</a><a href="/agents/{{.Agent.ID}}/routines"{{if eq .Tab "agent-routines"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Routines</a><a href="/agents/{{.Agent.ID}}/files"{{if eq .Tab "agent-files"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.5h-17z"/></svg>Files</a></nav><a class="ibtn" href="{{if .Pane}}/agents/{{.Agent.ID}}{{else}}/agents/{{.Agent.ID}}?pane=1{{end}}" aria-label="Agent info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/></svg></a></header>
 {{if eq .Tab "chat"}}
 {{if .Threads}}<nav class="thread-switch" aria-label="Threads">{{range .Threads}}<a href="{{.Href}}"{{if .On}} class="on" aria-current="page"{{end}}>{{.Title}}</a>{{end}}</nav>{{end}}
-<div class="ch-body"><div class="msgs" id="msgs">{{template "messages" .}}{{template "lives" .}}</div></div>
+<div class="ch-body"><div class="msgs" id="msgs">{{if .Replace.Lock}}<div class="banner start" role="status"><span class="grow"><b>{{.Replace.ChatBold}}</b> {{.Replace.ChatRest}}</span><a class="btn sm" href="/agents/{{.Agent.ID}}/machine">View progress</a></div>{{end}}{{template "messages" .}}{{template "lives" .}}</div></div>
 <div class="comp-wrap"><div id="pending-bar" class="pending-bar"{{if eq .Agent.Approvals 0}} hidden{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span class="grow">{{if eq .Agent.Approvals 1}}1 approval waiting{{else if gt .Agent.Approvals 1}}{{.Agent.Approvals}} approvals waiting{{end}}</span><a class="btn sm" href="/approvals">Review</a></div>
 {{if .StartMachine}}<p class="start-note">No machine yet. Start it to chat.</p>{{end}}
-<form class="comp" id="composer" method="post" action="/agents/{{.Agent.ID}}/messages" hx-post="/agents/{{.Agent.ID}}/messages" hx-target="#msgs" hx-swap="beforeend">
+{{if .Replace.Lock}}<div class="comp locked" id="composer"><p class="ph">This machine is being replaced. You can chat again when it is done.</p></div>{{else}}<form class="comp" id="composer" method="post" action="/agents/{{.Agent.ID}}/messages" hx-post="/agents/{{.Agent.ID}}/messages" hx-target="#msgs" hx-swap="beforeend">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="thread" value="{{.ThreadID}}">
 <textarea class="ph" name="body" maxlength="8000" rows="1" placeholder="Message {{.Agent.Name}}" aria-label="Message {{.Agent.Name}}"></textarea>
 <div class="row">{{if not .StartMachine}}<span class="hint">Enter to send · Shift+Enter for a new line</span><button class="btn pri sm" type="submit">Send</button>{{end}}</div>
-</form>
-{{if .StartMachine}}<form class="start-form" method="post" action="/agents/{{.Agent.ID}}/machine" hx-boost="false"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">Start</button></form>{{end}}</div>
+</form>{{end}}
+{{if and .StartMachine (not .Replace.Lock)}}<form class="start-form" method="post" action="/agents/{{.Agent.ID}}/machine" hx-boost="false"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">Start</button></form>{{end}}</div>
 {{else if eq .Tab "machine"}}
 {{template "machinePanel" .}}
 {{else}}
@@ -336,20 +336,43 @@
 {{end}}
 
 {{define "machinePanel"}}
-<div class="page-b machine">
+<div class="page-b machine" id="machine-root"{{if .Replace.Poll}} hx-get="/agents/{{.Agent.ID}}/machine/card" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
 <h2>Machine</h2>
 <p class="muted">{{.Machine.Lead}}</p>
 {{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
+{{if eq .Replace.Banner "ok"}}<div class="banner ok" role="status"><span class="grow"><b>{{.Replace.BannerBold}}</b> {{.Replace.BannerRest}}{{if .Replace.BannerExtra}} {{.Replace.BannerExtra}}{{end}}</span></div>{{end}}
+{{if eq .Replace.Banner "err"}}<div class="banner err" role="alert"><span class="grow"><b>{{.Replace.BannerBold}}</b> {{.Replace.BannerRest}} <b>{{.Replace.BannerExtra}}</b> {{.Replace.BannerWarn}}</span>{{if .Replace.TryAgain}}<a class="btn sm" href="/agents/{{.Agent.ID}}/machine/replace">Try again</a>{{end}}</div>{{end}}
+{{if .Replace.BannerWarn}}{{if eq .Replace.Banner "ok"}}<p class="bline warnl">{{.Replace.BannerWarn}}</p>{{end}}{{end}}
 <span class="chip {{.Agent.ChipClass}}"><span class="pip"></span>{{.Agent.ChipLabel}}</span>
-<div class="meta-grid"><div><div class="k">Size</div><div class="v">{{.Agent.SizeLabel}}</div></div><div><div class="k">Auto-pause</div><div class="v">{{.Agent.IdleLabel}}</div></div>{{if .Machine.ShowFirst}}<div><div class="k">First running</div><div class="v">{{.Machine.FirstRunning}}</div></div>{{end}}{{if .Machine.LastWake}}<div><div class="k">Last wake</div><div class="v">{{.Machine.LastWake}}</div></div>{{end}}</div>
-<div class="acts">
-{{if or .Machine.CanStart .Machine.CanRetry}}<form method="post" action="/agents/{{.Agent.ID}}/machine"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">{{if .Machine.CanRetry}}Try again{{else}}Start machine{{end}}</button></form>{{end}}
-{{if .Machine.CanPause}}<form method="post" action="/agents/{{.Agent.ID}}/machine/pause"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Pause</button></form>{{end}}
-{{if .Machine.CanWake}}<form method="post" action="/agents/{{.Agent.ID}}/machine/wake"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Wake</button></form>{{end}}
+<div class="meta-grid"><div><div class="k">Size</div><div class="v">{{.Agent.SizeLabel}}</div></div><div><div class="k">Auto-pause</div><div class="v">{{.Agent.IdleLabel}}</div></div>{{if .Replace.HasImage}}<div><div class="k">Image</div><div class="v{{if .Replace.Update}} upd{{end}}">{{.Replace.ImageLine}}</div></div>{{end}}{{if .Machine.ShowFirst}}<div><div class="k">First running</div><div class="v">{{.Machine.FirstRunning}}</div></div>{{end}}{{if .Machine.LastWake}}<div><div class="k">Last wake</div><div class="v">{{.Machine.LastWake}}</div></div>{{end}}</div>
+{{if .Replace.NoMachine}}<div class="nomach"><div><b>{{.Agent.Name}} has no machine right now.</b><p>Start one to chat. The agent, its chats and its settings are all here.</p></div></div>{{end}}
+{{if .Replace.Steps}}<ol class="rsteps steps">{{range .Replace.Steps}}<li class="step{{if .Done}} done{{end}}{{if .Now}} now{{end}}"><span class="s">{{if .Done}}<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>{{else if .Now}}<span class="spin"></span>{{end}}</span><span class="grow">{{.Title}}{{if .Detail}}<span class="ssub">{{.Detail}}</span>{{end}}</span></li>{{end}}</ol>{{if .Replace.Fine}}<p class="fineprint">{{.Replace.Fine}}</p>{{end}}{{end}}
+<div class="acts racts">
+{{if or .Machine.CanStart .Machine.CanRetry}}<form method="post" action="/agents/{{.Agent.ID}}/machine"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>{{if .Machine.CanRetry}}Try again{{else}}Start machine{{end}}</button></form>{{end}}
+{{if .Machine.CanPause}}<form method="post" action="/agents/{{.Agent.ID}}/machine/pause"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Pause</button></form>{{end}}
+{{if .Machine.CanWake}}<form method="post" action="/agents/{{.Agent.ID}}/machine/wake"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Wake</button></form>{{end}}
+{{if .Replace.CanReplace}}<a class="btn sm" href="/agents/{{.Agent.ID}}/machine/replace">Replace machine</a>{{else if .Replace.ShowButton}}<button class="btn sm" type="button" disabled>Replace machine</button>{{end}}
 </div>
+{{if .Replace.LockLine}}<p class="lockline">This machine is being replaced. Pause, Wake, Delete and Add to Cast CLI are off until it is done.</p>{{end}}
+{{if .Replace.Reason}}<p class="reason">{{.Replace.Reason}}{{if .Replace.ReasonHref}} <a class="link" href="{{.Replace.ReasonHref}}">{{.Replace.ReasonLabel}}</a>{{end}}</p>{{end}}
+{{if .Replace.HintBold}}<div class="rhint{{if .Replace.Same}} quiet{{end}}"><div><b>{{.Replace.HintBold}}</b> {{.Replace.HintRest}}</div>{{if and .Replace.Update .Replace.CanReplace}}<a class="btn sm pri" href="/agents/{{.Agent.ID}}/machine/replace">Replace machine</a>{{end}}</div>{{end}}
 {{template "cliBox" .}}
-{{if .Machine.CanDelete}}<form class="machine-del" method="post" action="/agents/{{.Agent.ID}}/machine/delete"><input type="hidden" name="csrf" value="{{.CSRF}}"><label class="lab" for="confirm-name">Type {{.Agent.Name}} to delete this machine</label><div class="inp"><input id="confirm-name" name="confirm" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Type the agent name"></div><button class="btn sm danger-ghost" type="submit">Delete agent</button><p class="fineprint">Deleting removes this agent and its machine. This cannot be undone. Memory export is not in this version.</p></form>{{end}}
+{{if .Machine.CanDelete}}<form class="machine-del" method="post" action="/agents/{{.Agent.ID}}/machine/delete"><input type="hidden" name="csrf" value="{{.CSRF}}"><label class="lab" for="confirm-name">Type {{.Agent.Name}} to delete this machine</label><div class="inp"><input id="confirm-name" name="confirm" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Type the agent name"{{if .Replace.Lock}} disabled{{end}}></div><button class="btn sm danger-ghost" type="submit"{{if .Replace.Lock}} disabled{{end}}>Delete agent</button><p class="fineprint">Deleting removes this agent and its machine. This cannot be undone. Memory export is not in this version.</p></form>{{end}}
+{{if .Replace.History}}<section class="hist"><h3>Machine history</h3><ul class="evs">{{range .Replace.History}}<li><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}</ul></section>{{end}}
+{{if .Replace.LogNote}}<p class="fineprint">{{.Replace.LogNote}}</p>{{end}}
 <p class="fineprint">Status is the machine record. Checking it does not wake the machine.</p>
+</div>
+{{end}}
+
+{{define "replaceModal"}}
+<div class="scrim"></div>
+<div class="rmodal" role="dialog" aria-labelledby="replace-title">
+<div class="grabber" aria-hidden="true"></div>
+<div class="rm-h"><span class="ico" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><path d="M7 7h11v11M16 8l-9 9"/></svg></span><div class="grow"><h2 id="replace-title">Replace this machine?</h2><p>castbot starts a new machine on the current runtime ({{.Replace.NextTag}}), copies this agent's memory and workspace files, then deletes the old machine. It usually takes a few minutes. Chat is paused until it is done.</p></div><a class="ibtn" href="/agents/{{.Agent.ID}}/machine" data-close aria-label="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></a></div>
+<div class="rimg"><div><span class="k">Runtime now</span><span class="v">{{.Replace.NowTag}}</span></div><span class="rimg-to">changes to</span><div><span class="k">Runtime after</span><span class="v">{{.Replace.NextTag}}</span><span class="tag-new">current</span></div></div>
+<div class="rlists"><section class="rlist kept"><h3>Kept</h3><ul><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>The agent, its settings, instructions, model and keys</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>All chats, including Cast CLI threads</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>Approvals and the audit log</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>Memory (copied)</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>Workspace files (copied)</span></li></ul></section><section class="rlist lost"><h3>Lost</h3><ul><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span>Files outside the workspace folder, such as installed packages</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span>Tool results inside past chats. The agent gets your recent chat back as plain text.</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span>The Cast CLI connection. Run Add to Cast CLI again afterwards.</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span>Machine logs</span></li></ul></section></div>
+<p class="promise"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span><b>Safe if something goes wrong.</b> If the old machine cannot be read, castbot stops and keeps it exactly as it is.{{if .Replace.PausedNote}} {{.Agent.Name}} is paused now, so castbot wakes it once to read it.{{end}}</span></p>
+<form class="rm-f" method="post" action="/agents/{{.Agent.ID}}/machine/replace"><input type="hidden" name="csrf" value="{{.CSRF}}"><a class="btn" href="/agents/{{.Agent.ID}}/machine" data-close autofocus>Cancel</a><button class="btn pri" type="submit">Replace machine</button></form>
 </div>
 {{end}}
 
@@ -360,7 +383,7 @@
 {{if .CLIName}}<p class="fineprint">CLI name: <span class="mono">{{.CLIName}}</span>. cast connect uses this name.</p>{{end}}
 {{if .CLINote}}<p class="fineprint">{{.CLINote}}</p>{{end}}
 {{if .CLIBlob}}<pre class="cli-blob">{{.CLIBlob}}</pre>{{end}}
-<form method="post" action="/agents/{{.Agent.ID}}/cli"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Add to Cast CLI</button></form>
+<form method="post" action="/agents/{{.Agent.ID}}/cli"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Add to Cast CLI</button></form>
 {{if .CLITokens}}<div class="toks">{{range .CLITokens}}<div class="tok"><div class="mono">{{.Prefix}}</div><div class="meta">Created {{.Created}} · Last used {{.LastUsed}} · {{.Status}}{{if and .Unseen .Revoked}} · Not shown{{end}}</div>{{if not .Revoked}}<form method="post" action="/agents/{{$.Agent.ID}}/cli/{{.ID}}/revoke" hx-post="/agents/{{$.Agent.ID}}/cli/{{.ID}}/revoke" hx-target="#cast-cli" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="btn sm danger-ghost" type="submit">Revoke</button></form>{{end}}</div>{{end}}</div><p class="fineprint">To rotate, revoke this token and add a new one.</p>{{end}}
 </section>
 {{end}}
@@ -404,6 +427,7 @@
 {{if .Pane}}{{template "infoPane" .}}{{end}}
 </div>
 {{if .ShowNav}}{{template "bnav" .}}{{end}}
+{{if .Replace.Confirm}}{{template "replaceModal" .}}{{end}}
 <script src="/static/htmx.min.js"></script>
 <script src="/static/sse.js"></script>
 <script src="/static/stream.js"></script>

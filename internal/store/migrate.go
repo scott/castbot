@@ -441,10 +441,14 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	}
 	// Version 12 is the real runtime. Approvals are version 13.
 	// Version 14 is the S07c carry-forward columns.
+	// Version 15 is replace-machine: token binding, revoke, and the lock row.
 	if err := s.migrateApprovals(); err != nil {
 		return err
 	}
 	if err := s.migrateV14(); err != nil {
+		return err
+	}
+	if err := s.migrateReplace(); err != nil {
 		return err
 	}
 	return nil

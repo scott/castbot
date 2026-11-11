@@ -349,17 +349,35 @@ func (s *Store) LiveMicroIDs(ctx context.Context) (map[string]struct{}, error) {
 	return out, rows.Err()
 }
 
-// MarkVMDeleted records a confirmed delete and deletes the agent row's live state.
+// MarkVMDeleted records a confirmed delete and revokes that machine's agent token.
 func (s *Store) MarkVMDeleted(ctx context.Context, userID, agentID string) error {
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
 		return err
 	}
-	stamp := s.stamp(s.Now())
-	res, err := s.db.ExecContext(ctx, `UPDATE agent_vms SET state = 'deleted', deleted_at = ?, state_gen = state_gen + 1 WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, stamp, userID, agentID)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	return rowsAffected(res)
+	defer tx.Rollback()
+	var vmID, hash string
+	err = tx.QueryRowContext(ctx, `SELECT id, COALESCE(agent_token_hash, '') FROM agent_vms WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, userID, agentID).Scan(&vmID, &hash)
+	if err != nil {
+		return scanErr(err)
+	}
+	stamp := s.stamp(s.Now())
+	res, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = 'deleted', deleted_at = ?, state_gen = state_gen + 1 WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, stamp, vmID, userID)
+	if err != nil {
+		return err
+	}
+	if err := rowsAffected(res); err != nil {
+		return err
+	}
+	if err := revokeAgentTokens(ctx, tx, userID, agentID, "", "", stamp); err != nil {
+		return err
+	}
+	_ = hash
+	_ = vmID
+	return tx.Commit()
 }
 
 // LiveVM returns the caller's current machine without the agent token.
@@ -391,22 +409,56 @@ func (s *Store) VMCredentials(ctx context.Context, userID, agentID string) (endp
 	return endpoint, token, nil
 }
 
-// SaveVMToken stores the per-agent token on the caller's live machine, if one exists.
+// SaveVMToken stores the per-agent token on the machine the bootstrap was bound to.
+// A token bound to a replacement row is staged there and does not touch the live row.
 // A machine that has not been reserved yet is ignored so a local boot still works.
 func (s *Store) SaveVMToken(ctx context.Context, agentID, plain string) error {
+	_, err := s.PlaceVMToken(ctx, agentID, plain)
+	return err
+}
+
+// PlaceVMToken stores a token the way SaveVMToken does.
+// The bool is true when the live machine row was updated.
+func (s *Store) PlaceVMToken(ctx context.Context, agentID, plain string) (bool, error) {
 	plain = strings.TrimSpace(plain)
 	agentID = strings.TrimSpace(agentID)
 	if plain == "" || agentID == "" {
-		return ErrInvalid
+		return false, ErrInvalid
 	}
-	var userID string
-	err := s.db.QueryRowContext(ctx, `SELECT user_id FROM agent_tokens WHERE token_hash = ? AND agent_id = ? AND kind = 'agent'`, tokenHash(plain), agentID).Scan(&userID)
+	var userID, vmID string
+	err := s.db.QueryRowContext(ctx, `SELECT user_id, COALESCE(agent_vm_id, '') FROM agent_tokens
+WHERE token_hash = ? AND agent_id = ? AND kind = 'agent' AND revoked_at IS NULL`, tokenHash(plain), agentID).Scan(&userID, &vmID)
 	if err != nil {
-		return scanErr(err)
+		return false, scanErr(err)
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE agent_vms SET agent_token = ?, agent_token_hash = ? WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`,
+	if vmID != "" {
+		res, err := s.db.ExecContext(ctx, `UPDATE agent_vms SET agent_token = ?, agent_token_hash = ? WHERE id = ? AND user_id = ? AND agent_id = ? AND deleted_at IS NULL`,
+			plain, tokenHash(plain), vmID, userID, agentID)
+		if err != nil {
+			return false, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		if n > 0 {
+			return true, nil
+		}
+		if err := s.stageReplacementToken(ctx, userID, agentID, vmID, plain); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE agent_vms SET agent_token = ?, agent_token_hash = ? WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`,
 		plain, tokenHash(plain), userID, agentID)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // SetQuota sets the caller's machine cap.

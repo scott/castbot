@@ -268,13 +268,28 @@ func (s *Store) IssueBootstrap(ctx context.Context, userID, agentID string) (str
 	if err != nil {
 		return "", err
 	}
+	return s.issueBootstrap(ctx, agent, "")
+}
+
+// IssueBootstrapFor mints a one-time token bound to a machine row id.
+// Exchange writes the agent token onto that row only, so a replacement
+// guest cannot overwrite the live machine's token.
+func (s *Store) IssueBootstrapFor(ctx context.Context, userID, agentID, agentVMID string) (string, error) {
+	agent, err := s.GetAgent(ctx, userID, agentID)
+	if err != nil {
+		return "", err
+	}
+	return s.issueBootstrap(ctx, agent, strings.TrimSpace(agentVMID))
+}
+
+func (s *Store) issueBootstrap(ctx context.Context, agent Agent, agentVMID string) (string, error) {
 	plain, err := newToken()
 	if err != nil {
 		return "", err
 	}
 	stamp := s.stamp(s.Now())
-	_, err = s.db.ExecContext(ctx, `INSERT INTO agent_tokens(token_hash, workspace_id, user_id, agent_id, kind, created_at) VALUES (?, ?, ?, ?, 'bootstrap', ?)`,
-		tokenHash(plain), agent.WorkspaceID, userID, agentID, stamp)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO agent_tokens(token_hash, workspace_id, user_id, agent_id, kind, agent_vm_id, created_at) VALUES (?, ?, ?, ?, 'bootstrap', ?, ?)`,
+		tokenHash(plain), agent.WorkspaceID, agent.UserID, agent.ID, agentVMID, stamp)
 	if err != nil {
 		return "", err
 	}
@@ -295,9 +310,10 @@ func (s *Store) ExchangeBootstrap(ctx context.Context, agentID, plain string) (s
 		return "", err
 	}
 	defer tx.Rollback()
-	var userID, workspace string
-	err = tx.QueryRowContext(ctx, `SELECT user_id, workspace_id FROM agent_tokens WHERE token_hash = ? AND agent_id = ? AND kind = 'bootstrap' AND used_at IS NULL`,
-		tokenHash(plain), agentID).Scan(&userID, &workspace)
+	var userID, workspace, vmID string
+	err = tx.QueryRowContext(ctx, `SELECT user_id, workspace_id, COALESCE(agent_vm_id, '') FROM agent_tokens
+WHERE token_hash = ? AND agent_id = ? AND kind = 'bootstrap' AND used_at IS NULL AND revoked_at IS NULL`,
+		tokenHash(plain), agentID).Scan(&userID, &workspace, &vmID)
 	if err != nil {
 		return "", scanErr(err)
 	}
@@ -320,8 +336,8 @@ func (s *Store) ExchangeBootstrap(ctx context.Context, agentID, plain string) (s
 	if err != nil {
 		return "", err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_tokens(token_hash, workspace_id, user_id, agent_id, kind, created_at) VALUES (?, ?, ?, ?, 'agent', ?)`,
-		tokenHash(next), workspace, userID, agentID, stamp); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_tokens(token_hash, workspace_id, user_id, agent_id, kind, agent_vm_id, created_at) VALUES (?, ?, ?, ?, 'agent', ?, ?)`,
+		tokenHash(next), workspace, userID, agentID, vmID, stamp); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -339,7 +355,7 @@ func (s *Store) UserForAgentToken(ctx context.Context, agentID, plain string) (s
 		return "", ErrNotFound
 	}
 	var userID string
-	err := s.db.QueryRowContext(ctx, `SELECT user_id FROM agent_tokens WHERE token_hash = ? AND agent_id = ? AND kind = 'agent' AND used_at IS NULL`,
+	err := s.db.QueryRowContext(ctx, `SELECT user_id FROM agent_tokens WHERE token_hash = ? AND agent_id = ? AND kind = 'agent' AND used_at IS NULL AND revoked_at IS NULL`,
 		tokenHash(plain), agentID).Scan(&userID)
 	if err != nil {
 		return "", scanErr(err)

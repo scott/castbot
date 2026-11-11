@@ -29,7 +29,7 @@ func TestWALAndOwnerColumns(t *testing.T) {
 	if mode != "wal" {
 		t.Fatalf("journal %s", mode)
 	}
-	tables := []string{"credentials", "sessions", "sections", "agents", "threads", "messages", "login_challenges", "trusted_devices", "runs", "agent_bundles", "agent_tokens", "secret_fixtures", "agent_secret_grants", "agent_vms", "user_quotas", "agent_avatars", "import_drafts", "cli_tokens", "journal_entries", "turn_journal_cursor", "approvals", "audit_log"}
+	tables := []string{"credentials", "sessions", "sections", "agents", "threads", "messages", "login_challenges", "trusted_devices", "runs", "agent_bundles", "agent_tokens", "secret_fixtures", "agent_secret_grants", "agent_vms", "user_quotas", "agent_avatars", "import_drafts", "cli_tokens", "journal_entries", "turn_journal_cursor", "approvals", "audit_log", "vm_replacements", "vm_replacement_tokens"}
 	for _, table := range tables {
 		rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
 		if err != nil {

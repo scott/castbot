@@ -158,6 +158,16 @@
       window.setInterval(tick, 1000);
     }
 
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape") {
+        return;
+      }
+      var close = document.querySelector(".rmodal [data-close]");
+      if (close) {
+        close.click();
+      }
+    });
+
     var themeForm = document.getElementById("theme-form");
     if (themeForm) {
       themeForm.addEventListener("change", function () {

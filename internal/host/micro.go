@@ -620,6 +620,193 @@ func (m *MicroVM) PullJournal(ctx context.Context, endpoint, agentToken string, 
 	return m.edgeRead(ctx, http.MethodGet, target, agentToken, nil)
 }
 
+type healthBody struct {
+	Ready   bool   `json:"ready"`
+	Version string `json:"version"`
+	Error   string `json:"error"`
+}
+
+type workspaceList struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+// Health reads /castlet/health with the caller's deadline.
+// 503 with an empty error is still booting. A non-empty error is a hard failure.
+func (m *MicroVM) Health(ctx context.Context, endpoint, agentToken string) (string, error) {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/castlet/health", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+agentToken)
+	req.Header.Set("X-Cast-Authorization", "Bearer "+agentToken)
+	resp, err := m.streamClient().Do(req)
+	if err != nil {
+		return "", ErrGuestWait
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var parsed healthBody
+	_ = json.Unmarshal(raw, &parsed)
+	if resp.StatusCode == http.StatusOK && parsed.Ready {
+		return parsed.Version, nil
+	}
+	if parsed.Error != "" {
+		return "", ErrGuest
+	}
+	return "", ErrGuestWait
+}
+
+// ExportMemory streams GET /castlet/memory. The caller closes the body.
+func (m *MicroVM) ExportMemory(ctx context.Context, endpoint, agentToken string) (io.ReadCloser, error) {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return nil, err
+	}
+	return m.streamOpen(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/castlet/memory", agentToken, nil)
+}
+
+// ImportMemory streams PUT /castlet/memory. The caller's context is the deadline.
+func (m *MicroVM) ImportMemory(ctx context.Context, endpoint, agentToken string, body io.Reader) error {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return err
+	}
+	_, err := m.streamSend(ctx, http.MethodPut, strings.TrimRight(endpoint, "/")+"/castlet/memory", agentToken, body)
+	return err
+}
+
+// ListWorkspace reads GET /castlet/files.
+func (m *MicroVM) ListWorkspace(ctx context.Context, endpoint, agentToken string) ([]WorkspaceFile, error) {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return nil, err
+	}
+	body, code, err := m.streamRead(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/castlet/files", agentToken, nil)
+	if err != nil || code != http.StatusOK {
+		return nil, ErrGuest
+	}
+	var listed []workspaceList
+	if json.Unmarshal(body, &listed) != nil {
+		return nil, ErrGuest
+	}
+	out := make([]WorkspaceFile, 0, len(listed))
+	for _, item := range listed {
+		name := strings.TrimSpace(item.Name)
+		if !safeWorkspace(name) {
+			return nil, ErrGuest
+		}
+		out = append(out, WorkspaceFile{Name: name, Size: item.Size})
+	}
+	return out, nil
+}
+
+// ReadWorkspace streams GET /castlet/files/<name>.
+func (m *MicroVM) ReadWorkspace(ctx context.Context, endpoint, agentToken, name string) (io.ReadCloser, error) {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return nil, err
+	}
+	path, ok := workspacePath(name)
+	if !ok {
+		return nil, ErrGuest
+	}
+	return m.streamOpen(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/castlet/files/"+path, agentToken, nil)
+}
+
+// WriteWorkspace streams PUT /castlet/files/<name>.
+func (m *MicroVM) WriteWorkspace(ctx context.Context, endpoint, agentToken, name string, body io.Reader) error {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return err
+	}
+	path, ok := workspacePath(name)
+	if !ok {
+		return ErrGuest
+	}
+	_, err := m.streamSend(ctx, http.MethodPut, strings.TrimRight(endpoint, "/")+"/castlet/files/"+path, agentToken, body)
+	return err
+}
+
+func safeWorkspace(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.Contains(name, "..") {
+		return false
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func workspacePath(name string) (string, bool) {
+	if !safeWorkspace(name) {
+		return "", false
+	}
+	parts := strings.Split(name, "/")
+	for i, part := range parts {
+		parts[i] = url.PathEscape(part)
+	}
+	return strings.Join(parts, "/"), true
+}
+
+func (m *MicroVM) streamClient() *http.Client {
+	return &http.Client{}
+}
+
+func (m *MicroVM) streamOpen(ctx context.Context, method, target, agentToken string, body io.Reader) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+agentToken)
+	req.Header.Set("X-Cast-Authorization", "Bearer "+agentToken)
+	resp, err := m.streamClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, ErrGuest
+	}
+	return resp.Body, nil
+}
+
+func (m *MicroVM) streamSend(ctx context.Context, method, target, agentToken string, body io.Reader) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+agentToken)
+	req.Header.Set("X-Cast-Authorization", "Bearer "+agentToken)
+	resp, err := m.streamClient().Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return resp.StatusCode, ErrGuest
+	}
+	return resp.StatusCode, nil
+}
+
+func (m *MicroVM) streamRead(ctx context.Context, method, target, agentToken string, body io.Reader) ([]byte, int, error) {
+	rc, err := m.streamOpen(ctx, method, target, agentToken, body)
+	if err != nil {
+		if errors.Is(err, ErrGuest) {
+			return nil, http.StatusBadGateway, err
+		}
+		return nil, 0, err
+	}
+	defer rc.Close()
+	raw, err := io.ReadAll(io.LimitReader(rc, 1<<20))
+	if err != nil {
+		return nil, 0, err
+	}
+	return raw, http.StatusOK, nil
+}
+
 func (m *MicroVM) edgeRead(ctx context.Context, method, target, agentToken string, body []byte) ([]byte, error) {
 	var rdr io.Reader
 	if body != nil {

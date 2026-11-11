@@ -48,9 +48,12 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A local boot has no machine row yet. The guest still needs the token.
-	_ = s.store.SaveVMToken(r.Context(), r.PathValue("id"), token)
-	if userID, err := s.store.UserForAgentToken(r.Context(), r.PathValue("id"), token); err == nil {
-		s.kickProbe(userID, r.PathValue("id"))
+	// A replacement bootstrap is bound to the new row and must not wake the old machine.
+	live, _ := s.store.PlaceVMToken(r.Context(), r.PathValue("id"), token)
+	if live {
+		if userID, err := s.store.UserForAgentToken(r.Context(), r.PathValue("id"), token); err == nil {
+			s.kickProbe(userID, r.PathValue("id"))
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
