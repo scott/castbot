@@ -203,18 +203,37 @@ func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
 	// still live, then mark the row inactive with no approved audit.
 	terminalApprove := runTerminal(runRow.Status) && allow
 	if !row.Sent {
-		// Always re-post first. castlet journals a decision before it forwards
-		// it, so a journal row alone does not prove the runtime got it. A
-		// second post that finds no pending prompt is harmless.
+		// castlet journals every permission/respond before it forwards it,
+		// including the re-post below. So note what the journal held for this
+		// request before posting, and decide only from that if the prompt is
+		// gone. A journal row read back after the post may be our own.
+		s.pullJournalBestEffort(ctx, user.ID, runRow.AgentID)
+		prior, priorFound, err := s.store.JournalDecision(ctx, row.UserID, runRow.AgentID, row.RequestID)
+		if err != nil {
+			return err
+		}
+		// Always re-post. A journal row alone does not prove the runtime got
+		// the decision. A second post that finds no pending prompt is harmless.
 		postErr := s.postPermission(ctx, user, runRow, row.RequestID, allow && !terminalApprove, false)
 		if lostPermission(postErr) {
-			// The prompt is gone. Only now does the journal decide between an
-			// earlier delivery (audit it) and a lost prompt (inactive).
-			s.pullJournalBestEffort(ctx, user.ID, runRow.AgentID)
-			if err := s.confirmJournaled(ctx, runRow, row); err == nil {
-				return nil
-			} else if !errors.Is(err, errNoJournalDecision) {
-				return err
+			// A run that failed or stopped is never audited as approved, even
+			// if an earlier approve was journaled. It ends inactive.
+			if terminalApprove && runRow.Status != "done" {
+				return s.settleLostClaim(ctx, user, runRow, row, false)
+			}
+			// On a finished run recovery posts Deny, so only an approve that
+			// was journaled earlier, by the click, counts as delivered.
+			if terminalApprove && prior != "approved" {
+				return s.settleLostClaim(ctx, user, runRow, row, false)
+			}
+			// The prompt is gone. A decision journaled before this post means
+			// an earlier post was delivered: audit it. Otherwise it is lost.
+			if priorFound {
+				if err := s.confirmJournaled(ctx, runRow, row, prior); err == nil {
+					return nil
+				} else if !errors.Is(err, errNoJournalDecision) {
+					return err
+				}
 			}
 			return s.settleLostClaim(ctx, user, runRow, row, false)
 		}
@@ -271,18 +290,14 @@ func (s *Server) pullJournalBestEffort(ctx context.Context, userID, agentID stri
 }
 
 // confirmJournaled writes the audit row for a claim whose re-post found no
-// pending prompt but whose request the castlet journal shows as decided.
-// errNoJournalDecision means the journal has no approved or denied row for
-// this request on the agent's current machine, so the caller marks it
-// inactive. The audit always follows the row's own status. A journal that
-// disagrees (for example a CLI answer to the same request) is logged and
-// does not overwrite the row.
-func (s *Server) confirmJournaled(ctx context.Context, runRow store.Run, row store.Approval) error {
-	decision, found, err := s.store.JournalDecision(ctx, row.UserID, runRow.AgentID, row.RequestID)
-	if err != nil {
-		return err
-	}
-	if !found || (decision != "approved" && decision != "denied") {
+// pending prompt but whose request the castlet journal already showed as
+// decided before that re-post. decision is that earlier journal decision.
+// errNoJournalDecision means it was not approved or denied, so the caller
+// marks the row inactive. The audit always follows the row's own status. A
+// journal that disagrees (for example a CLI answer to the same request) is
+// logged and does not overwrite the row.
+func (s *Server) confirmJournaled(ctx context.Context, runRow store.Run, row store.Approval, decision string) error {
+	if decision != "approved" && decision != "denied" {
 		return errNoJournalDecision
 	}
 	action := "approval.denied"

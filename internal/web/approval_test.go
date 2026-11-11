@@ -677,12 +677,16 @@ func TestSecretArgNamesStayHidden(t *testing.T) {
 		"JWTToken": "hid-jwttok", "apiKeys": "hid-apikeys", "api_keys": "hid-apikeys2",
 		"password2": "hid-pw2", "db_pass": "hid-dbpass", "DB_PASS": "hid-dbpassup",
 		"SSHKey": "hid-sshacr", "access_keys": "hid-acckeys",
+		"secret_public_key": "hid-secpub", "read_tokens": "hid-readtok", "write_tokens": "hid-writetok",
+		"ssh_key2": "hid-sshkey2", "signing_key_v2": "hid-signv2", "deploy_key_pem": "hid-deploypem",
+		"session_cookie": "hid-sesscookie", "Set-Cookie": "hid-setcookie", "cookies": "hid-cookies",
 	}
 	plainArgs := map[string]string{
 		"partition_key": "show-partition", "input_token_count": "show-intok",
 		"max_tokens_to_sample": "show-maxsample", "cached_tokens": "show-cached",
 		"reasoning_tokens": "show-reasoning", "client_public_key": "show-clientpub",
-		"auth_mode": "show-authmode",
+		"auth_mode": "show-authmode", "pass_rate": "show-passrate", "first_pass": "show-firstpass",
+		"pass_count": "show-passcount", "cookie_domain": "show-cookiedomain", "max_new_tokens": "show-maxnew",
 	}
 	args := map[string]any{"command": "ls demo", "visible": "keep-me", "session": "work", "tokens": 512, "publicKey": "ssh-ed25519 AAAA demo", "ssh_public_key": "ssh-ed25519 AAAA demo", "token_count": 7}
 	for k, v := range plainArgs {
