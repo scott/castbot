@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/scott/castbot/internal/auth"
@@ -43,10 +44,17 @@ const (
 
 // Store scopes every owned-row query by the caller's user id.
 type Store struct {
-	db    *sql.DB
-	now   func() time.Time
-	argon auth.Params
-	dummy string
+	db      *sql.DB
+	clockMu sync.RWMutex
+	now     func() time.Time
+	argon   auth.Params
+	dummy   string
+
+	// restartWanted is the first moment a bundle or secret reload had to wait,
+	// keyed by user and agent. It is process memory, so a restart of this
+	// process starts the wait again. Cleared once the reload is no longer wanted.
+	restartMu     sync.Mutex
+	restartWanted map[string]time.Time
 }
 
 // Options tunes a store. Zero values use the production defaults.
@@ -103,14 +111,22 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // Now returns the store clock.
 func (s *Store) Now() time.Time {
-	if s.now != nil {
-		return s.now().UTC()
+	s.clockMu.RLock()
+	fn := s.now
+	s.clockMu.RUnlock()
+	if fn != nil {
+		return fn().UTC()
 	}
 	return time.Now().UTC()
 }
 
 // SetNow replaces the clock. Tests use it.
-func (s *Store) SetNow(fn func() time.Time) { s.now = fn }
+// The expiry loop reads the clock from another goroutine.
+func (s *Store) SetNow(fn func() time.Time) {
+	s.clockMu.Lock()
+	s.now = fn
+	s.clockMu.Unlock()
+}
 
 // Argon returns the password hashing parameters this store was opened with.
 func (s *Store) Argon() auth.Params { return s.argon }

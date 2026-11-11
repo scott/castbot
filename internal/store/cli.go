@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"time"
 )
 
 // CLIToken is one Cast CLI credential. The raw value is never stored.
@@ -234,6 +235,30 @@ func (s *Store) RevokeCLIToken(ctx context.Context, userID, agentID, tokenID str
 	return nil
 }
 
+// JournalDecision is the latest decision the castlet journal stored for one
+// request on the agent's current machine. Rows are matched on agent_vm_id, so
+// a replaced machine never matches a decision an earlier machine journaled.
+// found is false when that request has no decision row yet.
+func (s *Store) JournalDecision(ctx context.Context, userID, agentID, requestID string) (string, bool, error) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return "", false, nil
+	}
+	key, err := s.agentVMKey(ctx, userID, agentID)
+	if err != nil {
+		return "", false, err
+	}
+	var decision string
+	err = s.db.QueryRowContext(ctx, `SELECT decision FROM journal_entries WHERE agent_vm_id = ? AND user_id = ? AND agent_id = ? AND request_id = ? AND kind = 'decision' AND decision != '' ORDER BY seq DESC LIMIT 1`, key, userID, agentID, requestID).Scan(&decision)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return decision, true, nil
+}
+
 // JournalCursor is the last journal sequence stored for the caller's machine.
 func (s *Store) JournalCursor(ctx context.Context, userID, agentID string) (int, error) {
 	key, err := s.agentVMKey(ctx, userID, agentID)
@@ -293,6 +318,9 @@ func (s *Store) IngestJournal(ctx context.Context, userID, agentID string, entri
 		if err := s.journalMessage(ctx, tx, agent, key, e); err != nil {
 			return 0, err
 		}
+		if err := s.backfillDecisionTool(ctx, tx, agent, key, e); err != nil {
+			return 0, err
+		}
 		if id, ok := cliCaller(e.Caller); ok {
 			_, _ = tx.ExecContext(ctx, `UPDATE cli_tokens SET last_used_at = ? WHERE id = ? AND user_id = ? AND agent_id = ?`,
 				s.stamp(s.Now()), id, userID, agentID)
@@ -314,6 +342,18 @@ WHERE turn_journal_cursor.user_id = excluded.user_id`,
 }
 
 func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmKey string, e JournalEntry) error {
+	if e.Kind == "decision" && strings.TrimSpace(e.Tool) == "" && e.RequestID != "" {
+		var tool string
+		err := tx.QueryRowContext(ctx, `SELECT tool FROM journal_entries WHERE agent_vm_id = ? AND user_id = ? AND request_id = ? AND kind = 'permission' AND tool != '' ORDER BY seq DESC LIMIT 1`, vmKey, agent.UserID, e.RequestID).Scan(&tool)
+		if err == nil && tool != "" {
+			e.Tool = tool
+			if _, err := tx.ExecContext(ctx, `UPDATE journal_entries SET tool = ? WHERE agent_vm_id = ? AND seq = ? AND user_id = ?`, tool, vmKey, e.Seq, agent.UserID); err != nil {
+				return err
+			}
+		} else if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+	}
 	body := journalBody(e)
 	if strings.TrimSpace(body) == "" {
 		return nil
@@ -324,7 +364,22 @@ func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmK
 	// Only a CLI token may open a Cast CLI thread. A control-plane turn
 	// whose session is the web thread id is already stored there.
 	if _, ok := cliCaller(e.Caller); ok {
-		session := e.SessionID
+		session := strings.TrimSpace(e.SessionID)
+		if session == "" && e.Kind == "decision" && e.RequestID != "" {
+			// castlet journals the decision before the permission, with an
+			// empty session. Use the permission's session when it is already
+			// stored. Otherwise wait for that permission to place this row.
+			var permSession string
+			err := tx.QueryRowContext(ctx, `SELECT session_id FROM journal_entries WHERE agent_vm_id = ? AND user_id = ? AND request_id = ? AND kind = 'permission' AND session_id != '' ORDER BY seq DESC LIMIT 1`, vmKey, agent.UserID, e.RequestID).Scan(&permSession)
+			if err == nil {
+				session = permSession
+			} else if err != sql.ErrNoRows {
+				return err
+			}
+			if session == "" {
+				return nil
+			}
+		}
 		if session == "" {
 			session = "cli"
 		}
@@ -350,7 +405,93 @@ func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmK
 			return nil
 		}
 	}
+	// A web turn's permission and decision belong to the approvals table.
+	// Castlet also journals them on the web thread. Leaving them here would
+	// draw a second, read-only card beside the real one.
+	if (e.Kind == "permission" || e.Kind == "decision") && th.Kind != "cli" {
+		return nil
+	}
 	return s.insertJournalMessage(ctx, tx, agent, th, e, body, "web")
+}
+
+// backfillDecisionTool copies a permission's tool onto an earlier decision
+// that castlet stored without one, and rewrites that message.
+func (s *Store) backfillDecisionTool(ctx context.Context, tx *sql.Tx, agent Agent, vmKey string, e JournalEntry) error {
+	if e.Kind != "permission" || strings.TrimSpace(e.Tool) == "" || e.RequestID == "" {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT seq, decision FROM journal_entries WHERE agent_vm_id = ? AND user_id = ? AND request_id = ? AND kind = 'decision' AND tool = ''`, vmKey, agent.UserID, e.RequestID)
+	if err != nil {
+		return err
+	}
+	type prior struct {
+		seq      int
+		decision string
+	}
+	var found []prior
+	for rows.Next() {
+		var row prior
+		if err := rows.Scan(&row.seq, &row.decision); err != nil {
+			rows.Close()
+			return err
+		}
+		found = append(found, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	session := strings.TrimSpace(e.SessionID)
+	var th Thread
+	if session != "" {
+		if _, ok := cliCaller(e.Caller); ok {
+			th, err = s.cliThreadTx(ctx, tx, agent, session)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	// The decision was journaled first. Place it after the ask so the thread
+	// reads asked, then decided.
+	follow := entryStamp(s, e.At)
+	if t, err := parseTime(follow); err == nil && !t.IsZero() {
+		follow = s.stamp(t.Add(time.Second))
+	}
+	for _, row := range found {
+		body := journalBody(JournalEntry{Kind: "decision", Tool: e.Tool, Decision: row.decision})
+		if _, err := tx.ExecContext(ctx, `UPDATE journal_entries SET tool = ? WHERE agent_vm_id = ? AND seq = ? AND user_id = ?`, e.Tool, vmKey, row.seq, agent.UserID); err != nil {
+			return err
+		}
+		var msgID, threadID string
+		err := tx.QueryRowContext(ctx, `SELECT id, thread_id FROM messages WHERE user_id = ? AND journal_seq = ? AND author_kind = 'system' ORDER BY rowid LIMIT 1`, agent.UserID, row.seq).Scan(&msgID, &threadID)
+		if err == sql.ErrNoRows {
+			if th.ID == "" {
+				continue
+			}
+			placed := JournalEntry{Seq: row.seq, Kind: "decision", Tool: e.Tool, Decision: row.decision, At: follow}
+			if err := s.insertJournalMessage(ctx, tx, agent, th, placed, body, "cli"); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET created_at = ? WHERE user_id = ? AND thread_id = ? AND journal_seq = ?`, follow, agent.UserID, th.ID, row.seq); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if th.ID != "" && threadID != th.ID {
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET thread_id = ?, body_md = ?, created_at = ? WHERE id = ? AND user_id = ?`, th.ID, body, follow, msgID, agent.UserID); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE messages SET body_md = ?, created_at = ? WHERE id = ? AND user_id = ?`, body, follow, msgID, agent.UserID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) attachJournalMessage(ctx context.Context, tx *sql.Tx, agent Agent, threadID string, e JournalEntry) (bool, error) {

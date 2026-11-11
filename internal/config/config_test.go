@@ -60,14 +60,19 @@ func TestIgnoresAmbientDigitalOceanToken(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A CASTBOT_DO_TOKEN in the shell running the tests must not decide the
+	// result. Clear it for this test; t.Setenv restores it afterwards.
+	t.Setenv("CASTBOT_DO_TOKEN", "")
+	os.Unsetenv("CASTBOT_DO_TOKEN")
 	t.Setenv("DIGITALOCEAN_ACCESS_TOKEN", "ambient-access-token")
 	t.Setenv("DIGITALOCEAN_TOKEN", "ambient-token")
 	cfg, err := LoadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Never print a token value here. Only say whether one was adopted.
 	if cfg.MachineToken != "" || cfg.Image != "" || cfg.PublicURL != "" {
-		t.Fatalf("ambient token was adopted: %#v", cfg.MachineToken)
+		t.Fatalf("ambient config was adopted: token set %v, image set %v, public URL set %v", cfg.MachineToken != "", cfg.Image != "", cfg.PublicURL != "")
 	}
 	t.Setenv("CASTBOT_DO_TOKEN", "castbot-file-token")
 	cfg, err = LoadFile(path)
@@ -75,7 +80,7 @@ func TestIgnoresAmbientDigitalOceanToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.MachineToken != "castbot-file-token" {
-		t.Fatalf("env token %q", cfg.MachineToken)
+		t.Fatalf("env token not adopted: token set %v", cfg.MachineToken != "")
 	}
 	if strings.Contains(cfg.MachineToken, "ambient") {
 		t.Fatal("ambient token leaked into the machine token")

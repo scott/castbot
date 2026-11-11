@@ -253,6 +253,7 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 /* composer */
 .comp-wrap { width: 100%; max-width: 780px; margin: 0 auto; padding: 8px 28px 22px; display: grid; gap: 8px; }
 .pending-bar { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 12px; border-radius: 12px; background: var(--acc-soft); border: 1px solid var(--acc-line); font-size: 13.5px; font-weight: 600; }
+.pending-bar[hidden] { display: none; }
 .pending-bar .i { color: var(--acc); }
 .comp { border: 1px solid var(--line2); background: var(--surf); border-radius: 16px; padding: 12px 12px 10px 16px; display: grid; gap: 8px; }
 .comp .ph { color: var(--tx3); min-height: 24px; }
@@ -654,9 +655,15 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 .help { font-size: 12.5px; color: var(--tx3); display: flex; align-items: center; gap: 6px; }
 .secret .full { grid-column: 1 / -1; margin-top: -2px; }
 .card > .btn.ghost { justify-self: start; }
-.appr.done { padding: 12px 14px; }
+.appr.done, .appr.settled { padding: 12px 14px; }
+.appr.settled { border-color: var(--line); background: var(--surf); }
+.appr.settled .ico { background: var(--raise); color: var(--tx2); }
 .appr.done .ico { background: var(--ok-soft); color: var(--ok); }
-.appr.done h3 { font-size: 14.5px; }
+.appr.done h3, .appr.settled h3 { font-size: 14.5px; }
+.appr { min-width: 0; max-width: 100%; }
+.appr .kv dd { overflow-wrap: anywhere; min-width: 0; }
+.appr .cmd, .appr .mono { white-space: pre-wrap; word-break: break-word; overflow-x: auto; max-width: 100%; }
+.appr details summary { cursor: pointer; }
 .rt-filter { margin-bottom: 12px; }
 .drawer-b { gap: 14px; padding-top: 16px; }
 .drawer-b textarea.ta { min-height: 72px; }

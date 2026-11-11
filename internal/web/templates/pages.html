@@ -119,7 +119,7 @@
 <div class="sb-top"><a class="brand" href="/" aria-label="castbot home">{{template "mark" .}}{{template "word" .}}</a><a class="ibtn ph-only" href="/settings" aria-label="Settings"><span class="av me xs">{{.Initials}}</span></a><a class="ibtn solid" href="/new-agent" aria-label="New agent">{{template "plus" .}}</a></div>
 <div class="search"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input id="search" type="search" placeholder="Search agents and chats" aria-label="Search agents and chats" autocomplete="off"><kbd>/</kbd></div>
 <nav class="nav" aria-label="Workspace">
-<a href="/approvals"{{if eq .Nav "approvals"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>Approvals{{if gt .Approvals 0}}<span class="cnt">{{.Approvals}}</span>{{end}}</a>
+<a href="/approvals"{{if eq .Nav "approvals"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>Approvals<span id="nav-approvals">{{if gt .Approvals 0}}<span class="cnt">{{.Approvals}}</span>{{end}}</span></a>
 <a href="/routines"{{if eq .Nav "routines"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Routines</a>
 <a href="/files"{{if eq .Nav "files"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.5h-17z"/></svg>Files</a>
 <a href="/usage"{{if eq .Nav "usage"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M16.5 7.5C16 6 14.3 5 12 5 9.5 5 7.5 6.3 7.5 8.3c0 4.7 9 2.7 9 7.4 0 2-2 3.3-4.5 3.3-2.4 0-4.2-1-4.8-2.7"/></svg>Usage<span class="cnt soft">{{.Usage}}</span></a>
@@ -130,7 +130,7 @@
 {{else if eq .Kind "custom"}}<details class="menu"><summary class="ibtn dt-only" aria-label="{{.Name}} options">{{template "dots" $}}</summary><div class="menu-pop"><form method="post" action="/sections/{{.ID}}"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="ui" value="1"><input name="name" maxlength="40" value="{{.Name}}" aria-label="Section name" required><button class="btn sm" type="submit">Rename</button></form><form method="post" action="/sections/{{.ID}}/delete"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="ui" value="1"><button class="btn sm danger-ghost" type="submit">Remove</button></form></div></details>
 {{else}}<button class="ibtn dt-only" type="button" aria-label="Pinned options">{{template "dots" $}}</button>{{end}}
 </h4>
-{{range .Agents}}<a class="ag{{if .On}} on{{end}}" href="/agents/{{.ID}}" data-name="{{.Name}}"{{if .On}} aria-current="page"{{end}}><span class="av {{.Color}}" aria-hidden="true">{{if .Avatar}}<img src="/agents/{{.ID}}/avatar" alt="">{{else}}{{.Letter}}{{end}}<span class="dot {{.Dot}}"></span></span><span class="who"><span class="nm">{{.Name}}</span><span class="sub{{if .SubClass}} {{.SubClass}}{{end}}">{{.Sub}}</span></span>{{if gt .Approvals 0}}<span class="badge apb" aria-label="{{.Approvals}} approval waiting"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>{{.Approvals}}</span>{{else if gt .Unread 0}}<span class="badge acc" aria-label="{{.Unread}} unread">{{.Unread}}</span>{{end}}</a>{{end}}
+{{range .Agents}}<a class="ag{{if .On}} on{{end}}" href="/agents/{{.ID}}" data-name="{{.Name}}"{{if .On}} aria-current="page"{{end}}><span class="av {{.Color}}" aria-hidden="true">{{if .Avatar}}<img src="/agents/{{.ID}}/avatar" alt="">{{else}}{{.Letter}}{{end}}<span class="dot {{.Dot}}"></span></span><span class="who"><span class="nm">{{.Name}}</span><span class="sub{{if .SubClass}} {{.SubClass}}{{end}}">{{.Sub}}</span></span><span id="ag-appr-{{.ID}}">{{if gt .Approvals 0}}<span class="badge apb" aria-label="{{.Approvals}} approval waiting"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>{{.Approvals}}</span>{{else if gt .Unread 0}}<span class="badge acc" aria-label="{{.Unread}} unread">{{.Unread}}</span>{{end}}</span></a>{{end}}
 </div>
 {{end}}{{end}}
 {{if .Empty}}<div class="sb-empty"><span>No agents yet. Each agent you create gets its own machine.</span><a class="btn sm pri" href="/new-agent">{{template "plus" .}}New agent</a></div>{{end}}
@@ -139,15 +139,36 @@
 {{end}}
 
 {{define "messages"}}
-{{range .Messages}}{{if .ShowDay}}<div class="day">{{.Day}}</div>{{end}}{{if eq .Author "system"}}<div class="m-note" id="m-{{.ID}}">{{.Body}}</div>{{else if eq .Author "user"}}<div class="m-user" id="m-{{.ID}}">{{.Body}}</div>{{else}}<div class="m-agent" id="m-{{.ID}}"><span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span><div class="body"><p>{{.Body}}</p>{{if .Stamp}}<span class="stamp">{{.Stamp}}</span>{{end}}</div></div>{{end}}{{end}}
+{{range .Messages}}{{if .ShowDay}}<div class="day">{{.Day}}</div>{{end}}{{if .HasCard}}{{template "approvalCard" .Card}}{{else if eq .Author "system"}}<div class="m-note" id="m-{{.ID}}">{{.Body}}</div>{{else if eq .Author "user"}}<div class="m-user" id="m-{{.ID}}">{{.Body}}</div>{{else}}<div class="m-agent" id="m-{{.ID}}"><span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span><div class="body"><p>{{.Body}}</p>{{if .Stamp}}<span class="stamp">{{.Stamp}}</span>{{end}}</div></div>{{end}}{{end}}
 {{end}}
+
+{{define "approvalCards"}}{{range .Cards}}{{template "approvalCard" .}}{{end}}{{end}}
+
+{{define "approvalChrome"}}
+<div id="pending-bar" class="pending-bar" hx-swap-oob="outerHTML"{{if eq .AgentApprovals 0}} hidden{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span class="grow">{{if eq .AgentApprovals 1}}1 approval waiting{{else if gt .AgentApprovals 1}}{{.AgentApprovals}} approvals waiting{{end}}</span><a class="btn sm" href="/approvals">Review</a></div>
+<span id="nav-approvals" hx-swap-oob="outerHTML">{{if gt .Total 0}}<span class="cnt">{{.Total}}</span>{{end}}</span>
+<span id="bnav-approvals" hx-swap-oob="outerHTML">{{if gt .Total 0}}<span class="badge">{{.Total}}</span>{{end}}</span>
+<span id="ag-appr-{{.AgentID}}" hx-swap-oob="outerHTML">{{if gt .AgentApprovals 0}}<span class="badge apb" aria-label="{{.AgentApprovals}} approval waiting"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>{{.AgentApprovals}}</span>{{else if gt .Unread 0}}<span class="badge acc" aria-label="{{.Unread}} unread">{{.Unread}}</span>{{end}}</span>
+{{if .RunID}}<div class="tail" id="tail-{{.RunID}}" sse-swap="fail" hx-swap="outerHTML" hx-swap-oob="outerHTML"><span class="stamp">{{.Tail}}</span></div>{{end}}
+{{end}}
+
+{{define "approvalCard"}}
+<div class="appr{{if .Approved}} done{{end}}{{if not .Pending}} settled{{end}}" id="appr-{{.ID}}">
+<div class="appr-h"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg></span><h3>{{.Tool}}</h3>{{if .When}}<span class="stamp">{{.When}}</span>{{end}}</div>
+{{if .Args}}<dl class="kv">{{range .Args}}<dt>{{.Key}}</dt><dd>{{if .Hidden}}<span class="faint">Hidden</span>{{else if .Long}}<details><summary>{{.Short}}</summary><pre class="cmd">{{.Value}}</pre></details>{{else}}<span class="mono">{{.Value}}</span>{{end}}</dd>{{end}}</dl>{{end}}
+{{if .Pending}}<div class="appr-f"><form method="post" action="/runs/{{.RunID}}/approvals/{{.ID}}/approve" hx-post="/runs/{{.RunID}}/approvals/{{.ID}}/approve" hx-target="#appr-{{.ID}}" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">Approve</button></form><form method="post" action="/runs/{{.RunID}}/approvals/{{.ID}}/deny" hx-post="/runs/{{.RunID}}/approvals/{{.ID}}/deny" hx-target="#appr-{{.ID}}" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn danger sm" type="submit">Deny</button></form></div>{{else if .Line}}<p class="stamp">{{.Line}}</p>{{end}}
+</div>
+{{end}}
+
+{{define "doneTurn"}}{{template "approvalCards" .}}{{template "messages" .}}{{end}}
 
 {{define "pending"}}
 <div class="m-agent pending" id="run-{{.RunID}}" hx-ext="sse" sse-connect="/runs/{{.RunID}}/events" sse-swap="done" hx-swap="outerHTML" sse-close="stop">
 <span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span>
 <div class="body">
+<div class="cards" sse-swap="card" hx-swap="innerHTML">{{template "approvalCards" .}}</div>
 <p class="stream" sse-swap="text" hx-swap="beforeend"></p>
-<div class="tail" sse-swap="fail" hx-swap="outerHTML"><span class="stamp">{{if .Status}}{{.Status}}{{else}}Replying{{end}}</span></div>
+<div class="tail" id="tail-{{.RunID}}" sse-swap="fail" hx-swap="outerHTML"><span class="stamp">{{if .Cards}}Waiting for approval{{else if .Status}}{{.Status}}{{else}}Replying{{end}}</span></div>
 </div>
 </div>
 {{end}}
@@ -173,7 +194,7 @@
 {{if eq .Tab "chat"}}
 {{if .Threads}}<nav class="thread-switch" aria-label="Threads">{{range .Threads}}<a href="{{.Href}}"{{if .On}} class="on" aria-current="page"{{end}}>{{.Title}}</a>{{end}}</nav>{{end}}
 <div class="ch-body"><div class="msgs" id="msgs">{{template "messages" .}}{{template "lives" .}}</div></div>
-<div class="comp-wrap">{{if gt .Agent.Approvals 0}}<div class="pending-bar"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span class="grow">{{if eq .Agent.Approvals 1}}1 approval waiting{{else}}{{.Agent.Approvals}} approvals waiting{{end}}</span><a class="btn sm" href="/approvals">Review</a></div>{{end}}
+<div class="comp-wrap"><div id="pending-bar" class="pending-bar"{{if eq .Agent.Approvals 0}} hidden{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span class="grow">{{if eq .Agent.Approvals 1}}1 approval waiting{{else if gt .Agent.Approvals 1}}{{.Agent.Approvals}} approvals waiting{{end}}</span><a class="btn sm" href="/approvals">Review</a></div>
 {{if .StartMachine}}<p class="start-note">No machine yet. Start it to chat.</p>{{end}}
 <form class="comp" id="composer" method="post" action="/agents/{{.Agent.ID}}/messages" hx-post="/agents/{{.Agent.ID}}/messages" hx-target="#msgs" hx-swap="beforeend">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -348,6 +369,7 @@
 <header class="ph-top ph-only"><a class="ibtn" href="/" aria-label="Back">{{template "backsvg" .}}</a><span class="t">{{.Title}}</span></header>
 <div class="page-h"><div><h1 class="dt-only">{{.StubTitle}}</h1><p class="sub">{{.StubBody}}</p></div></div>
 <div class="page-b">
+{{if .Cards}}<div class="approvals">{{template "approvalCards" .}}</div>{{end}}
 {{if eq .FormError "confirm-sessions"}}
 <p>{{.Sessions.Confirm}}</p>
 <form method="post" action="/settings/sessions"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn danger-ghost" type="submit">Sign out other sessions</button> <a class="btn" href="/settings">Cancel</a></form>
@@ -358,7 +380,7 @@
 {{define "bnav"}}
 <nav class="bnav" aria-label="Sections">
 <a href="/"{{if eq .Nav "agents"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="9" r="3.2"/><path d="M3.5 19c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"/><path d="M16 6.5a3 3 0 0 1 0 5.6M18 14.8c1.3.6 2.2 2 2.5 4.2"/></svg>Agents</a>
-<a href="/approvals"{{if eq .Nav "approvals"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>Approvals</a>
+<a href="/approvals"{{if eq .Nav "approvals"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>Approvals<span id="bnav-approvals">{{if gt .Approvals 0}}<span class="badge">{{.Approvals}}</span>{{end}}</span></a>
 <a href="/routines"{{if eq .Nav "routines"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Routines</a>
 <a href="/files"{{if eq .Nav "files"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.5h-17z"/></svg>Files</a>
 </nav>

@@ -134,6 +134,19 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		}
 		p.Messages = presentMessages(msgs, p.Agent, s.store.Now(), userLocation(user.Timezone))
 		p.Lives = s.loadLives(r, user, current.ID, p.Agent)
+		if rows, err := s.store.ListThreadApprovals(r.Context(), user.ID, current.ID); err == nil {
+			live := map[string]bool{}
+			for _, lv := range p.Lives {
+				if !lv.Failed {
+					live[lv.RunID] = true
+				}
+			}
+			var cards []cardView
+			for _, row := range rows {
+				cards = append(cards, s.presentApproval(row, user, from(r).CSRF))
+			}
+			p.Messages = weaveCards(p.Messages, cards, live)
+		}
 	}
 	if tab == "machine" || tab == "" {
 		tokens, err := s.store.ListCLITokens(r.Context(), user.ID, agent.ID)
@@ -519,7 +532,15 @@ func (s *Server) workspacePage(w http.ResponseWriter, r *http.Request) {
 		p.Page = "approvals"
 		p.Title = "Approvals"
 		p.StubTitle = "Approvals"
-		p.StubBody = "When an agent needs a yes or no, it shows up here. Nothing is waiting in this version."
+		p.StubBody = "When an agent needs a yes or no, it shows up here. Nothing is waiting."
+		if rows, err := s.store.ListPendingApprovals(r.Context(), user.ID); err == nil {
+			for _, row := range rows {
+				p.Cards = append(p.Cards, s.presentApproval(row, user, from(r).CSRF))
+			}
+			if len(p.Cards) > 0 {
+				p.StubBody = "When an agent needs a yes or no, it shows up here."
+			}
+		}
 	case "/routines":
 		p.Page = "routines"
 		p.Title = "Routines"
@@ -652,7 +673,13 @@ func presentMessages(msgs []store.Message, agent agentView, now time.Time, loc *
 	prev := ""
 	for _, m := range msgs {
 		day := dayLabel(m.CreatedAt, now, loc)
-		v := msgView{ID: m.ID, Author: m.AuthorKind, Body: m.Body, Stamp: clockLabel(m.CreatedAt, loc), Day: day}
+		v := msgView{ID: m.ID, Author: m.AuthorKind, Body: m.Body, Stamp: clockLabel(m.CreatedAt, loc), Day: day, At: m.CreatedAt}
+		if m.AuthorKind == "system" {
+			if card, ok := cliCard(m.Body, m.ID); ok {
+				v.HasCard = true
+				v.Card = card
+			}
+		}
 		if day != "" && day != prev {
 			v.ShowDay = true
 			prev = day
@@ -663,6 +690,30 @@ func presentMessages(msgs []store.Message, agent agentView, now time.Time, loc *
 		}
 		out = append(out, v)
 	}
+	return out
+}
+
+func weaveCards(msgs []msgView, cards []cardView, live map[string]bool) []msgView {
+	var kept []cardView
+	for _, card := range cards {
+		if live[card.RunID] {
+			continue
+		}
+		kept = append(kept, card)
+	}
+	if len(kept) == 0 {
+		return msgs
+	}
+	var out []msgView
+	i := 0
+	for _, card := range kept {
+		for i < len(msgs) && (msgs[i].At == "" || msgs[i].At <= card.At) {
+			out = append(out, msgs[i])
+			i++
+		}
+		out = append(out, msgView{HasCard: true, Card: card, At: card.At})
+	}
+	out = append(out, msgs[i:]...)
 	return out
 }
 

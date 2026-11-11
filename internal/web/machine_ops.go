@@ -66,16 +66,25 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 					}
 				}
 			}
-			if err := s.runReload(ctx, job.UserID, job.AgentID); err != nil {
+			deferRestart, err := s.guestRestart(ctx, job.UserID, job.AgentID, job.RunID)
+			if err != nil {
 				return nil, err
+			}
+			if !deferRestart {
+				if err := s.runReloadExcept(ctx, job.UserID, job.AgentID, job.RunID); err != nil {
+					return nil, err
+				}
 			}
 			endpoint, token, err = s.store.VMCredentials(ctx, job.UserID, job.AgentID)
 			if err != nil && !errors.Is(err, store.ErrNotFound) {
 				return nil, err
 			}
 			if state == "running" && err == nil && endpoint != "" && token != "" {
-				if rerr := s.refreshSecrets(ctx, job.UserID, agent, endpoint, token); rerr != nil {
-					return nil, rerr
+				if !deferRestart {
+					if rerr := s.refreshSecrets(ctx, job.UserID, agent, endpoint, token); rerr != nil {
+						return nil, rerr
+					}
+					s.clearGuestDeferIfIdle(ctx, job.UserID, job.AgentID)
 				}
 				s.pullJournal(ctx, job.UserID, job.AgentID, endpoint, token)
 				return h.Stream(ctx, endpoint, token, req)
@@ -510,6 +519,14 @@ func (s *Server) observedMachine(ctx context.Context, userID, agentID string, vm
 // running. It does nothing unless the machine is running, and it clears the
 // mark only after the reload succeeds.
 func (s *Server) applyPending(ctx context.Context, userID, agentID string) error {
+	return s.applyPendingExcept(ctx, userID, agentID, "")
+}
+
+func (s *Server) applyPendingExcept(ctx context.Context, userID, agentID, exceptRun string) error {
+	deferRestart, err := s.guestRestart(ctx, userID, agentID, exceptRun)
+	if err != nil || deferRestart {
+		return err
+	}
 	version, err := s.store.PendingBundle(ctx, userID, agentID)
 	if err != nil || version == "" {
 		return err
@@ -550,7 +567,11 @@ func (s *Server) applyPending(ctx context.Context, userID, agentID string) error
 		return err
 	}
 	s.pullJournal(rctx, userID, agentID, endpoint, token)
-	return s.store.ClearPendingBundle(ctx, userID, agentID, version)
+	if err := s.store.ClearPendingBundle(ctx, userID, agentID, version); err != nil {
+		return err
+	}
+	s.clearGuestDeferIfIdle(ctx, userID, agentID)
+	return nil
 }
 
 func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Agent) machineView {
@@ -624,6 +645,107 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 		}
 	}
 	return view
+}
+
+// guestRestart reports whether a wanted bundle or secret reload should wait.
+// The wait clock starts only when a reload is actually pending. Nothing is
+// logged when the guest is already on the current bundle and secrets.
+func (s *Server) guestRestart(ctx context.Context, userID, agentID, exceptRun string) (bool, error) {
+	wanted, err := s.restartPending(ctx, userID, agentID)
+	if err != nil {
+		return false, err
+	}
+	if wanted {
+		s.store.NoteRestartWanted(userID, agentID)
+	} else {
+		s.clearGuestDefer(userID, agentID)
+	}
+	wait, reason, err := s.store.DeferGuestRestart(ctx, userID, agentID, exceptRun)
+	if err != nil {
+		return false, err
+	}
+	if wanted && reason != "" {
+		s.noteGuestDefer(ctx, userID, agentID, reason)
+	}
+	return wait, nil
+}
+
+// restartPending is true when a bundle is waiting to reload or the secret
+// fingerprint does not match the set the guest last started with.
+func (s *Server) restartPending(ctx context.Context, userID, agentID string) (bool, error) {
+	version, err := s.store.PendingBundle(ctx, userID, agentID)
+	if err != nil {
+		return false, err
+	}
+	if version != "" {
+		return true, nil
+	}
+	agent, err := s.store.GetAgent(ctx, userID, agentID)
+	if err != nil {
+		return false, err
+	}
+	fp, err := s.secretFingerprint(ctx, userID, agent)
+	if err != nil {
+		return false, err
+	}
+	stored, err := s.store.SecretFP(ctx, userID, agentID)
+	if err != nil {
+		return false, err
+	}
+	return stored != fp, nil
+}
+
+func (s *Server) clearGuestDeferIfIdle(ctx context.Context, userID, agentID string) {
+	pending, err := s.restartPending(ctx, userID, agentID)
+	if err == nil && !pending {
+		s.clearGuestDefer(userID, agentID)
+	}
+}
+
+func (s *Server) clearGuestDefer(userID, agentID string) {
+	s.store.ClearRestartWanted(userID, agentID)
+	s.deferMu.Lock()
+	delete(s.deferLogged, agentID)
+	s.deferMu.Unlock()
+}
+
+// noteGuestDefer logs a reload that is waiting, or one the time bound released.
+// It logs only when a restart is actually pending, and only when that state
+// changes. A forced reload is logged once until the wait is cleared.
+// Fingerprints are hashes. Only a short prefix is logged, never a secret.
+func (s *Server) noteGuestDefer(ctx context.Context, userID, agentID, reason string) {
+	pending, err := s.restartPending(ctx, userID, agentID)
+	if err != nil || !pending {
+		return
+	}
+	event := "guest_restart_deferred"
+	if strings.HasPrefix(reason, "bound:") {
+		event = "guest_restart_forced"
+	}
+	state := event + "\x00" + reason
+	s.deferMu.Lock()
+	if s.deferLogged == nil {
+		s.deferLogged = map[string]string{}
+	}
+	if s.deferLogged[agentID] == state {
+		s.deferMu.Unlock()
+		return
+	}
+	s.deferLogged[agentID] = state
+	s.deferMu.Unlock()
+	oldFP, _ := s.store.SecretFP(ctx, userID, agentID)
+	newFP := ""
+	if agent, err := s.store.GetAgent(ctx, userID, agentID); err == nil {
+		newFP, _ = s.secretFingerprint(ctx, userID, agent)
+	}
+	s.logger().Info("vm", "event", event, "agent_id", agentID, "reason", reason, "old_fp", fpPrefix(oldFP), "new_fp", fpPrefix(newFP))
+}
+
+func fpPrefix(fp string) string {
+	if len(fp) > 8 {
+		return fp[:8]
+	}
+	return fp
 }
 
 // refreshSecrets reloads Cast when the granted secrets or the provider key

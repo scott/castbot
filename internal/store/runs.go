@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 )
 
 // Run is one agent reply. UserID is the owner.
@@ -406,8 +408,200 @@ func (s *Store) FailAbandoned(ctx context.Context, message string) error {
 		if err := rowsAffected(res); err != nil {
 			return err
 		}
+		if err := s.abandonApprovals(ctx, tx, row.userID, row.id, stamp); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
+}
+
+// abandonApprovals marks a failed run's open web approvals inactive.
+// sent stays false so the server can still post Deny when the machine is live.
+func (s *Store) abandonApprovals(ctx context.Context, tx *sql.Tx, userID, runID, stamp string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT a.id, a.workspace_id, r.agent_id, a.tool, a.request_id, a.arguments_json, a.redacted_json FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id WHERE a.user_id = ? AND a.run_id = ? AND a.status = 'pending' AND a.origin = 'web'`, userID, runID)
+	if err != nil {
+		return err
+	}
+	type left struct {
+		id, workspace, agent, tool, request, args, redacted string
+	}
+	var found []left
+	for rows.Next() {
+		var row left
+		if err := rows.Scan(&row.id, &row.workspace, &row.agent, &row.tool, &row.request, &row.args, &row.redacted); err != nil {
+			rows.Close()
+			return err
+		}
+		found = append(found, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	seen := map[string]bool{}
+	for _, row := range found {
+		res, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'inactive', decided_by = 'system:restart', decided_at = ?, sent = 0 WHERE id = ? AND user_id = ? AND status = 'pending'`, stamp, row.id, userID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			continue
+		}
+		if err := s.insertAudit(ctx, tx, row.workspace, userID, "system", "system:restart", "approval.inactive", "approval:"+row.id, auditDetail(row.tool, row.request, json.RawMessage(row.args), decodeList(row.redacted))); err != nil {
+			return err
+		}
+		seen[row.agent] = true
+	}
+	for agentID := range seen {
+		if err := s.syncApprovalCount(ctx, tx, userID, agentID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeferRestartLimit is how long a bundle or secret reload will wait after
+// the first time that reload had to wait. A pending web approval is never
+// forced: its own timeout ends that wait. A tool the user just approved is
+// never forced either, until its result arrives or the run ends. Past the
+// limit, with neither of those, the restart proceeds.
+const DeferRestartLimit = 15 * time.Minute
+
+// Deferral reasons that are never forced by DeferRestartLimit.
+const (
+	reasonPendingApproval = "pending approval"
+	reasonApprovedTool    = "approved tool running"
+)
+
+func restartKey(userID, agentID string) string {
+	return userID + "\x00" + agentID
+}
+
+// NoteRestartWanted records the first moment a bundle or secret reload had
+// to wait for this agent. A later call keeps the original time.
+func (s *Store) NoteRestartWanted(userID, agentID string) {
+	now := s.Now()
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	if s.restartWanted == nil {
+		s.restartWanted = map[string]time.Time{}
+	}
+	key := restartKey(userID, agentID)
+	if _, ok := s.restartWanted[key]; !ok {
+		s.restartWanted[key] = now
+	}
+}
+
+// ClearRestartWanted drops the wait clock after the reload is no longer wanted.
+func (s *Store) ClearRestartWanted(userID, agentID string) {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	delete(s.restartWanted, restartKey(userID, agentID))
+}
+
+func (s *Store) restartWantedAt(userID, agentID string) (time.Time, bool) {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	t, ok := s.restartWanted[restartKey(userID, agentID)]
+	return t, ok
+}
+
+// DeferGuestRestart reports that a bundle or secret reload should wait.
+// A pending web approval, another open run, or a resume of runID would
+// restart the guest and drop the prompt. A brand new run with no offset
+// does not defer, so the next message can apply the change first.
+// The 15 minute bound starts at NoteRestartWanted, not at the run's start.
+// A pending web approval is never forced. An approved tool that is still
+// running in an open run is never forced: the run has had no event since
+// that approval's permission event, so the tool result has not arrived.
+// reason is why it is waiting, or "bound:" plus that reason when the wait
+// has passed DeferRestartLimit and the restart should proceed.
+func (s *Store) DeferGuestRestart(ctx context.Context, userID, agentID, runID string) (bool, string, error) {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return false, "", err
+	}
+	reason, err := s.deferReason(ctx, userID, agentID, runID)
+	if err != nil || reason == "" {
+		return false, "", err
+	}
+	if reason == reasonPendingApproval || reason == reasonApprovedTool {
+		return true, reason, nil
+	}
+	if at, ok := s.restartWantedAt(userID, agentID); ok && !s.Now().Before(at.Add(DeferRestartLimit)) {
+		return false, "bound:" + reason, nil
+	}
+	return true, reason, nil
+}
+
+func (s *Store) deferReason(ctx context.Context, userID, agentID, runID string) (string, error) {
+	var reason string
+	consider := func(why, stamp string) error {
+		if stamp == "" {
+			return nil
+		}
+		if _, err := parseTime(stamp); err != nil {
+			return err
+		}
+		if reason == "" {
+			reason = why
+		}
+		return nil
+	}
+	var created string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MIN(a.created_at), '') FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id WHERE a.user_id = ? AND r.agent_id = ? AND a.status = 'pending' AND a.origin = 'web'`, userID, agentID).Scan(&created); err != nil {
+		return "", err
+	}
+	if err := consider(reasonPendingApproval, created); err != nil {
+		return "", err
+	}
+	// An approved web tool call whose result has not arrived. The permission
+	// event is the last event of that run, so nothing after the approval has
+	// come back yet. Restarting the guest now would kill the tool.
+	var decided string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MIN(COALESCE(NULLIF(a.decided_at, ''), a.created_at)), '')
+FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id
+WHERE a.user_id = ? AND r.agent_id = ? AND a.status = 'approved' AND a.origin = 'web'
+  AND r.status IN ('streaming', 'waiting_approval')
+  AND NOT EXISTS (
+    SELECT 1 FROM run_events p JOIN run_events e ON e.run_id = p.run_id AND e.seq > p.seq
+    WHERE p.run_id = r.id AND p.kind = 'permission' AND json_extract(p.payload_json, '$.approvalId') = a.id)`, userID, agentID).Scan(&decided); err != nil {
+		return "", err
+	}
+	if err := consider(reasonApprovedTool, decided); err != nil {
+		return "", err
+	}
+	q := `SELECT COALESCE(MIN(started_at), '') FROM runs WHERE user_id = ? AND agent_id = ? AND status IN ('streaming', 'waiting_approval')`
+	args := []any{userID, agentID}
+	if runID != "" {
+		q += ` AND id != ?`
+		args = append(args, runID)
+	}
+	var started string
+	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&started); err != nil {
+		return "", err
+	}
+	if err := consider("another run is open", started); err != nil {
+		return "", err
+	}
+	if runID != "" {
+		var status, runStarted string
+		var offset int
+		err := s.db.QueryRowContext(ctx, `SELECT status, stream_offset, started_at FROM runs WHERE id = ? AND user_id = ?`, runID, userID).Scan(&status, &offset, &runStarted)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", err
+		}
+		if err == nil && (status == "waiting_approval" || offset > 0) {
+			if err := consider("this run has already started", runStarted); err != nil {
+				return "", err
+			}
+		}
+	}
+	return reason, nil
 }
 
 // SetMessageRun links one of the caller's messages to a run they own.

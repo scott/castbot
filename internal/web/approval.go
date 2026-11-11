@@ -1,0 +1,777 @@
+package web
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/scott/castbot/internal/host"
+	"github.com/scott/castbot/internal/run"
+	"github.com/scott/castbot/internal/runtime"
+	"github.com/scott/castbot/internal/store"
+)
+
+const (
+	decisionTimeout = 45 * time.Second
+	denyTimeout     = 15 * time.Second
+	confirmGrace    = 30 * time.Second
+)
+
+var errMachinePaused = errors.New("machine is paused")
+
+var errNoJournalDecision = errors.New("no journaled decision")
+
+func approvalWaitFromEnv() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("CASTBOT_APPROVAL_TIMEOUT"))
+	if raw == "" {
+		return run.DefaultApprovalWait
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < time.Second || d > 24*time.Hour {
+		return run.DefaultApprovalWait
+	}
+	return d
+}
+
+// SetApprovalTimeout sets how long a pending approval stays open.
+// The wait is enforced on the server. Closing the browser does not deny.
+func (s *Server) SetApprovalTimeout(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.approvalFor = d
+	s.mu.Unlock()
+	if s.runs != nil {
+		s.runs.SetApprovalTimeout(d)
+	}
+}
+
+func (s *Server) approvalTimeout() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.approvalFor <= 0 {
+		return run.DefaultApprovalWait
+	}
+	return s.approvalFor
+}
+
+func (s *Server) expireLoop() {
+	s.recoverDecisions(context.Background(), 0)
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-s.base.Done():
+			return
+		case <-tick.C:
+			// Mark expirations even while a post is still running, so a slow
+			// or unreachable guest cannot hold the next deadline back.
+			_, _ = s.store.ExpireDue(s.base)
+			s.kickApprovalFollowUp()
+		}
+	}
+}
+
+// kickApprovalFollowUp posts at most one denial and one recovery at a time.
+// The ticker keeps marking rows due while that post is in flight.
+func (s *Server) kickApprovalFollowUp() {
+	s.sweepMu.Lock()
+	if s.sweeping {
+		s.sweepMu.Unlock()
+		return
+	}
+	s.sweeping = true
+	s.sweepMu.Unlock()
+	go func() {
+		defer func() {
+			s.sweepMu.Lock()
+			s.sweeping = false
+			s.sweepMu.Unlock()
+		}()
+		s.ExpireDue(context.Background())
+		s.recoverDecisions(context.Background(), confirmGrace)
+	}()
+}
+
+// ExpireDue posts Deny for approvals whose wait has elapsed.
+// A second call does not post twice. A paused machine is not woken.
+// Each post has its own timeout, and a failure backs off.
+func (s *Server) ExpireDue(ctx context.Context) {
+	rows, err := s.store.ExpireDue(ctx)
+	if err != nil {
+		return
+	}
+	s.postDenials(ctx, rows, true)
+	left, err := s.store.ListRestartDenials(ctx)
+	if err != nil {
+		return
+	}
+	s.postDenials(ctx, left, false)
+}
+
+func (s *Server) postDenials(ctx context.Context, rows []store.Approval, resume bool) {
+	for _, row := range rows {
+		if ctx.Err() != nil || s.base.Err() != nil {
+			return
+		}
+		if !s.denyReady(row.ID) || !s.markBusy(row.ID) {
+			continue
+		}
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), denyTimeout)
+		err := s.deliverDenial(callCtx, row, resume)
+		cancel()
+		s.clearBusy(row.ID)
+		if err != nil {
+			s.noteDenyFail(row.ID)
+		} else {
+			s.clearDeny(row.ID)
+		}
+		// One post per call. The next tick takes the next row, so a slow
+		// guest cannot hold every other denial behind it.
+		return
+	}
+}
+
+func (s *Server) deliverDenial(ctx context.Context, row store.Approval, resume bool) error {
+	runRow, err := s.store.GetRun(ctx, row.UserID, row.RunID)
+	if err != nil {
+		return err
+	}
+	user, err := s.store.GetUser(ctx, row.UserID)
+	if err != nil {
+		return err
+	}
+	postErr := s.postPermission(ctx, user, runRow, row.RequestID, false, false)
+	if postErr != nil && !lostPermission(postErr) {
+		return postErr
+	}
+	if err := s.store.MarkSent(ctx, row.UserID, row.ID); err != nil {
+		return err
+	}
+	if resume && !runTerminal(runRow.Status) {
+		_ = s.store.ResumeAfterApproval(ctx, row.UserID, row.RunID)
+	}
+	s.runs.Hub.Notify(row.RunID)
+	return nil
+}
+
+// recoverDecisions re-posts claims that never confirmed, and writes an audit
+// row when the post landed but the record did not. grace is how long a fresh
+// claim is left to the click that owns it. Startup uses zero.
+func (s *Server) recoverDecisions(ctx context.Context, grace time.Duration) {
+	rows, err := s.store.ListUnconfirmed(ctx, s.store.Now().Add(-grace))
+	if err != nil {
+		return
+	}
+	for _, row := range rows {
+		if ctx.Err() != nil || s.base.Err() != nil {
+			return
+		}
+		if !s.denyReady(row.ID) || !s.markBusy(row.ID) {
+			continue
+		}
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), denyTimeout)
+		err := s.confirmClaim(callCtx, row)
+		cancel()
+		s.clearBusy(row.ID)
+		if err != nil {
+			s.noteDenyFail(row.ID)
+		} else {
+			s.clearDeny(row.ID)
+		}
+		return
+	}
+}
+
+func (s *Server) confirmClaim(ctx context.Context, row store.Approval) error {
+	runRow, err := s.store.GetRun(ctx, row.UserID, row.RunID)
+	if err != nil {
+		return err
+	}
+	user, err := s.store.GetUser(ctx, row.UserID)
+	if err != nil {
+		return err
+	}
+	allow := row.Status == "approved"
+	// A failed or finished run must not be approved. Deny if the prompt is
+	// still live, then mark the row inactive with no approved audit.
+	terminalApprove := runTerminal(runRow.Status) && allow
+	if !row.Sent {
+		// castlet journals every permission/respond before it forwards it,
+		// including the re-post below. So note what the journal held for this
+		// request before posting, and decide only from that if the prompt is
+		// gone. A journal row read back after the post may be our own.
+		s.pullJournalBestEffort(ctx, user.ID, runRow.AgentID)
+		prior, priorFound, err := s.store.JournalDecision(ctx, row.UserID, runRow.AgentID, row.RequestID)
+		if err != nil {
+			return err
+		}
+		// Always re-post. A journal row alone does not prove the runtime got
+		// the decision. A second post that finds no pending prompt is harmless.
+		postErr := s.postPermission(ctx, user, runRow, row.RequestID, allow && !terminalApprove, false)
+		if lostPermission(postErr) {
+			// A run that failed or stopped is never audited as approved, even
+			// if an earlier approve was journaled. It ends inactive.
+			if terminalApprove && runRow.Status != "done" {
+				return s.settleLostClaim(ctx, user, runRow, row, false)
+			}
+			// On a finished run recovery posts Deny, so only an approve that
+			// was journaled earlier, by the click, counts as delivered.
+			if terminalApprove && prior != "approved" {
+				return s.settleLostClaim(ctx, user, runRow, row, false)
+			}
+			// The prompt is gone. A decision journaled before this post means
+			// an earlier post was delivered: audit it. Otherwise it is lost.
+			if priorFound {
+				if err := s.confirmJournaled(ctx, runRow, row, prior); err == nil {
+					return nil
+				} else if !errors.Is(err, errNoJournalDecision) {
+					return err
+				}
+			}
+			return s.settleLostClaim(ctx, user, runRow, row, false)
+		}
+		if postErr != nil {
+			return postErr
+		}
+		if terminalApprove {
+			return s.settleLostClaim(ctx, user, runRow, row, false)
+		}
+	} else if terminalApprove {
+		return s.settleLostClaim(ctx, user, runRow, row, false)
+	}
+	action := "approval.denied"
+	if allow {
+		action = "approval.approved"
+	}
+	if err := s.store.WriteDecisionAudit(ctx, row.UserID, row.ID, action, "user", row.DecidedBy); err != nil {
+		return err
+	}
+	if err := s.store.MarkSent(ctx, row.UserID, row.ID); err != nil {
+		return err
+	}
+	if !runTerminal(runRow.Status) {
+		_ = s.store.ResumeAfterApproval(ctx, row.UserID, row.RunID)
+	}
+	s.runs.Hub.Notify(row.RunID)
+	return nil
+}
+
+// settleLostClaim matches the click path when the prompt is gone or the run
+// has already failed. deny posts Deny first when the guest may still be waiting.
+func (s *Server) settleLostClaim(ctx context.Context, user store.User, runRow store.Run, row store.Approval, deny bool) error {
+	if deny && !row.Sent {
+		postErr := s.postPermission(ctx, user, runRow, row.RequestID, false, false)
+		if postErr != nil && !lostPermission(postErr) {
+			return postErr
+		}
+	}
+	if _, err := s.store.MarkInactive(ctx, row.UserID, row.ID, "user", row.DecidedBy); err != nil {
+		return err
+	}
+	s.runs.Hub.Notify(row.RunID)
+	return nil
+}
+
+// pullJournalBestEffort refreshes the stored castlet journal when this agent
+// has a machine. A missing machine leaves the rows already on disk.
+func (s *Server) pullJournalBestEffort(ctx context.Context, userID, agentID string) {
+	endpoint, token, err := s.store.VMCredentials(ctx, userID, agentID)
+	if err != nil || endpoint == "" || token == "" {
+		return
+	}
+	s.pullJournal(ctx, userID, agentID, endpoint, token)
+}
+
+// confirmJournaled writes the audit row for a claim whose re-post found no
+// pending prompt but whose request the castlet journal already showed as
+// decided before that re-post. decision is that earlier journal decision.
+// errNoJournalDecision means it was not approved or denied, so the caller
+// marks the row inactive. The audit always follows the row's own status. A
+// journal that disagrees (for example a CLI answer to the same request) is
+// logged and does not overwrite the row.
+func (s *Server) confirmJournaled(ctx context.Context, runRow store.Run, row store.Approval, decision string) error {
+	if decision != "approved" && decision != "denied" {
+		return errNoJournalDecision
+	}
+	action := "approval.denied"
+	if row.Status == "approved" {
+		action = "approval.approved"
+	}
+	if decision != row.Status {
+		s.logger().Warn("approval journal mismatch", "approval_id", row.ID, "run_id", row.RunID, "row_status", row.Status, "journal_decision", decision)
+	}
+	if err := s.store.WriteDecisionAudit(ctx, row.UserID, row.ID, action, "user", row.DecidedBy); err != nil {
+		return err
+	}
+	if err := s.store.MarkSent(ctx, row.UserID, row.ID); err != nil {
+		return err
+	}
+	if !runTerminal(runRow.Status) {
+		_ = s.store.ResumeAfterApproval(ctx, row.UserID, runRow.ID)
+	}
+	s.runs.Hub.Notify(row.RunID)
+	return nil
+}
+
+func (s *Server) approveRun(w http.ResponseWriter, r *http.Request) {
+	s.decide(w, r, true)
+}
+
+func (s *Server) denyRun(w http.ResponseWriter, r *http.Request) {
+	s.decide(w, r, false)
+}
+
+func (s *Server) getApproval(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	row, err := s.store.GetApproval(r.Context(), user.ID, r.PathValue("id"))
+	if s.missing(w, err) {
+		return
+	}
+	body, err := execTemplate("approvalCard", s.presentApproval(row, user, from(r).CSRF))
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(body))
+}
+
+func (s *Server) decide(w http.ResponseWriter, r *http.Request, allow bool) {
+	user, _, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	status := "denied"
+	action := "approval.denied"
+	if allow {
+		status = "approved"
+		action = "approval.approved"
+	}
+	// The run id is checked before the claim. A mismatched URL must not
+	// stick the row at approved with nothing posted.
+	runRow, err := s.store.GetRun(r.Context(), user.ID, r.PathValue("id"))
+	if s.missing(w, err) {
+		return
+	}
+	current, err := s.store.GetApproval(r.Context(), user.ID, r.PathValue("approval"))
+	if s.missing(w, err) {
+		return
+	}
+	if current.RunID != runRow.ID {
+		writeText(w, http.StatusNotFound, "Not found\n")
+		return
+	}
+	if current.Status != "pending" {
+		s.writeCard(w, user, current, from(r).CSRF)
+		return
+	}
+	if runTerminal(runRow.Status) {
+		next, changed, merr := s.store.MarkPendingInactive(r.Context(), user.ID, current.ID, "user", user.ID)
+		if merr != nil {
+			s.writeCard(w, user, current, from(r).CSRF)
+			return
+		}
+		if changed {
+			s.runs.Hub.Notify(runRow.ID)
+		}
+		s.writeCard(w, user, next, from(r).CSRF)
+		return
+	}
+	row, claimed, err := s.store.ClaimDecision(r.Context(), user.ID, current.ID, runRow.ID, status, user.ID)
+	if s.missing(w, err) {
+		return
+	}
+	if !claimed {
+		s.writeCard(w, user, row, from(r).CSRF)
+		return
+	}
+	// The post, the release, and the audit use a context the tab cannot cancel.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), decisionTimeout)
+	defer cancel()
+	if !s.markBusy(row.ID) {
+		s.writeCard(w, user, row, from(r).CSRF)
+		return
+	}
+	defer s.clearBusy(row.ID)
+	if err := s.postPermission(ctx, user, runRow, row.RequestID, allow, true); err != nil {
+		if lostPermission(err) {
+			next, merr := s.store.MarkInactive(ctx, user.ID, row.ID, "user", user.ID)
+			if merr != nil {
+				s.writeCard(w, user, row, from(r).CSRF)
+				return
+			}
+			s.runs.Hub.Notify(runRow.ID)
+			s.writeCard(w, user, next, from(r).CSRF)
+			return
+		}
+		_ = s.store.ReleaseDecision(ctx, user.ID, row.ID, status, user.ID)
+		writeText(w, http.StatusBadGateway, "The agent did not take that decision.\n")
+		return
+	}
+	if err := s.store.WriteDecisionAudit(ctx, user.ID, row.ID, action, "user", user.ID); err != nil {
+		writeText(w, http.StatusInternalServerError, "Error\n")
+		return
+	}
+	if err := s.store.MarkSent(ctx, user.ID, row.ID); err != nil {
+		writeText(w, http.StatusInternalServerError, "Error\n")
+		return
+	}
+	_ = s.store.ResumeAfterApproval(ctx, user.ID, runRow.ID)
+	next, err := s.store.GetApproval(ctx, user.ID, row.ID)
+	if err != nil {
+		s.runs.Hub.Notify(runRow.ID)
+		return
+	}
+	s.runs.Hub.Notify(runRow.ID)
+	s.writeCard(w, user, next, from(r).CSRF)
+}
+
+func (s *Server) writeCard(w http.ResponseWriter, user store.User, row store.Approval, csrf string) {
+	body, err := execTemplate("approvalCard", s.presentApproval(row, user, csrf))
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	if chrome, cerr := s.approvalChrome(context.Background(), user, row.AgentID, row.RunID); cerr == nil {
+		body += chrome
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(body))
+}
+
+func lostPermission(err error) bool {
+	return errors.Is(err, host.ErrNoRequest) || errors.Is(err, runtime.ErrNoRequest)
+}
+
+type permissionResponder interface {
+	Respond(ctx context.Context, requestID string, allow bool) error
+}
+
+func (s *Server) postPermission(ctx context.Context, user store.User, runRow store.Run, requestID string, allow, wake bool) error {
+	s.mu.Lock()
+	h := s.machine
+	client := s.client
+	s.mu.Unlock()
+	if h != nil {
+		vm, err := s.store.LiveVM(ctx, user.ID, runRow.AgentID)
+		if err == nil {
+			return s.postMachine(ctx, h, user.ID, runRow.AgentID, vm, requestID, allow, wake)
+		}
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+	}
+	responder, ok := client.(permissionResponder)
+	if !ok || responder == nil {
+		return errors.New("no runtime")
+	}
+	return responder.Respond(ctx, requestID, allow)
+}
+
+func (s *Server) postMachine(ctx context.Context, h host.AgentHost, userID, agentID string, vm store.VM, requestID string, allow, wake bool) error {
+	state, _ := s.observedMachine(ctx, userID, agentID, vm)
+	endpoint, token, err := s.store.VMCredentials(ctx, userID, agentID)
+	if err != nil {
+		return err
+	}
+	if state == "paused" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
+		if !wake {
+			return errMachinePaused
+		}
+		s.noteVM(ctx, userID, agentID, vm.MicroVMID, store.EventWakeRequested, 0)
+		wakeAt := time.Now()
+		got, werr := h.Wake(ctx, vm.MicroVMID)
+		if werr != nil {
+			return werr
+		}
+		if err := s.store.ApplyVMState(ctx, userID, agentID, got.State, got.Endpoint, ""); err != nil {
+			return err
+		}
+		if got.State == "running" {
+			s.noteVM(ctx, userID, agentID, vm.MicroVMID, store.EventWakeRunning, time.Since(wakeAt))
+		}
+		if got.Endpoint != "" {
+			endpoint = got.Endpoint
+		}
+		if token != "" && endpoint != "" {
+			if perr := h.Probe(ctx, endpoint, token); perr == nil {
+				s.noteVM(ctx, userID, agentID, vm.MicroVMID, store.EventWakeReady, time.Since(wakeAt))
+			}
+		}
+	}
+	if endpoint == "" || token == "" {
+		return errors.New("machine is not ready")
+	}
+	return h.Approve(ctx, endpoint, token, requestID, allow)
+}
+
+func (s *Server) presentApproval(row store.Approval, user store.User, csrf string) cardView {
+	loc := userLocation(user.Timezone)
+	view := cardView{
+		ID: row.ID, RunID: row.RunID, Tool: row.Tool, CSRF: csrf,
+		Args: approvalArgs(row.Arguments, row.Redacted),
+		When: clockLabel(row.CreatedAt, loc),
+	}
+	if view.Tool == "" {
+		view.Tool = "Approval"
+	}
+	switch row.Status {
+	case "pending":
+		if row.Origin == "web" {
+			view.Pending = true
+		} else {
+			view.ReadOnly = true
+			view.Line = "Answer it in the Cast CLI."
+		}
+	case "approved":
+		view.Approved = true
+		when := clockLabel(row.DecidedAt, loc)
+		if when == "" {
+			view.Line = "Approved by you"
+		} else {
+			view.Line = "Approved by you at " + when
+			view.When = when
+		}
+	case "denied":
+		view.Line = "Denied"
+		if when := clockLabel(row.DecidedAt, loc); when != "" {
+			view.When = when
+		}
+	case "expired":
+		view.Line = "Expired"
+		if when := clockLabel(row.DecidedAt, loc); when != "" {
+			view.When = when
+		}
+	default:
+		view.Line = "This request is no longer active."
+		if when := clockLabel(row.DecidedAt, loc); when != "" {
+			view.When = when
+		}
+	}
+	view.At = row.CreatedAt
+	return view
+}
+
+func approvalArgs(raw, redacted string) []argView {
+	var out []argView
+	dec := json.NewDecoder(strings.NewReader(raw))
+	tok, err := dec.Token()
+	if err == nil {
+		if d, ok := tok.(json.Delim); ok && d == '{' {
+			for dec.More() {
+				keyTok, err := dec.Token()
+				if err != nil {
+					break
+				}
+				key, _ := keyTok.(string)
+				var val json.RawMessage
+				if err := dec.Decode(&val); err != nil {
+					break
+				}
+				out = append(out, argText(key, strings.TrimSpace(string(val))))
+			}
+		}
+	}
+	var hidden []string
+	if json.Unmarshal([]byte(redacted), &hidden) == nil {
+		for _, key := range hidden {
+			out = append(out, argView{Key: key, Hidden: true})
+		}
+	}
+	return out
+}
+
+func argText(key, raw string) argView {
+	value := raw
+	if len(raw) >= 2 && raw[0] == '"' {
+		var s string
+		if json.Unmarshal([]byte(raw), &s) == nil {
+			value = s
+		}
+	}
+	view := argView{Key: key, Value: value}
+	if utf8.RuneCountInString(value) > 80 {
+		view.Long = true
+		view.Short = clipRunes(value, 80) + "..."
+	}
+	return view
+}
+
+func clipRunes(s string, n int) string {
+	if n <= 0 || utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	i := 0
+	for k := range s {
+		if i == n {
+			return s[:k]
+		}
+		i++
+	}
+	return s
+}
+
+func (s *Server) cardsFor(ctx context.Context, user store.User, runID, csrf string) ([]cardView, error) {
+	rows, err := s.store.ListRunApprovals(ctx, user.ID, runID)
+	if err != nil {
+		return nil, err
+	}
+	var out []cardView
+	for _, row := range rows {
+		out = append(out, s.presentApproval(row, user, csrf))
+	}
+	return out, nil
+}
+
+func (s *Server) cardsHTML(ctx context.Context, user store.User, runID, csrf string) (string, error) {
+	cards, err := s.cardsFor(ctx, user, runID, csrf)
+	if err != nil {
+		return "", err
+	}
+	if len(cards) == 0 {
+		return "", nil
+	}
+	body, err := execTemplate("approvalCards", page{Cards: cards})
+	if err != nil {
+		return "", err
+	}
+	chrome, err := s.approvalChrome(ctx, user, "", runID)
+	if err != nil {
+		return body, nil
+	}
+	return body + chrome, nil
+}
+
+func (s *Server) approvalChrome(ctx context.Context, user store.User, agentID, runID string) (string, error) {
+	if agentID == "" && runID != "" {
+		runRow, err := s.store.GetRun(ctx, user.ID, runID)
+		if err != nil {
+			return "", err
+		}
+		agentID = runRow.AgentID
+	}
+	agent, err := s.store.GetAgent(ctx, user.ID, agentID)
+	if err != nil {
+		return "", err
+	}
+	total, err := s.store.PendingApprovalCount(ctx, user.ID)
+	if err != nil {
+		return "", err
+	}
+	tail := "Replying"
+	if runID != "" {
+		rows, err := s.store.ListRunApprovals(ctx, user.ID, runID)
+		if err != nil {
+			return "", err
+		}
+		for _, row := range rows {
+			if row.Status == "pending" && row.Origin == "web" {
+				tail = "Waiting for approval"
+				break
+			}
+		}
+	}
+	return execTemplate("approvalChrome", chromeView{
+		AgentID: agent.ID, RunID: runID, AgentApprovals: agent.Approvals,
+		Total: total, Unread: agent.Unread, Tail: tail,
+	})
+}
+
+func (s *Server) markBusy(id string) bool {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	if s.busy == nil {
+		s.busy = map[string]struct{}{}
+	}
+	if _, ok := s.busy[id]; ok {
+		return false
+	}
+	s.busy[id] = struct{}{}
+	return true
+}
+
+func (s *Server) clearBusy(id string) {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	delete(s.busy, id)
+}
+
+func (s *Server) denyReady(id string) bool {
+	s.denyMu.Lock()
+	defer s.denyMu.Unlock()
+	next, ok := s.denyNext[id]
+	return !ok || !time.Now().Before(next)
+}
+
+func (s *Server) noteDenyFail(id string) {
+	s.denyMu.Lock()
+	defer s.denyMu.Unlock()
+	if s.denyFails == nil {
+		s.denyFails = map[string]int{}
+		s.denyNext = map[string]time.Time{}
+	}
+	s.denyFails[id]++
+	shift := s.denyFails[id]
+	if shift > 5 {
+		shift = 5
+	}
+	wait := time.Second << shift
+	if wait > time.Minute {
+		wait = time.Minute
+	}
+	s.denyNext[id] = time.Now().Add(wait)
+}
+
+func (s *Server) clearDeny(id string) {
+	s.denyMu.Lock()
+	defer s.denyMu.Unlock()
+	delete(s.denyFails, id)
+	delete(s.denyNext, id)
+}
+
+func cliCard(body, id string) (cardView, bool) {
+	body = strings.TrimSpace(body)
+	tool := ""
+	approved := false
+	switch {
+	case strings.HasPrefix(body, "An approval was asked"):
+		tool = "Approval"
+		rest := strings.TrimPrefix(body, "An approval was asked for ")
+		if rest != body {
+			tool = strings.TrimSuffix(rest, ". Answer it in the Cast CLI.")
+		}
+	case strings.HasPrefix(body, "An approval for ") && strings.Contains(body, " was "):
+		rest := strings.TrimPrefix(body, "An approval for ")
+		tool = rest
+		if i := strings.Index(rest, " was "); i >= 0 {
+			tool = rest[:i]
+		}
+		approved = strings.Contains(body, "was approved")
+	case strings.HasPrefix(body, "An approval was "):
+		tool = "Approval"
+		approved = strings.Contains(body, "was approved")
+	default:
+		return cardView{}, false
+	}
+	tool = strings.TrimSpace(tool)
+	if tool == "" {
+		tool = "Approval"
+	}
+	return cardView{
+		ID: id, Tool: tool, Line: body, ReadOnly: true, Approved: approved,
+	}, true
+}

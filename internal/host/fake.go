@@ -43,6 +43,16 @@ type Fake struct {
 	ListErr error
 	// WakeWait blocks Wake until it is closed or the context ends.
 	WakeWait <-chan struct{}
+	// Approvals records permission/respond calls.
+	Approvals []ApprovalCall
+	// ApproveErr is returned from Approve after the call is recorded.
+	ApproveErr error
+}
+
+// ApprovalCall is one permission/respond the fake observed.
+type ApprovalCall struct {
+	RequestID string
+	Allow     bool
 }
 
 // NewFake returns an empty host.
@@ -233,11 +243,22 @@ func (f *Fake) Stream(context.Context, string, string, runtime.Send) (runtime.St
 	return &frameStream{frames: frames}, nil
 }
 
-// Approve counts an edge call.
-func (f *Fake) Approve(context.Context, string, string, string, bool) error {
+// Decisions returns recorded permission/respond calls.
+func (f *Fake) Decisions() (calls []string, approvals []ApprovalCall) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.Calls...), append([]ApprovalCall(nil), f.Approvals...)
+}
+
+// Approve counts an edge call and records the decision.
+func (f *Fake) Approve(_ context.Context, _, _, requestID string, allow bool) error {
 	f.edge()
-	f.note("approve")
-	return nil
+	f.mu.Lock()
+	f.Calls = append(f.Calls, "approve")
+	f.Approvals = append(f.Approvals, ApprovalCall{RequestID: requestID, Allow: allow})
+	err := f.ApproveErr
+	f.mu.Unlock()
+	return err
 }
 
 // Cancel does not touch the edge.

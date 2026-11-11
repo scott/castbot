@@ -427,27 +427,278 @@ func rejectDuplicates(n *yaml.Node, path string) error {
 	return nil
 }
 
+// SecretKey reports whether a config or argument key must not be shown.
+func SecretKey(key string) bool { return secretKey(key) }
+
 func secretKey(key string) bool {
-	k := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
-	switch k {
-	case "max_tokens", "max_output_tokens", "max_input_tokens",
-		"max_completion_tokens", "max_new_tokens",
-		"prompt_tokens", "completion_tokens", "input_tokens", "output_tokens",
-		"total_tokens", "sort_key":
-		return false
-	case "env", "headers", "token", "secret", "password", "api_key", "apikey",
-		"access_token", "refresh_token", "authorization", "private_key",
-		"client_secret", "credentials", "auth_token", "secret_key":
-		return true
-	default:
-		if strings.Contains(k, "token") || strings.Contains(k, "secret") ||
-			strings.Contains(k, "password") || strings.Contains(k, "passwd") ||
-			strings.Contains(k, "api_key") || strings.Contains(k, "apikey") ||
-			strings.Contains(k, "credential") || strings.HasSuffix(k, "_key") {
-			return true
-		}
+	k := normalizeSecretKey(key)
+	if k == "" {
 		return false
 	}
+	parts := strings.Split(k, "_")
+	// A trailing "keys" reads like "key", so api_keys matches api_key.
+	if len(parts) >= 2 && parts[len(parts)-1] == "keys" {
+		parts[len(parts)-1] = "key"
+	}
+	// A key with a version, number, encoding or environment after it is
+	// still a key: ssh_key2, signing_key_v2, deploy_key_pem, stripe_key_live.
+	parts = trimKeySuffix(parts)
+	k = strings.Join(parts, "_")
+	if ordinaryKey(k, parts) {
+		return false
+	}
+	switch k {
+	case "env", "headers", "token", "secret", "password", "api_key", "apikey",
+		"access_token", "refresh_token", "authorization", "private_key",
+		"client_secret", "credentials", "auth_token", "secret_key",
+		"cookie", "cookies", "passphrase", "pwd", "access_key", "session_key",
+		"auth", "pass", "jwt", "pat", "bearer", "basic_auth", "auth_header",
+		"authorization_code":
+		return true
+	}
+	// Names that end in _key are secrets unless ordinaryKey allowed them.
+	if len(parts) >= 2 && parts[len(parts)-1] == "key" {
+		return true
+	}
+	for i, p := range parts {
+		if secretWord(p) {
+			return true
+		}
+		if p == "pass" && passIsSecret(parts, i) {
+			return true
+		}
+		if p == "cookie" || p == "cookies" {
+			// set_cookie and session_cookie hold the value. cookie_name and
+			// cookie_domain only describe it.
+			if i == len(parts)-1 {
+				return true
+			}
+			switch parts[i+1] {
+			case "value", "values", "header", "string", "data", "jar":
+				return true
+			}
+		}
+		if i+1 < len(parts) {
+			switch parts[i] + "_" + parts[i+1] {
+			case "api_key", "private_key", "secret_key", "access_key", "session_key",
+				"client_secret", "basic_auth", "auth_header":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// secretWord is a segment that hides any name it appears in.
+func secretWord(p string) bool {
+	switch p {
+	case "token", "tokens", "secret", "secrets", "password", "passwords",
+		"passwd", "passwds", "pw", "pwd", "passphrase",
+		"credential", "credentials", "auth", "jwt", "pat", "bearer", "assertion":
+		return true
+	}
+	return false
+}
+
+// passIsSecret reports whether the "pass" segment at i is a password.
+// Trailing version, number, encoding and environment words are dropped
+// first, so db_pass_prod reads as db_pass and pass_2 as pass. pass alone,
+// or at the end of a name (db_pass, user_pass, DB_PASS), is a password
+// unless an ordinal or step word comes before it (first_pass, last_pass).
+// Any word after it is a password too (pass_word, pass_env) unless it is a
+// known non-secret word (pass_rate, pass_count, pass_through).
+func passIsSecret(parts []string, i int) bool {
+	end := len(parts)
+	for end > i+1 && keySuffix(parts[end-1]) {
+		end--
+	}
+	if i+1 < end {
+		switch parts[i+1] {
+		case "rate", "rates", "count", "counts", "through", "thru", "fail", "fails",
+			"failed", "number", "num", "index", "idx", "ratio", "percent", "pct",
+			"total", "threshold", "status", "result", "results", "time", "duration":
+			return false
+		}
+		return true
+	}
+	if i == 0 {
+		return true
+	}
+	switch parts[i-1] {
+	case "first", "second", "third", "last", "next", "final", "initial", "single",
+		"multi", "dry", "each", "every", "per", "one", "two", "render", "compile",
+		"build", "lint", "check", "review", "by":
+		return false
+	}
+	return true
+}
+
+// trimKeySuffix drops version, number, encoding and environment words that
+// follow a "key" segment, so the name is judged as the key itself.
+func trimKeySuffix(parts []string) []string {
+	end := len(parts)
+	for end > 1 && keySuffix(parts[end-1]) {
+		end--
+	}
+	if end == len(parts) || end < 2 || (parts[end-1] != "key" && parts[end-1] != "keys") {
+		return parts
+	}
+	out := append([]string(nil), parts[:end]...)
+	if out[len(out)-1] == "keys" {
+		out[len(out)-1] = "key"
+	}
+	return out
+}
+
+// keySuffix is a word that can follow "key" without changing what it holds.
+// Digits split off by normalizeSecretKey (v2 becomes v_2, b64 becomes b_64)
+// leave "v", "b" and "base" on their own, so those count too.
+func keySuffix(p string) bool {
+	if p == "" {
+		return false
+	}
+	digits := true
+	for _, r := range p {
+		if r < '0' || r > '9' {
+			digits = false
+			break
+		}
+	}
+	if digits {
+		return true
+	}
+	switch p {
+	case "v", "ver", "version", "old", "new", "prev", "next", "current", "alt",
+		"primary", "secondary", "b", "b64", "base", "base64", "hex", "pem", "der", "raw", "bytes",
+		"encoded", "json", "live", "test", "prod", "production", "dev", "staging",
+		"sandbox", "local":
+		return true
+	}
+	return false
+}
+
+// ordinaryKey keeps names that only look like secrets.
+// Token counts stay visible. A short list of ordinary *_key names stays visible.
+// Public keys stay visible unless a secret word comes before them.
+// max_ and count do not keep max_secret or secret_count.
+func ordinaryKey(k string, parts []string) bool {
+	switch k {
+	case "tokens", "tokenizer",
+		"sort_key", "cache_key", "object_key", "partition_key", "primary_key",
+		"idempotency_key", "host_key", "public_key":
+		return true
+	}
+	if tokenCountKey(parts) {
+		return true
+	}
+	// A public key is not a secret, so client_public_key and ssh_public_key
+	// stay. secret_public_key and private_public_key do not.
+	if n := len(parts); n >= 2 && parts[n-2] == "public" && parts[n-1] == "key" {
+		for i, p := range parts[:n-2] {
+			if secretWord(p) || p == "private" || p == "secrets" || (p == "pass" && passIsSecret(parts[:n-2], i)) {
+				return false
+			}
+		}
+		return true
+	}
+	// auth_mode and auth_type name a scheme, not a credential.
+	if len(parts) == 2 && parts[0] == "auth" {
+		switch parts[1] {
+		case "mode", "type", "method", "scheme", "kind", "provider", "required", "enabled":
+			return true
+		}
+	}
+	return false
+}
+
+// tokenCountKey reports names built only from token-count words, such as
+// max_tokens, input_token_count, cached_tokens or max_tokens_to_sample.
+// Any other word (access, api, github, secret) keeps the name hidden.
+// read, write and new are not enough on their own, so read_tokens,
+// write_tokens and new_tokens stay hidden while max_new_tokens and
+// cache_read_input_tokens show. A rate such as tokens_per_second shows.
+func tokenCountKey(parts []string) bool {
+	plural, single, count, strong := false, false, false, false
+	per, unit := false, false
+	for _, p := range parts {
+		switch p {
+		case "per":
+			per = true
+		case "second", "seconds", "sec", "minute", "minutes", "hour", "hours":
+			// A rate such as tokens_per_second, only after "per".
+			unit = true
+			strong = true
+		case "tokens":
+			plural = true
+		case "token":
+			single = true
+		case "count", "counts":
+			count = true
+			strong = true
+		case "max", "min", "num", "total", "input", "output", "prompt", "completion",
+			"cached", "cache", "reasoning", "thinking", "audio", "text", "image",
+			"accepted", "rejected", "prediction", "limit", "budget", "used", "remaining":
+			strong = true
+		case "new", "to", "sample", "read", "write", "creation":
+		default:
+			return false
+		}
+	}
+	if unit && !per {
+		return false
+	}
+	if len(parts) == 1 {
+		return plural
+	}
+	return strong && (plural || (single && count))
+}
+
+// normalizeSecretKey folds camelCase, acronyms, digits and dashes into
+// lower-case words joined by "_". privateKey becomes private_key, APIToken
+// becomes api_token, SSHKey becomes ssh_key and password2 becomes password_2.
+func normalizeSecretKey(key string) string {
+	rs := []rune(strings.TrimSpace(key))
+	var b strings.Builder
+	sep := func() {
+		s := b.String()
+		if s != "" && !strings.HasSuffix(s, "_") {
+			b.WriteByte('_')
+		}
+	}
+	isUpper := func(r rune) bool { return r >= 'A' && r <= 'Z' }
+	isLower := func(r rune) bool { return r >= 'a' && r <= 'z' }
+	isDigit := func(r rune) bool { return r >= '0' && r <= '9' }
+	for i, r := range rs {
+		var prev, next rune
+		if i > 0 {
+			prev = rs[i-1]
+		}
+		if i+1 < len(rs) {
+			next = rs[i+1]
+		}
+		switch {
+		case r == '-' || r == '_' || r == '.' || r == ' ':
+			sep()
+		case isUpper(r):
+			// Split lower-to-upper (apiKey), digit-to-upper (v2Key) and the end
+			// of an acronym run before a capitalised word (APIToken).
+			if isLower(prev) || isDigit(prev) || (isUpper(prev) && isLower(next)) {
+				sep()
+			}
+			b.WriteRune(r - 'A' + 'a')
+		case isDigit(r):
+			if i > 0 && !isDigit(prev) {
+				sep()
+			}
+			b.WriteRune(r)
+		default:
+			if isDigit(prev) && (isLower(r) || isUpper(r)) {
+				sep()
+			}
+			b.WriteRune(r)
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 func rejectAliases(n *yaml.Node) error {

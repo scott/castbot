@@ -255,12 +255,18 @@ func (m *MicroVM) Approve(ctx context.Context, endpoint, agentToken, requestID s
 	if err := m.checkEdge(endpoint, agentToken); err != nil {
 		return err
 	}
-	code, err := m.edgeOnce(ctx, http.MethodPost, strings.TrimRight(endpoint, "/")+"/", agentToken, payload)
+	code, raw, err := m.EdgeCall(ctx, http.MethodPost, strings.TrimRight(endpoint, "/")+"/", agentToken, payload)
 	if err != nil {
 		return err
 	}
 	if code != http.StatusOK && code != http.StatusNoContent && code != http.StatusAccepted {
 		return fmt.Errorf("approve status %d", code)
+	}
+	if err := runtime.PermissionError(raw); err != nil {
+		if errors.Is(err, runtime.ErrNoRequest) {
+			return ErrNoRequest
+		}
+		return err
 	}
 	return nil
 }
@@ -665,25 +671,8 @@ func (m *MicroVM) EdgeCall(ctx context.Context, method, target, agentToken strin
 }
 
 func (m *MicroVM) edgeOnce(ctx context.Context, method, target, agentToken string, body []byte) (int, error) {
-	var rdr io.Reader
-	if body != nil {
-		rdr = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, target, rdr)
-	if err != nil {
-		return 0, err
-	}
-	m.edgeAuth(req, agentToken)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	res, err := m.edge.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer res.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
-	return res.StatusCode, nil
+	code, _, err := m.EdgeCall(ctx, method, target, agentToken, body)
+	return code, err
 }
 
 func (m *MicroVM) edgeAuth(req *http.Request, agentToken string) {
