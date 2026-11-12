@@ -807,14 +807,10 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Click(`form.na button.pri`, chromedp.ByQuery)); err != nil && !strings.Contains(err.Error(), "navigated or closed") {
+	if err := chromedp.Run(ctx, chromedp.Click(`form.na button.pri`, chromedp.ByQuery)); err != nil && !containsNav(err) {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`location.pathname==='/agents/`+agent.ID+`' && (document.body.innerText||'').indexOf('Reloaded helper')>=0 && (document.body.innerText||'').indexOf('Edit agent')<0`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
-		var saved string
-		_ = chromedp.Run(ctx, chromedp.Evaluate(js(`location.href+"\n"+(document.body?document.body.innerText:"")`), &saved))
-		t.Fatalf("reload chat %v\n%s", err, saved)
-	}
+	editWait(t, ctx, "reload chat", `location.pathname==='/agents/`+agent.ID+`' && pageText().indexOf('Reloaded helper')>=0 && pageText().indexOf('Edit agent')<0`)
 	scrollTop(t, ctx)
 	shotPage(t, ctx, filepath.Join(dir, "edit-"+theme+"-"+name+".png"))
 	if len(fake.Creates) != 1 {
