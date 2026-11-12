@@ -253,7 +253,7 @@ func openStore() (config.Config, *store.Store) {
 			log.Fatal(err)
 		}
 	}
-	st, err := store.Open(cfg.DBPath, store.Options{})
+	st, err := store.Open(cfg.DBPath, store.Options{SecretsKey: cfg.SecretsKey})
 	if err != nil {
 		log.Fatal(err)
 	}

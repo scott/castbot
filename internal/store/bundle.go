@@ -24,8 +24,9 @@ type AgentBundle struct {
 	CreatedAt    string
 }
 
-// SecretFixture is a plaintext secret granted to an agent.
-// S08 replaces this with the encrypted vault. Do not log Value.
+// SecretFixture is one secret granted to an agent.
+// Value is decrypted in memory for the caller. Do not log it.
+// The vault stores ciphertext. See secrets.go.
 type SecretFixture struct {
 	ID    string
 	Name  string
@@ -193,72 +194,25 @@ FROM agent_bundles WHERE user_id = ? AND agent_id = ? ORDER BY created_at DESC, 
 	return b, nil
 }
 
-// PutSecret stores a plaintext fixture secret for the caller.
+// PutSecret stores an agent secret for the caller. The value is encrypted.
+// The name must match the vault rule. The value is at most 8 KB.
 func (s *Store) PutSecret(ctx context.Context, userID, name, value string) (SecretFixture, error) {
-	name = strings.TrimSpace(name)
-	if name == "" || len(name) > 64 || value == "" || len(value) > 4000 {
-		return SecretFixture{}, ErrInvalid
-	}
-	if strings.ContainsAny(value, "\x00\n\r") {
-		return SecretFixture{}, ErrInvalid
-	}
-	user, err := s.GetUser(ctx, userID)
+	sec, err := s.CreateSecret(ctx, userID, SecretInput{Name: name, Value: value})
 	if err != nil {
 		return SecretFixture{}, err
 	}
-	id, err := newID()
-	if err != nil {
-		return SecretFixture{}, err
-	}
-	stamp := s.stamp(s.Now())
-	_, err = s.db.ExecContext(ctx, `INSERT INTO secret_fixtures(id, workspace_id, user_id, name, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, user.WorkspaceID, userID, name, value, stamp)
-	if err != nil {
-		return SecretFixture{}, err
-	}
-	return SecretFixture{ID: id, Name: name, Value: value}, nil
+	return SecretFixture{ID: sec.ID, Name: sec.Name, Value: value}, nil
 }
 
 // GrantSecret lets one of the caller's agents pull one of the caller's secrets.
 func (s *Store) GrantSecret(ctx context.Context, userID, agentID, secretID string) error {
-	agent, err := s.GetAgent(ctx, userID, agentID)
-	if err != nil {
-		return err
-	}
-	var workspace string
-	err = s.db.QueryRowContext(ctx, `SELECT workspace_id FROM secret_fixtures WHERE id = ? AND user_id = ?`, secretID, userID).Scan(&workspace)
-	if err != nil {
-		return scanErr(err)
-	}
-	if workspace != agent.WorkspaceID {
-		return ErrNotFound
-	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO agent_secret_grants(agent_id, secret_id, workspace_id, user_id) VALUES (?, ?, ?, ?)
-ON CONFLICT(agent_id, secret_id) DO NOTHING`, agentID, secretID, workspace, userID)
-	return err
+	return s.grantSecret(ctx, userID, agentID, secretID)
 }
 
-// GrantedSecrets returns the secrets granted to one of the caller's agents.
+// GrantedSecrets returns the agent secrets granted to one of the caller's agents.
+// Values are decrypted in memory. Model keys are not included.
 func (s *Store) GrantedSecrets(ctx context.Context, userID, agentID string) ([]SecretFixture, error) {
-	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT f.id, f.name, f.value FROM secret_fixtures f
-JOIN agent_secret_grants g ON g.secret_id = f.id AND g.user_id = f.user_id
-WHERE g.user_id = ? AND g.agent_id = ? ORDER BY f.name`, userID, agentID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []SecretFixture
-	for rows.Next() {
-		var sec SecretFixture
-		if err := rows.Scan(&sec.ID, &sec.Name, &sec.Value); err != nil {
-			return nil, err
-		}
-		out = append(out, sec)
-	}
-	return out, rows.Err()
+	return s.grantedSecrets(ctx, userID, agentID)
 }
 
 // IssueBootstrap mints a one-time token for one of the caller's agents.

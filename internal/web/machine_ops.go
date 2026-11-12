@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
@@ -44,7 +43,7 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 			if err != nil {
 				return nil, err
 			}
-			if _, _, missing := castcfg.ProviderSecret(agent.Model); missing != "" {
+			if _, _, missing := s.effectiveModelSecret(ctx, job.UserID, agent.Model); missing != "" {
 				return nil, &run.Notice{Text: missing}
 			}
 			state, endpoint := s.observedMachine(ctx, job.UserID, job.AgentID, vm)
@@ -783,6 +782,9 @@ func (s *Server) refreshSecrets(ctx context.Context, userID string, agent store.
 	if stored != "" && stored == fp {
 		return nil
 	}
+	if vm, verr := s.store.LiveVM(ctx, userID, agent.ID); verr == nil && vm.State == "paused" {
+		return nil
+	}
 	h, _, _ := s.hostConfig()
 	if h == nil || endpoint == "" || token == "" {
 		return nil
@@ -810,7 +812,7 @@ func (s *Server) secretPairs(ctx context.Context, userID string, agent store.Age
 	for _, sec := range secrets {
 		pairs = append(pairs, secretPair{name: sec.Name, value: sec.Value})
 	}
-	if name, value, missing := castcfg.ProviderSecret(agent.Model); missing == "" && name != "" && value != "" {
+	if name, value, missing := s.effectiveModelSecret(ctx, userID, agent.Model); missing == "" && name != "" && value != "" {
 		pairs = append(pairs, secretPair{name: name, value: value})
 	}
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })

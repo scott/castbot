@@ -144,6 +144,7 @@ type page struct {
 	Routines     routinePanel
 	Run          runBar
 	PendingTool  string
+	Vault        vaultView
 }
 
 func finish(p page) page {
@@ -157,12 +158,29 @@ func finish(p page) page {
 		p.ShowNav = true
 		p.Nav = "agents"
 	case "chat":
-		if p.Pane {
+		if p.Pane || p.Vault.Panel {
 			p.BodyClass = "p-pane"
+			if p.Vault.Panel {
+				p.BodyClass += " vault-open p-slide"
+			}
 		} else {
 			p.BodyClass = "p-chat"
 		}
+		if p.Vault.Drawer {
+			p.BodyClass += " p-drawer"
+		}
+		if p.Vault.ModalOpen {
+			p.BodyClass += " p-modal"
+		}
 		p.Tab = "chat"
+	case "secrets":
+		p.BodyClass = "p-main no-bnav"
+		if p.Vault.Drawer {
+			p.BodyClass += " p-drawer"
+		}
+		if p.Vault.ModalOpen {
+			p.BodyClass += " p-modal"
+		}
 	case "machine", "agent-routines", "agent-files":
 		p.BodyClass = "p-chat"
 		if p.Replace.Confirm {

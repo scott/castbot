@@ -46,8 +46,13 @@ func newHarnessWith(t *testing.T, client runtime.Client) *harness {
 	}
 	t.Cleanup(func() { st.Close() })
 	key := make([]byte, 32)
+	skey := make([]byte, 32)
 	for i := range key {
 		key[i] = 0x11
+		skey[i] = 0x3c
+	}
+	if err := st.SetSecretsKey(skey); err != nil {
+		t.Fatal(err)
 	}
 	srv := New(st, key, client)
 	srv.SetDevEcho(true)

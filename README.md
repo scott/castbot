@@ -10,9 +10,10 @@ The shell signs you in, lists seeded agents, and streams a chat reply from a loc
 
 ```
 openssl rand -hex 32
+openssl rand -hex 32
 ```
 
-Put that value in `castbot.env` as `CASTBOT_SESSION_KEY` (see `castbot.env.example`), then `chmod 0600 castbot.env`.
+Put the first value in `castbot.env` as `CASTBOT_SESSION_KEY` and the second as `CASTBOT_SECRETS_KEY` (see `castbot.env.example`), then `chmod 0600 castbot.env`. The secrets key encrypts the vault. The process will not start without it. A later deploy has to set `CASTBOT_SECRETS_KEY` on the host. This slice does not deploy.
 
 ```
 go run ./cmd/castbot create-user --email you@example.com --name "Your Name"

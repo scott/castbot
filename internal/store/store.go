@@ -62,12 +62,19 @@ type Store struct {
 	// Routines register it. Other slices can chain it.
 	replaceMu   sync.Mutex
 	replaceDone func(userID, agentID string)
+
+	boxMu sync.RWMutex
+	box   *[32]byte
 }
 
 // Options tunes a store. Zero values use the production defaults.
+// SecretsKey is the 32-byte vault key. An empty key leaves the vault
+// locked until SetSecretsKey. Production passes the key here so a
+// migration can encrypt existing rows. Tests may set it after Open.
 type Options struct {
-	Now   func() time.Time
-	Argon auth.Params
+	Now        func() time.Time
+	Argon      auth.Params
+	SecretsKey []byte
 }
 
 // Open opens a SQLite database in WAL mode and runs migrations.
@@ -106,6 +113,12 @@ func Open(path string, opt Options) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db, now: opt.Now, argon: argon, dummy: dummy}
+	if len(opt.SecretsKey) > 0 {
+		if err := s.SetSecretsKey(opt.SecretsKey); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err

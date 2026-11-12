@@ -106,6 +106,8 @@ type Runner struct {
 	mu     sync.Mutex
 	active map[string]string // run id to agent id
 	rng    *rand.Rand
+	// after runs when a reply reaches a terminal status.
+	// SetAfterRun chains, so a later slice adds work instead of replacing it.
 	after  func(Job, string)
 	onPerm func(Job, store.Approval)
 }
