@@ -141,7 +141,7 @@ func s10Shot(t *testing.T, theme, kind string, width int) (*harness, string, str
 		}
 	case "12d":
 		script += tooBigJS
-		needle = `(document.body.innerText||'').indexOf('Too large. Files can be up to 32 MB.')>=0&&(document.body.innerText||'').indexOf('Nothing was saved.')>=0`
+		needle = `(document.body.innerText||'').indexOf('Too large. Files can be up to 32 MB.')>=0&&(document.body.innerText||'').indexOf('Nothing was saved.')>=0&&!!document.querySelector('[aria-label="Dismiss training-video.mp4"]')`
 	case "12e":
 		page += "&view=uploads"
 		script = ""
@@ -149,7 +149,7 @@ func s10Shot(t *testing.T, theme, kind string, width int) (*harness, string, str
 	case "12f":
 		page = "/agents/" + agent.ID
 		script = attachJS
-		needle = `(document.body.innerText||'').indexOf('named in your message.')>=0&&document.getElementById('send-btn').disabled&&document.getElementById('send-hint').textContent.indexOf('Send is ready when the upload finishes')>=0`
+		needle = `(document.body.innerText||'').indexOf('named in your message.')>=0&&document.getElementById('send-btn').disabled&&document.getElementById('send-hint').textContent.indexOf('Send is ready when the upload finishes')>=0&&!!document.querySelector('[aria-label="Download pricing.md"]')`
 	case "12g":
 		cached, err := h.st.ListCached(context.Background(), user.ID, agent.ID)
 		if err != nil {

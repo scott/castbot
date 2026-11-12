@@ -133,6 +133,7 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 			return nil
 		}
 		p.Messages = presentMessages(msgs, p.Agent, s.store.Now(), userLocation(user.Timezone))
+		s.linkMentionedFiles(r.Context(), user.ID, agent.ID, p.Messages)
 		p.Lives = s.loadLives(r, user, current.ID, p.Agent)
 		if rows, err := s.store.ListThreadApprovals(r.Context(), user.ID, current.ID); err == nil {
 			live := map[string]bool{}

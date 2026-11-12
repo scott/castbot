@@ -28,9 +28,9 @@ Headless Chrome, dark and light, 1280 and 390, no sideways scroll. Demo data onl
 - `12a2-dark-1280.png`, `12a2-dark-390.png`, `12a2-light-1280.png`, `12a2-light-390.png` uploads segment
 - `12b-dark-1280.png`, `12b-dark-390.png`, `12b-light-1280.png`, `12b-light-390.png` queue, one file at a time
 - `12c-dark-1280.png`, `12c-dark-390.png`, `12c-light-1280.png`, `12c-light-390.png` drop overlay on desktop, list on phone
-- `12d-dark-1280.png`, `12d-dark-390.png`, `12d-light-1280.png`, `12d-light-390.png` too large and mid-stream stop
+- `12d-dark-1280.png`, `12d-dark-390.png`, `12d-light-1280.png`, `12d-light-390.png` too large, Dismiss, and mid-stream stop
 - `12e-dark-1280.png`, `12e-dark-390.png`, `12e-light-1280.png`, `12e-light-390.png` paused list and a held upload
-- `12f-dark-1280.png`, `12f-dark-390.png`, `12f-light-1280.png`, `12f-light-390.png` composer chip and path line
+- `12f-dark-1280.png`, `12f-dark-390.png`, `12f-light-1280.png`, `12f-light-390.png` composer chip, path line, and download link
 - `12g-dark-1280.png`, `12g-dark-390.png`, `12g-light-1280.png`, `12g-light-390.png` file detail and text preview
 - `12i-dark-1280.png`, `12i-dark-390.png`, `12i-light-1280.png`, `12i-light-390.png` sidebar search
 - `12j-dark-1280.png`, `12j-dark-390.png`, `12j-light-1280.png`, `12j-light-390.png` empty workspace

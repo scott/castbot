@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
-	"time"
 
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/store"
@@ -33,6 +33,7 @@ const (
 	lowSpaceCopy = lowSpaceLead + " " + lowSpaceRest
 	tooLargeCopy = "Too large. Files can be up to 32 MB. Split it or share a link in the chat instead."
 	quotaCopy    = "This workspace has reached its 2 GB upload limit."
+	nameFullCopy = "That file name is already used. Rename it and try again."
 	previewNote  = "Text files up to 256 KB preview here as plain text. Nothing in a file runs in castbot."
 )
 
@@ -100,11 +101,11 @@ func (s *Server) dataDirPath() string {
 func (s *Server) diskLow() bool {
 	dir := s.dataDirPath()
 	if dir == "" {
-		return false
+		return true
 	}
 	free, err := s.diskFree(dir)
 	if err != nil {
-		return false
+		return true
 	}
 	return free < lowDiskFree
 }
@@ -236,15 +237,20 @@ func (s *Server) postUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	kept = true
 
+	unlock := s.lockNames(agent.ID)
+	defer unlock()
 	taken, err := s.store.UploadNames(r.Context(), user.ID, agent.ID)
 	if err != nil {
 		writeText(w, http.StatusInternalServerError, "Error\n")
 		return
 	}
-	final := nextUploadName(taken, name)
+	final, ok := nextUploadName(taken, name)
+	if !ok {
+		writeText(w, http.StatusConflict, nameFullCopy+"\n")
+		return
+	}
 	guestPath := "uploads/" + final
 	if !safeGuestPath(guestPath) {
-		os.Remove(dest)
 		writeText(w, http.StatusBadRequest, "Bad request\n")
 		return
 	}
@@ -491,9 +497,9 @@ func (s *Server) streamOut(w http.ResponseWriter, name string, r io.Reader) {
 
 var errReplace = errors.New("replacing")
 
-// openWorkspace returns a guest file. A paused machine is woken first, using
-// the same wake events as a chat run. Switch this to s.wakeForWork when that
-// helper exists.
+// openWorkspace returns a guest file. A paused machine is woken with the
+// same helper a chat reply uses. strict stays false, so a failed wake
+// keeps the paused notice instead of the routine failure.
 func (s *Server) openWorkspace(r *http.Request, userID, agentID, name string) (io.ReadCloser, error) {
 	if s.replacing(r.Context(), userID, agentID) {
 		return nil, errReplace
@@ -513,28 +519,18 @@ func (s *Server) openWorkspace(r *http.Request, userID, agentID, name string) (i
 	if err != nil {
 		return nil, err
 	}
-	if vm.State == "paused" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
-		s.noteVM(r.Context(), userID, agentID, vm.MicroVMID, store.EventWakeRequested, 0)
-		wakeAt := time.Now()
-		got, werr := h.Wake(r.Context(), vm.MicroVMID)
-		if werr != nil {
-			return nil, werr
-		}
-		if err := s.store.ApplyVMState(r.Context(), userID, agentID, got.State, got.Endpoint, ""); err != nil {
-			return nil, err
-		}
-		if got.State == "running" {
-			s.noteVM(r.Context(), userID, agentID, vm.MicroVMID, store.EventWakeRunning, time.Since(wakeAt))
-		}
-		if got.Endpoint != "" {
-			endpoint = got.Endpoint
-		}
-		if token != "" && endpoint != "" {
-			if perr := h.Probe(r.Context(), endpoint, token); perr == nil {
-				s.noteVM(r.Context(), userID, agentID, vm.MicroVMID, store.EventWakeReady, time.Since(wakeAt))
-			}
-		}
-		if got.State != "running" {
+	facts, werr := s.wakeForWork(r.Context(), h, userID, agentID, vm, endpoint, token, vm.State, false)
+	if werr != nil {
+		return nil, werr
+	}
+	if facts.State != "" {
+		vm.State = facts.State
+	}
+	if facts.Endpoint != "" {
+		endpoint = facts.Endpoint
+	}
+	if facts.WasPaused {
+		if facts.State != "running" {
 			return nil, errors.New("not running")
 		}
 		s.fireAfterRun(r.Context(), userID, agentID)
@@ -592,19 +588,34 @@ func cleanUploadName(name string) (string, bool) {
 	return name, true
 }
 
-func nextUploadName(taken map[string]struct{}, name string) string {
+func (s *Server) lockNames(agentID string) func() {
+	s.fileMu.Lock()
+	if s.nameLock == nil {
+		s.nameLock = map[string]*sync.Mutex{}
+	}
+	mu := s.nameLock[agentID]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		s.nameLock[agentID] = mu
+	}
+	s.fileMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
+func nextUploadName(taken map[string]struct{}, name string) (string, bool) {
 	if _, ok := taken[name]; !ok {
-		return name
+		return name, true
 	}
 	ext := filepath.Ext(name)
 	base := strings.TrimSuffix(name, ext)
-	for n := 2; n < 100; n++ {
+	for n := 2; n < 10000; n++ {
 		cand := base + " (" + strconv.Itoa(n) + ")" + ext
 		if _, ok := taken[cand]; !ok {
-			return cand
+			return cand, true
 		}
 	}
-	return name
+	return "", false
 }
 
 func pathLine(agentName, fileName string) string {
@@ -666,7 +677,11 @@ func previewKind(name string) bool {
 
 func safeGuestPath(name string) bool {
 	name = strings.TrimSpace(name)
-	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.Contains(name, "..") {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.Contains(name, "..") || strings.ContainsRune(name, 0) {
+		return false
+	}
+	low := strings.ToLower(name)
+	if strings.Contains(low, "%2f") || strings.Contains(low, "%5c") || strings.Contains(low, "%00") || strings.Contains(low, "%2e%2e") {
 		return false
 	}
 	for _, part := range strings.Split(name, "/") {

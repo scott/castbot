@@ -31,8 +31,11 @@ func TestFilesMigrationV18(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 18`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("version 18 count %d %v", n, err)
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version IN (16, 17)`).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("sibling versions present %d %v", n, err)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 17`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("version 17 count %d %v", n, err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 16`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("version 16 present %d %v", n, err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)

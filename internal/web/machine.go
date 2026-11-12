@@ -4,33 +4,12 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/json"
-	"io"
-	"net"
 	"net/http"
-	"net/url"
-	"path"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/scott/castbot/internal/bundle"
 )
-
-const guestBodyCap = 32 << 20
-
-var guestHTTP = &http.Client{
-	Timeout: 60 * time.Second,
-	CheckRedirect: func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	},
-	Transport: &http.Transport{
-		Proxy:                 nil,
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-		ResponseHeaderTimeout: 10 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		DisableKeepAlives:     true,
-	},
-}
 
 func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	plain := bearerToken(r.Header.Get("Authorization"))
@@ -167,111 +146,54 @@ func (s *Server) writeSecrets(w http.ResponseWriter, r *http.Request, userID str
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *Server) ownerFiles(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
-	if _, err := s.store.GetAgent(r.Context(), user.ID, r.PathValue("id")); s.missing(w, err) {
-		return
-	}
-	g, ok := s.lookupGuest(r.PathValue("id"))
-	if !ok {
-		writeJSON(w, http.StatusOK, []any{})
-		return
-	}
-	s.proxyGuest(w, r, g, "/castlet/files", "")
-}
-
-func (s *Server) ownerFile(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
-	if _, err := s.store.GetAgent(r.Context(), user.ID, r.PathValue("id")); s.missing(w, err) {
-		return
-	}
-	guestPath, ok := fileGuestPath(r.PathValue("path"))
-	if !ok {
-		writeText(w, http.StatusBadRequest, "Bad request\n")
-		return
-	}
-	g, ok := s.lookupGuest(r.PathValue("id"))
-	if !ok {
-		writeText(w, http.StatusNotFound, "Not found\n")
-		return
-	}
-	s.proxyGuest(w, r, g, guestPath, path.Base(strings.Trim(r.PathValue("path"), "/")))
-}
-
-func (s *Server) proxyGuest(w http.ResponseWriter, r *http.Request, g guest, guestPath, filename string) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, g.Base+guestPath, nil)
-	if err != nil {
-		writeText(w, http.StatusBadGateway, "Error\n")
-		return
-	}
-	req.Header.Set("X-Cast-Authorization", "Bearer "+g.Token)
-	res, err := guestHTTP.Do(req)
-	if err != nil {
-		writeText(w, http.StatusBadGateway, "Error\n")
-		return
-	}
-	defer res.Body.Close()
-	status := http.StatusBadGateway
-	switch res.StatusCode {
-	case http.StatusOK:
-		status = http.StatusOK
-	case http.StatusNotFound:
-		status = http.StatusNotFound
-	}
-	if res.ContentLength > guestBodyCap {
-		writeText(w, http.StatusBadGateway, "Error\n")
-		return
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
-	if filename == "" {
-		w.Header().Set("Content-Type", "application/json")
-	} else {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", attachmentDisposition(filename))
-	}
-	w.WriteHeader(status)
-	_, _ = io.Copy(w, io.LimitReader(res.Body, guestBodyCap))
-}
-
-func fileGuestPath(rel string) (string, bool) {
-	rel = strings.Trim(rel, "/")
-	if rel == "" || strings.Contains(rel, "\\") || strings.Contains(rel, "..") {
-		return "", false
-	}
-	var parts []string
-	for _, part := range strings.Split(rel, "/") {
-		if part == "" || part == "." || part == ".." {
-			return "", false
-		}
-		parts = append(parts, url.PathEscape(part))
-	}
-	return "/castlet/files/" + strings.Join(parts, "/"), true
-}
-
 func attachmentDisposition(name string) string {
-	clean := strings.Map(func(r rune) rune {
+	base := name
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		base = name[i+1:]
+	}
+	ascii := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
 			return r
 		default:
 			return -1
 		}
-	}, name)
-	if clean == "" || clean == "." || clean == ".." {
-		clean = "download"
+	}, base)
+	if ascii == "" || ascii == "." || ascii == ".." {
+		ascii = "download"
 	}
-	if len(clean) > 80 {
-		clean = clean[:80]
+	if len(ascii) > 80 {
+		ascii = ascii[:80]
 	}
-	return `attachment; filename="` + clean + `"`
+	return `attachment; filename="` + ascii + `"; filename*=UTF-8''` + rfc5987(base)
+}
+
+func rfc5987(name string) string {
+	var b strings.Builder
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if attrChar(c) {
+			b.WriteByte(c)
+			continue
+		}
+		const hexd = "0123456789ABCDEF"
+		b.WriteByte('%')
+		b.WriteByte(hexd[c>>4])
+		b.WriteByte(hexd[c&15])
+	}
+	return b.String()
+}
+
+func attrChar(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+	switch c {
+	case '!', '#', '$', '&', '+', '-', '.', '^', '_', '`', '|', '~':
+		return true
+	}
+	return false
 }
 
 func bearerToken(h string) string {

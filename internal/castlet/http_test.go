@@ -158,6 +158,20 @@ func TestSymlinkDoesNotEscapeTheWorkspace(t *testing.T) {
 	if out.Code == http.StatusOK || strings.Contains(out.Body.String(), "root:") {
 		t.Fatalf("outside link was served: %d", out.Code)
 	}
+	list := authed(t, sup, http.MethodGet, "/castlet/files", nil)
+	if list.Code != http.StatusOK || strings.Contains(list.Body.String(), "outside") || strings.Contains(list.Body.String(), "root:") || strings.Contains(list.Body.String(), "jump") {
+		t.Fatalf("list %d %s", list.Code, list.Body.String())
+	}
+	for _, raw := range []string{
+		"/castlet/files/..%2f..%2f..%2fetc/passwd",
+		"/castlet/files/%2e%2e/%2e%2e/etc/passwd",
+		"/castlet/files/hello.txt%00.png",
+	} {
+		esc := authed(t, sup, http.MethodGet, raw, nil)
+		if esc.Code == http.StatusOK || strings.Contains(esc.Body.String(), "root:") {
+			t.Fatalf("%s -> %d %q", raw, esc.Code, esc.Body.String())
+		}
+	}
 	put := authed(t, sup, http.MethodPut, "/castlet/files/jump/pwned.txt", strings.NewReader("nope"))
 	if put.Code == http.StatusNoContent {
 		t.Fatal("put followed a symlink out of the workspace")

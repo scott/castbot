@@ -286,7 +286,7 @@ func (s *Store) ObserveWorkspace(ctx context.Context, userID, agentID string, li
 	now := s.stamp(s.Now())
 	for _, item := range listed {
 		name := strings.TrimSpace(item.Name)
-		if name == "" || strings.Contains(name, "..") || strings.HasPrefix(name, "/") {
+		if !cacheNameOK(name) {
 			continue
 		}
 		if _, ok := seen[name]; ok {
@@ -343,6 +343,41 @@ func (s *Store) ObserveWorkspace(ctx context.Context, userID, agentID string, li
 		}
 	}
 	return tx.Commit()
+}
+
+func cacheNameOK(name string) bool {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.Contains(name, "..") || strings.ContainsRune(name, 0) {
+		return false
+	}
+	low := strings.ToLower(name)
+	if strings.Contains(low, "%2f") || strings.Contains(low, "%5c") || strings.Contains(low, "%00") || strings.Contains(low, "%2e%2e") {
+		return false
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// PlantCached inserts a cache row without the name check.
+// Download and preview must still refuse a name that leaves the workspace.
+func (s *Store) PlantCached(ctx context.Context, userID, agentID, name string, size int64) (string, error) {
+	agent, err := s.GetAgent(ctx, userID, agentID)
+	if err != nil {
+		return "", err
+	}
+	id, err := newID()
+	if err != nil {
+		return "", err
+	}
+	now := s.stamp(s.Now())
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO file_cache(id, workspace_id, user_id, agent_id, name, size, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, agent.WorkspaceID, userID, agentID, name, size, now); err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 // ListCached returns the cached workspace listing for one agent.

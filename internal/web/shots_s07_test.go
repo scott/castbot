@@ -82,7 +82,7 @@ func shootS07Waking(t *testing.T, browser context.Context, dir string, width, he
 	ctx := openS07(t, browser, h, agent.UserID, "/agents/"+agent.ID, width, height, `(function(){return document.querySelector("#composer textarea")!=null;})()`)
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.SendKeys(`#composer textarea`, "hello", chromedp.ByQuery),
-		chromedp.Click(`#composer button`, chromedp.ByQuery),
+		chromedp.Click(`#send-btn`, chromedp.ByQuery),
 		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Waking")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
 	}); err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func shootS07Reply(t *testing.T, browser context.Context, dir string, width, hei
 	ctx := openS07(t, browser, h, agent.UserID, "/agents/"+agent.ID, width, height, `(function(){return document.querySelector("#composer textarea")!=null;})()`)
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.SendKeys(`#composer textarea`, "hello", chromedp.ByQuery),
-		chromedp.Click(`#composer button`, chromedp.ByQuery),
+		chromedp.Click(`#send-btn`, chromedp.ByQuery),
 		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Streamed from the fixture provider.")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
 	}); err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func shootS07NoKey(t *testing.T, browser context.Context, dir string, width, hei
 	ctx := openS07(t, browser, h, agent.UserID, "/agents/"+agent.ID, width, height, `(function(){return document.querySelector("#composer textarea")!=null;})()`)
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.SendKeys(`#composer textarea`, "hello", chromedp.ByQuery),
-		chromedp.Click(`#composer button`, chromedp.ByQuery),
+		chromedp.Click(`#send-btn`, chromedp.ByQuery),
 		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("No key for provider digitalocean. Ask the owner to add it.")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
 	}); err != nil {
 		t.Fatal(err)

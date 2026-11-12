@@ -54,7 +54,6 @@ type Server struct {
 	ka     time.Duration
 
 	mu        sync.Mutex
-	guests    map[string]guest
 	machine   host.AgentHost
 	image     string
 	publicURL string
@@ -106,6 +105,7 @@ type Server struct {
 	diskFreeFn func(string) (uint64, error)
 	uploadHold <-chan struct{}
 	uploadSlot map[string]chan struct{}
+	nameLock   map[string]*sync.Mutex
 	uploadLog  []string
 }
 
@@ -113,12 +113,6 @@ type Server struct {
 // methods themselves so a tick cannot post between assertions.
 func (s *Server) pauseSweeps() {
 	s.sweepPause.Store(true)
-}
-
-// guest is one local castlet the control plane can proxy files through.
-type guest struct {
-	Base  string
-	Token string
 }
 
 // New builds a server. key is the 32-byte session key.
@@ -272,24 +266,6 @@ func (s *Server) SetClient(c runtime.Client) {
 	}
 }
 
-// SetGuest records the castlet address and agent token for one agent.
-// File reads for that agent are proxied there. The token is not logged.
-func (s *Server) SetGuest(agentID, base, token string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.guests == nil {
-		s.guests = map[string]guest{}
-	}
-	s.guests[agentID] = guest{Base: strings.TrimRight(base, "/"), Token: token}
-}
-
-func (s *Server) lookupGuest(agentID string) (guest, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	g, ok := s.guests[agentID]
-	return g, ok && g.Base != "" && g.Token != ""
-}
-
 // SetKeepalive changes how often the event stream writes a comment.
 func (s *Server) SetKeepalive(d time.Duration) {
 	s.ka = d
@@ -362,6 +338,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}/routines/{routine}/run", s.runRoutine)
 	mux.HandleFunc("POST /agents/{id}/routines/{routine}/delete", s.deleteRoutine)
 	mux.HandleFunc("GET /agents/{id}/files", s.agentTab)
+	mux.HandleFunc("GET /agents/{id}/workspace", s.notFound)
+	mux.HandleFunc("GET /agents/{id}/workspace/{path...}", s.notFound)
 	mux.HandleFunc("POST /agents/{id}/uploads", s.postUpload)
 	mux.HandleFunc("GET /agents/{id}/files/{fileID}/download", s.downloadFile)
 	mux.HandleFunc("GET /agents/{id}/files/{fileID}/preview", s.previewFile)
@@ -382,8 +360,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /agents/{id}/secrets", s.ownerSecrets)
 	mux.HandleFunc("POST /agents/{id}/secrets/grant", s.vaultGrant)
 	mux.HandleFunc("POST /agents/{id}/secrets/revoke", s.vaultRevoke)
-	mux.HandleFunc("GET /agents/{id}/workspace", s.ownerFiles)
-	mux.HandleFunc("GET /agents/{id}/workspace/{path...}", s.ownerFile)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/bootstrap", s.bootstrap)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/bundle", s.machineBundle)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/secrets", s.machineSecrets)

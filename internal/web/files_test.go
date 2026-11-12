@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -753,3 +754,191 @@ func waitLog(t *testing.T, h *harness, needle string) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func TestUploadNameKeepsCounting(t *testing.T) {
+	taken := map[string]struct{}{"report.csv": {}}
+	for n := 2; n < 100; n++ {
+		taken["report ("+strconv.Itoa(n)+").csv"] = struct{}{}
+	}
+	got, ok := nextUploadName(taken, "report.csv")
+	if !ok || got != "report (100).csv" {
+		t.Fatalf("got %q ok %v", got, ok)
+	}
+	for n := 100; n < 10000; n++ {
+		taken["report ("+strconv.Itoa(n)+").csv"] = struct{}{}
+	}
+	if _, ok := nextUploadName(taken, "report.csv"); ok {
+		t.Fatal("reused a name")
+	}
+
+	ip := "203.0.113.160:9"
+	h, fake, agent := fileMachine(t, ip, "running")
+	ctx := context.Background()
+	for n := 2; n < 100; n++ {
+		name := "report.csv"
+		if n > 0 {
+			name = "report (" + strconv.Itoa(n) + ").csv"
+		}
+		if _, err := h.st.InsertUpload(ctx, agent.UserID, agent.ID, "", name, "", "aa", "workspace/uploads/"+name, "copied", 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := h.st.InsertUpload(ctx, agent.UserID, agent.ID, "", "report.csv", "", "aa", "workspace/uploads/report.csv", "copied", 1); err != nil {
+		t.Fatal(err)
+	}
+	code, text, _ := postFile(t, h, ip, agent.ID, "report.csv", "application/octet-stream", []byte("new"))
+	if code != 200 || !strings.Contains(text, `"name":"report (100).csv"`) {
+		t.Fatalf("upload %d %s", code, text)
+	}
+	if _, ok := fake.Disks["https://vm.example"].Files["uploads/report.csv"]; ok {
+		t.Fatal("wrote the original name")
+	}
+	if string(fake.Disks["https://vm.example"].Files["uploads/report (100).csv"]) != "new" {
+		t.Fatal("missing numbered file")
+	}
+}
+
+func TestDiskLowFailsClosed(t *testing.T) {
+	ip := "203.0.113.161:9"
+	h, _, agent := fileMachine(t, ip, "running")
+	h.srv.SetDiskFree(func(string) (uint64, error) { return 0, errString("statfs") })
+	code, text, _ := postFile(t, h, ip, agent.ID, "notes.txt", "application/octet-stream", []byte("x"))
+	if code != http.StatusConflict || strings.TrimSpace(text) != lowSpaceCopy {
+		t.Fatalf("statfs %d %s", code, text)
+	}
+	h.srv.SetDataDir("")
+	h.srv.SetDiskFree(nil)
+	code, text, _ = postFile(t, h, ip, agent.ID, "notes.txt", "application/octet-stream", []byte("x"))
+	if code != http.StatusConflict || strings.TrimSpace(text) != lowSpaceCopy {
+		t.Fatalf("empty dir %d %s", code, text)
+	}
+}
+
+func TestEscapePaths(t *testing.T) {
+	ip := "203.0.113.162:9"
+	h, fake, agent := fileMachine(t, ip, "running")
+	const secret = "ESCAPED-SECRET"
+	fake.SeedDisk("https://vm.example", nil, map[string][]byte{
+		"../etc/passwd":        []byte(secret),
+		"/etc/passwd":          []byte(secret),
+		"docs/ok.md":           []byte("hello"),
+		"..%2f..%2fetc/passwd": []byte(secret),
+		"notes\x00.txt":        []byte(secret),
+		"../secret.md":         []byte(secret),
+	})
+	code, page, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=files", "", ip, nil)
+	if code != 200 || strings.Contains(page, secret) || strings.Contains(page, "../") || !strings.Contains(page, "ok.md") {
+		t.Fatalf("list %d secret %v", code, strings.Contains(page, secret))
+	}
+	cached, err := h.st.ListCached(context.Background(), agent.UserID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range cached {
+		if !safeGuestPath(row.Name) || strings.Contains(row.Name, "..") {
+			t.Fatalf("cached %q", row.Name)
+		}
+	}
+
+	names := []string{
+		"../secret.txt",
+		"/etc/passwd",
+		"a/../../outside.txt",
+		"notes\x00.txt",
+		"..%2F..%2Fetc/passwd",
+		"..%2f..%2fetc%2fpasswd",
+		"docs%2Fpricing.md",
+	}
+	for _, name := range names {
+		code, text, _ := postFile(t, h, ip, agent.ID, name, "application/octet-stream", []byte("nope"))
+		if strings.Contains(text, secret) {
+			t.Fatalf("%q leaked", name)
+		}
+		if code == 200 && (strings.Contains(text, "..") || strings.Contains(text, "/etc/") || strings.Contains(text, "%2f") || strings.Contains(text, "%2F")) {
+			t.Fatalf("%q accepted as %s", name, text)
+		}
+	}
+	for key, body := range fake.Disks["https://vm.example"].Files {
+		if string(body) != "nope" {
+			continue
+		}
+		if !strings.HasPrefix(key, "uploads/") || strings.Contains(key, "..") || strings.Contains(key, "%2") {
+			t.Fatalf("wrote %q", key)
+		}
+	}
+
+	id, err := h.st.PlantCached(context.Background(), agent.UserID, agent.ID, "../secret.md", int64(len(secret)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := fake.Snapshot()
+	res := getRaw(t, h, ip, "/agents/"+agent.ID+"/files/"+id+"/download")
+	if res.code == 200 || strings.Contains(res.buf.String(), secret) {
+		t.Fatalf("download %d %q", res.code, res.buf.String())
+	}
+	prev := getRaw(t, h, ip, "/agents/"+agent.ID+"/files/"+id+"/preview")
+	if prev.code == 200 || strings.Contains(prev.buf.String(), secret) {
+		t.Fatalf("preview %d %q", prev.code, prev.buf.String())
+	}
+	after, _ := fake.Snapshot()
+	if addedCall(before, after, "read-file") || addedCall(before, after, "list-files") {
+		t.Fatalf("guest read %#v", after[len(before):])
+	}
+}
+
+func TestAttachmentKeepsRealName(t *testing.T) {
+	got := attachmentDisposition("report (2).csv")
+	if !strings.Contains(got, `filename="report2.csv"`) || !strings.Contains(got, "filename*=UTF-8''report%20%282%29.csv") {
+		t.Fatal(got)
+	}
+	ip := "203.0.113.163:9"
+	h, _, agent := fileMachine(t, ip, "running")
+	body := []byte("csv")
+	code, text, _ := postFile(t, h, ip, agent.ID, "report.csv", "application/octet-stream", body)
+	if code != 200 {
+		t.Fatal(text)
+	}
+	code, text, _ = postFile(t, h, ip, agent.ID, "report.csv", "application/octet-stream", body)
+	if code != 200 || !strings.Contains(text, "report (2).csv") {
+		t.Fatalf("%d %s", code, text)
+	}
+	var row map[string]string
+	if err := json.Unmarshal([]byte(text), &row); err != nil {
+		t.Fatal(err)
+	}
+	res := getRaw(t, h, ip, "/agents/"+agent.ID+"/files/"+row["id"]+"/download")
+	disp := res.hdr.Get("Content-Disposition")
+	if res.code != 200 || !strings.Contains(disp, `filename="report2.csv"`) || !strings.Contains(disp, "filename*=UTF-8''report%20%282%29.csv") {
+		t.Fatalf("%d %s", res.code, disp)
+	}
+}
+
+func TestAgentReplyDownloadLink(t *testing.T) {
+	ip := "203.0.113.164:9"
+	h, fake, agent := fileMachine(t, ip, "running")
+	fake.SeedDisk("https://vm.example", nil, map[string][]byte{"docs/pricing.md": bytes.Repeat([]byte("p"), 3*1024)})
+	if err := h.st.ObserveWorkspace(context.Background(), agent.UserID, agent.ID, []store.ListedFile{{Name: "docs/pricing.md", Size: 3 * 1024}}); err != nil {
+		t.Fatal(err)
+	}
+	threads, err := h.st.ListThreadsByAgent(context.Background(), agent.UserID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var threadID string
+	for _, th := range threads {
+		if th.Kind != "cli" {
+			threadID = th.ID
+			break
+		}
+	}
+	if threadID == "" {
+		t.Fatal("no chat thread")
+	}
+	if _, err := h.st.CreateMessage(context.Background(), agent.UserID, threadID, "agent", agent.ID, "Done. The table is in docs/pricing.md."); err != nil {
+		t.Fatal(err)
+	}
+	code, page, _ := h.do(http.MethodGet, "/agents/"+agent.ID, "", ip, nil)
+	if code != 200 || !strings.Contains(page, `aria-label="Download pricing.md"`) || !strings.Contains(page, "workspace/docs · 3 KB · changed") {
+		t.Fatalf("link %d", code)
+	}
+}

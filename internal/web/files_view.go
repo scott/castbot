@@ -1,17 +1,21 @@
 package web
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/scott/castbot/internal/store"
 )
+
+var mentionedPath = regexp.MustCompile(`(?:[A-Za-z0-9_-]+/)+[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*`)
 
 type filesPanel struct {
 	View           string
@@ -469,5 +473,38 @@ func fileTypeLabel(name string) string {
 		return "Image"
 	default:
 		return "File"
+	}
+}
+
+func (s *Server) linkMentionedFiles(ctx context.Context, userID, agentID string, msgs []msgView) {
+	cached, err := s.store.ListCached(ctx, userID, agentID)
+	if err != nil {
+		return
+	}
+	byName := map[string]store.CachedFile{}
+	for _, row := range cached {
+		byName[row.Name] = row
+	}
+	for i := range msgs {
+		if msgs[i].Author != "agent" || msgs[i].File != nil {
+			continue
+		}
+		match := mentionedPath.FindString(msgs[i].Body)
+		row, ok := byName[match]
+		if !ok || !safeGuestPath(match) {
+			continue
+		}
+		dir := path.Dir(row.Name)
+		place := "workspace"
+		if dir != "." {
+			place = "workspace/" + dir
+		}
+		base := "/agents/" + url.PathEscape(agentID)
+		msgs[i].File = &fileLinkView{
+			Name:     path.Base(row.Name),
+			Meta:     place + " · " + formatSize(row.Size) + " · changed",
+			Open:     base + "?panel=files&file=" + url.QueryEscape(row.ID),
+			Download: base + "/files/" + url.PathEscape(row.ID) + "/download",
+		}
 	}
 }

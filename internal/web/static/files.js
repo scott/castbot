@@ -98,6 +98,14 @@
         div.remove();
       });
       div.appendChild(retry);
+    } else if (row.state === "err") {
+      var dismiss = document.createElement("button");
+      dismiss.className = "ibtn line";
+      dismiss.type = "button";
+      dismiss.setAttribute("aria-label", "Dismiss " + row.name);
+      dismiss.innerHTML = '<svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      dismiss.addEventListener("click", function () { div.remove(); });
+      div.appendChild(dismiss);
     }
     row.node = div;
     return div;

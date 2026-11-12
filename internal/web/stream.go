@@ -314,6 +314,7 @@ func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user stor
 		agent = presentAgent(row, false, userLocation(user.Timezone))
 	}
 	views := presentMessages([]store.Message{msg}, agent, s.store.Now(), userLocation(user.Timezone))
+	s.linkMentionedFiles(ctx, user.ID, runRow.AgentID, views)
 	if len(views) == 0 {
 		return writeSSE(w, seq, "done", "")
 	}

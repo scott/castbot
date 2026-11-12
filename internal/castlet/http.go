@@ -489,11 +489,15 @@ func (s *Supervisor) importMemory(w http.ResponseWriter, r *http.Request) {
 }
 
 func safeRel(name string) (string, bool) {
-	name = strings.TrimPrefix(path.Clean("/"+name), "/")
-	if name == "" || name == "." || strings.HasPrefix(name, "../") || name == ".." {
+	if strings.ContainsRune(name, 0) || strings.Contains(name, "\\") {
 		return "", false
 	}
-	if strings.Contains(name, "\\") {
+	low := strings.ToLower(name)
+	if strings.Contains(low, "%2f") || strings.Contains(low, "%5c") || strings.Contains(low, "%00") || strings.Contains(low, "%2e%2e") {
+		return "", false
+	}
+	name = strings.TrimPrefix(path.Clean("/"+name), "/")
+	if name == "" || name == "." || strings.HasPrefix(name, "../") || name == ".." {
 		return "", false
 	}
 	return name, true

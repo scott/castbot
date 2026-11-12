@@ -37,6 +37,10 @@ type chipView struct {
 	Name string
 }
 
+type fileLinkView struct {
+	Name, Meta, Open, Download string
+}
+
 type msgView struct {
 	ID, Author, Body, Text, Color, Letter, Stamp, Day, At string
 	Origin                                                string
@@ -47,6 +51,7 @@ type msgView struct {
 	Href, Pill, PillClass, Sub                            string
 	Chips                                                 []chipView
 	PathLines                                             []string
+	File                                                  *fileLinkView
 }
 
 type threadView struct {

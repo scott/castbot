@@ -49,3 +49,34 @@ func TestWorkspaceMethodsSendEdgeAuth(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceMethodsRejectEscapes(t *testing.T) {
+	var hits int
+	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if strings.Contains(r.URL.Path, "..") || strings.Contains(r.URL.RawPath, "..") {
+			t.Errorf("requested %s", r.URL.RequestURI())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `[{"name":"notes.txt","size":1},{"name":"../etc/passwd","size":2},{"name":"/etc/passwd","size":3},{"name":"..%2f..%2fetc","size":4},{"name":"a\u0000b","size":5}]`)
+	}))
+	t.Cleanup(edge.Close)
+	m := newTestClient(t, newScriptAPI(t, ""), "do-token")
+	ctx := context.Background()
+	listed, err := m.ListWorkspace(ctx, edge.URL, "agent-token")
+	if err != nil || len(listed) != 1 || listed[0].Name != "notes.txt" {
+		t.Fatalf("list %#v %v", listed, err)
+	}
+	before := hits
+	for _, name := range []string{"../etc/passwd", "/etc/passwd", "..%2f..%2fetc", "notes\x00.txt", "docs/../../secret"} {
+		if _, err := m.ReadWorkspace(ctx, edge.URL, "agent-token", name); err == nil {
+			t.Fatalf("read %q", name)
+		}
+		if err := m.WriteWorkspace(ctx, edge.URL, "agent-token", name, strings.NewReader("x")); err == nil {
+			t.Fatalf("write %q", name)
+		}
+	}
+	if hits != before {
+		t.Fatalf("escape made %d calls", hits-before)
+	}
+}
