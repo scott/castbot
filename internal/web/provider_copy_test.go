@@ -55,8 +55,8 @@ func TestPagesDoNotSayProviderA(t *testing.T) {
 	if !strings.Contains(card, label) || !strings.Contains(card, "OpenRouter") || strings.Contains(html.UnescapeString(card), "Provider A") {
 		t.Fatal("card did not name the model")
 	}
-	if !strings.Contains(card, "your own OpenRouter key") {
-		t.Fatal("missing key copy did not name OpenRouter")
+	if strings.Contains(card, "Add a model key first") || strings.Contains(card, "your own OpenRouter key") || strings.Contains(card, "disabled") {
+		t.Fatal("server key still blocked the card")
 	}
 
 	agent := vaultAgent(t, h.st, user.ID, "Scout")

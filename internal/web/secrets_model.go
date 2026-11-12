@@ -16,9 +16,13 @@ func providerEnv(manifest string) string {
 	return strings.TrimSpace(os.Getenv(castcfg.ProviderKeyEnv(manifest)))
 }
 
-// serverKeyLabel is the stand-in for a key set on the server, shared by every agent.
+// serverKeyLabel is the stand-in note for a key set on the server, shared by every agent.
 // Adding a key in the vault overrides it.
 const serverKeyLabel = "Server key (set by the admin, shared by all agents). Add your own key to override it."
+
+// serverKeyShort is the row and card label for that same server key.
+// The long note is shown once, not repeated as the label.
+const serverKeyShort = "Server key"
 
 func isServerKey(label string) bool {
 	return strings.TrimSpace(label) == serverKeyLabel

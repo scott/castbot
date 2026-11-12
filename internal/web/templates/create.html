@@ -47,7 +47,7 @@
 <div class="field"><span class="lab">Job</span><textarea class="ta sm" name="job" maxlength="160" aria-label="Job">{{.Create.Card.Job}}</textarea></div>
 <div class="field"><span class="lab">Instructions</span><textarea class="ta" name="instructions" maxlength="8000" aria-label="Instructions">{{.Create.Card.Instructions}}</textarea><p class="help">This becomes instructions.md. Do not put keys here; add them in Settings, Secrets.</p></div>
 <div class="field"><span class="lab">Model</span><div class="selwrap"><select class="sel" name="model" aria-label="Model">{{range .Create.Card.Models}}<option value="{{.ID}}"{{if .On}} selected{{end}}>{{.Label}}</option>{{end}}</select></div></div>
-<div class="field"><span class="lab">Model key</span><p class="fineprint">From your vault. Values are never shown.{{if .Create.Card.KeyLabel}} {{.Create.Card.KeyLabel}}{{end}}</p></div>
+<div class="field"><span class="lab">Model key</span><p class="fineprint">{{if .Create.Card.ServerKey}}Values are never shown. {{.Create.Card.KeyLine}}{{else}}From your vault. Values are never shown.{{if .Create.Card.KeyLabel}} {{.Create.Card.KeyLabel}}{{end}}{{end}}</p></div>
 <div class="field"><span class="lab">Machine</span><div class="sugs">{{range .Create.Card.Sizes}}<label class="pchip"><input type="radio" name="size" value="{{.ID}}"{{if .On}} checked{{end}}>{{.Label}}</label>{{end}}</div></div>
 <div class="field"><span class="lab">Pause</span><div class="selwrap"><select class="sel" name="idle" aria-label="Pause after idle">{{range .Create.Card.Idles}}<option value="{{.Sec}}"{{if .On}} selected{{end}}>{{.Label}}</option>{{end}}</select></div><p class="help">Size and idle time are fixed once the machine exists.</p></div>
 </div>
@@ -65,7 +65,7 @@
 <div class="wide"><dt>Instructions</dt><dd><span class="instr">{{.Create.Card.Instructions}}</span></dd></div>
 <div><dt>Machine</dt><dd>{{.Create.Card.SizeLabel}}<div class="t2">{{.Create.Card.HourCost}}</div></dd></div>
 <div><dt>Pause</dt><dd>{{.Create.Card.IdleLabel}}<div class="t2">{{.Create.Card.DayCost}}</div></dd></div>
-{{if .Create.Card.KeyLabel}}<div><dt>Model key</dt><dd>From your vault · {{.Create.Card.KeyLabel}}</dd></div>{{end}}
+{{if .Create.Card.KeyLine}}<div><dt>Model key</dt><dd>{{.Create.Card.KeyLine}}</dd></div>{{end}}
 </dl>
 {{if .Create.Card.Schedule}}<p class="rhint2"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span>You said {{.Create.Card.Schedule}}. Once {{.Create.Card.Name}} is running, it can set that up as a routine for you.</span></p>{{end}}
 <div class="setup-f">

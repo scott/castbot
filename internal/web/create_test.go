@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/store"
 )
@@ -542,32 +543,237 @@ func TestNoSecretsInInstructionsOrLogs(t *testing.T) {
 	}
 }
 
-func TestNoServerKeyLent(t *testing.T) {
-	h, fake, _ := createLab(t)
-	t.Setenv("CASTBOT_PROVIDER_KEY_OPENROUTER", "server-side-demo")
-	user, secret := h.account("nokey@example.com", "Alex Rivera", "correct-horse-1")
-	ip := "203.0.113.214:9"
-	h.login("nokey@example.com", "correct-horse-1", secret, ip, false)
-	code, _, hdr := h.do(http.MethodPost, "/new-agent/describe", h.form(urlValues("Make me an agent called Scout that checks example-org/docs for broken links.")), ip, nil)
-	body := follow(t, h, ip, code, hdr)
-	if !strings.Contains(body, "Add a model key first") || !strings.Contains(body, "Add a key in Secrets") || !strings.Contains(body, "disabled") {
-		t.Fatalf("key gate\n%s", body)
+func clearServerProviderKeys(t *testing.T) {
+	t.Helper()
+	for _, slot := range modelSlots() {
+		if name := castcfg.ProviderKeyEnv(slot.Manifest); name != "" {
+			t.Setenv(name, "")
+		}
 	}
-	if strings.Contains(body, "server-side-demo") {
-		t.Fatal("page showed the server key")
+}
+
+func TestCreateUsesServerKey(t *testing.T) {
+	clearServerProviderKeys(t)
+	slot, ok := slotForModel(defaultModelID())
+	if !ok || slot.Env == "" {
+		t.Fatal("default model has no provider slot")
 	}
-	code, _, hdr = h.do(http.MethodPost, "/new-agent/create", h.form(url.Values{"confirm": {"card"}}), ip, nil)
-	if code == http.StatusSeeOther {
-		follow(t, h, ip, code, hdr)
+	envName := castcfg.ProviderKeyEnv(slot.Manifest)
+	if envName == "" {
+		t.Fatal("provider env name")
 	}
-	if len(agentRows(t, h, user.ID)) != 0 || len(fake.Creates) != 0 {
-		t.Fatalf("create without a key %d", code)
+	const serverKey = "server-side-demo"
+	const userKey = "demo-model-key"
+	scout := "Make me an agent called Scout that checks example-org/docs for broken links."
+
+	t.Run("server key only", func(t *testing.T) {
+		t.Setenv(envName, serverKey)
+		h, fake, _ := createLab(t)
+		user, secret := h.account("server-only@example.com", "Alex Rivera", "correct-horse-1")
+		ip := "203.0.113.230:9"
+		h.login("server-only@example.com", "correct-horse-1", secret, ip, false)
+		card := describeCard(t, h, ip, scout)
+		if strings.Contains(card, serverKey) {
+			t.Fatal("card showed the server key")
+		}
+		if !cardReady(card, "Scout") || !strings.Contains(card, serverKeyShort) || strings.Contains(card, "From your vault · "+serverKeyShort) {
+			t.Fatal("server key did not enable the card")
+		}
+		form := advancedPage(t, h, ip, serverKey)
+		if strings.Contains(form, "Add a model key first") || !strings.Contains(form, "Create and start") || !strings.Contains(form, serverKeyShort) {
+			t.Fatal("server key did not show on the form")
+		}
+		assertServerKeyNoteOnce(t, h, ip, serverKey)
+		agent := createFromCard(t, h, fake, user.ID, ip, "Scout", serverKey)
+		assertRunsWith(t, h, user.ID, agent.ID, ip, slot.Env, serverKey, "")
+		relay := createFromForm(t, h, user, ip, "Relay", serverKey)
+		if relay.StatusCode != http.StatusSeeOther {
+			t.Fatal("form create did not succeed")
+		}
+		made := agentNamed(t, h, user.ID, "Relay")
+		assertRunsWith(t, h, user.ID, made.ID, ip, slot.Env, serverKey, "")
+		if len(fake.Creates) != 2 {
+			t.Fatalf("creates %d", len(fake.Creates))
+		}
+	})
+
+	t.Run("no key", func(t *testing.T) {
+		t.Setenv(envName, "")
+		h, fake, _ := createLab(t)
+		user, secret := h.account("no-key@example.com", "Alex Rivera", "correct-horse-1")
+		ip := "203.0.113.231:9"
+		h.login("no-key@example.com", "correct-horse-1", secret, ip, false)
+		card := describeCard(t, h, ip, scout)
+		if cardReady(card, "Scout") || !strings.Contains(card, "Add a model key first") || !strings.Contains(card, "Add a key in Secrets") || !strings.Contains(card, "disabled") || !strings.Contains(card, "your own "+slot.Title+" key") {
+			t.Fatal("missing key did not block the card")
+		}
+		code, _, hdr := h.do(http.MethodPost, "/new-agent/create", h.form(url.Values{"confirm": {"card"}}), ip, nil)
+		if code == http.StatusSeeOther {
+			follow(t, h, ip, code, hdr)
+		}
+		if len(agentRows(t, h, user.ID)) != 0 || len(fake.Creates) != 0 {
+			t.Fatalf("card create without a key %d", code)
+		}
+		got := createFromForm(t, h, user, ip, "Scout", "")
+		if got.StatusCode != http.StatusBadRequest || !strings.Contains(got.Body, "Add a model key first") || !strings.Contains(got.Body, "your own "+slot.Title+" key") {
+			t.Fatal("form create without a key was not blocked")
+		}
+		if len(agentRows(t, h, user.ID)) != 0 || len(fake.Creates) != 0 {
+			t.Fatal("form create without a key inserted an agent")
+		}
+	})
+
+	t.Run("user key wins", func(t *testing.T) {
+		t.Setenv(envName, serverKey)
+		h, fake, _ := createLab(t)
+		user, secret := h.account("user-wins@example.com", "Alex Rivera", "correct-horse-1")
+		addModelKey(t, h, user.ID)
+		ip := "203.0.113.232:9"
+		h.login("user-wins@example.com", "correct-horse-1", secret, ip, false)
+		card := describeCard(t, h, ip, scout)
+		if strings.Contains(card, serverKey) || strings.Contains(card, userKey) {
+			t.Fatal("card showed a key")
+		}
+		if !cardReady(card, "Scout") || !strings.Contains(card, "provider-a-main") || strings.Contains(card, serverKeyShort) {
+			t.Fatal("vault key did not win on the card")
+		}
+		form := advancedPage(t, h, ip, serverKey)
+		if strings.Contains(form, userKey) || !strings.Contains(form, "provider-a-main") || strings.Contains(form, serverKeyShort) || strings.Contains(form, "Add a model key first") {
+			t.Fatal("vault key did not win on the form")
+		}
+		agent := createFromCard(t, h, fake, user.ID, ip, "Scout", serverKey)
+		assertRunsWith(t, h, user.ID, agent.ID, ip, slot.Env, userKey, serverKey)
+		code, secrets, _ := h.do(http.MethodGet, "/settings/secrets", "", ip, nil)
+		if code != http.StatusOK || strings.Contains(secrets, serverKeyLabel) || !strings.Contains(secrets, "provider-a-main") || strings.Contains(secrets, serverKey) || strings.Contains(secrets, userKey) {
+			t.Fatal("vault key did not replace the server note")
+		}
+		got := createFromForm(t, h, user, ip, "Relay", serverKey)
+		if got.StatusCode != http.StatusSeeOther {
+			t.Fatal("form create with a vault key did not succeed")
+		}
+		made := agentNamed(t, h, user.ID, "Relay")
+		assertRunsWith(t, h, user.ID, made.ID, ip, slot.Env, userKey, serverKey)
+	})
+}
+
+func describeCard(t *testing.T, h *harness, ip, text string) string {
+	t.Helper()
+	code, _, hdr := h.do(http.MethodPost, "/new-agent/describe", h.form(urlValues(text)), ip, nil)
+	return follow(t, h, ip, code, hdr)
+}
+
+func cardReady(body, name string) bool {
+	return strings.Contains(body, "Create "+name) && !strings.Contains(body, "Add a model key first") && !strings.Contains(body, "keymiss") && !strings.Contains(body, "disabled")
+}
+
+func createFromCard(t *testing.T, h *harness, fake *host.Fake, userID, ip, name, secret string) store.Agent {
+	t.Helper()
+	before := len(fake.Creates)
+	code, body, hdr := h.do(http.MethodPost, "/new-agent/create", h.form(url.Values{"confirm": {"card"}}), ip, nil)
+	if code != http.StatusSeeOther || !strings.HasPrefix(hdr.Get("Location"), "/agents/") {
+		if secret != "" && strings.Contains(body, secret) {
+			t.Fatal("card create failed")
+		}
+		t.Fatalf("card create %d %s", code, hdr.Get("Location"))
 	}
-	addModelKey(t, h, user.ID)
-	code, body, _ = h.do(http.MethodGet, "/new-agent", "", ip, nil)
-	if code != 200 || strings.Contains(body, "disabled") || !strings.Contains(body, "Create Scout") || strings.Contains(body, "server-side-demo") {
-		t.Fatalf("key return\n%s", body)
+	page := follow(t, h, ip, code, hdr)
+	if secret != "" && strings.Contains(page, secret) {
+		t.Fatal("created page showed the key")
 	}
+	agent := agentNamed(t, h, userID, name)
+	if len(fake.Creates) != before+1 {
+		t.Fatalf("creates %d", len(fake.Creates))
+	}
+	return agent
+}
+
+type formResult struct {
+	StatusCode int
+	Body       string
+}
+
+func advancedPage(t *testing.T, h *harness, ip, secret string) string {
+	t.Helper()
+	code, body, _ := h.do(http.MethodGet, "/new-agent?advanced=1", "", ip, nil)
+	if code != http.StatusOK {
+		t.Fatalf("advanced %d", code)
+	}
+	if secret != "" && strings.Contains(body, secret) {
+		t.Fatal("form showed the key")
+	}
+	return body
+}
+
+func createFromForm(t *testing.T, h *harness, user store.User, ip, name, secret string) formResult {
+	t.Helper()
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := map[string][]string{
+		"form": {"agent"}, "confirm": {"advanced"}, "name": {name}, "title": {"Link checker"},
+		"section": {sec.ID}, "model": {defaultModelID()}, "instructions": {"Check the docs."},
+		"job": {"Check example-org/docs for broken links."},
+	}
+	code, body, _ := h.send(http.MethodPost, "/new-agent", ip, fields, nil)
+	if secret != "" && strings.Contains(body, secret) {
+		t.Fatal("form response showed the key")
+	}
+	return formResult{StatusCode: code, Body: body}
+}
+
+func assertServerKeyNoteOnce(t *testing.T, h *harness, ip, secret string) {
+	t.Helper()
+	code, body, _ := h.do(http.MethodGet, "/settings/secrets", "", ip, nil)
+	if code != http.StatusOK {
+		t.Fatalf("secrets %d", code)
+	}
+	if secret != "" && strings.Contains(body, secret) {
+		t.Fatal("secrets page showed the key")
+	}
+	if strings.Count(body, serverKeyLabel) != 1 {
+		t.Fatalf("server key note count %d", strings.Count(body, serverKeyLabel))
+	}
+	if !strings.Contains(body, `class="lbl mono">`+serverKeyShort+`</span>`) {
+		t.Fatal("secrets row did not label the server key")
+	}
+}
+
+func assertRunsWith(t *testing.T, h *harness, userID, agentID, ip, envName, want, other string) {
+	t.Helper()
+	waitBoot(t, h, userID, agentID)
+	_, token, err := h.st.VMCredentials(context.Background(), userID, agentID)
+	if err != nil || token == "" {
+		t.Fatal("machine token missing")
+	}
+	code, body, _ := h.do(http.MethodGet, "/api/castlet/agents/"+agentID+"/secrets", "", ip, map[string]string{"Authorization": "Bearer " + token})
+	if code != http.StatusOK {
+		t.Fatalf("secrets pull %d", code)
+	}
+	if !strings.Contains(body, envName) || !strings.Contains(body, want) {
+		t.Fatal("pull did not include the key the agent runs with")
+	}
+	if other != "" && strings.Contains(body, other) {
+		t.Fatal("pull included the other key")
+	}
+	bundle, err := h.st.LatestBundle(context.Background(), userID, agentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(bundle.YAML, want) || strings.Contains(bundle.Instructions, want) || (other != "" && (strings.Contains(bundle.YAML, other) || strings.Contains(bundle.Instructions, other))) {
+		t.Fatal("bundle stored a key")
+	}
+}
+
+func agentNamed(t *testing.T, h *harness, userID, name string) store.Agent {
+	t.Helper()
+	for _, row := range agentRows(t, h, userID) {
+		if row.Name == name {
+			return row
+		}
+	}
+	t.Fatalf("missing %s", name)
+	return store.Agent{}
 }
 
 func TestRepromptUnclear(t *testing.T) {
