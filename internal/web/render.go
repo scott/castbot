@@ -21,6 +21,7 @@ var views = template.Must(template.New("root").Funcs(template.FuncMap{
 		}
 		return parts[0]
 	},
+	"modelLabel": modelLabel,
 }).ParseFS(templateFS, "templates/*.html"))
 
 func execTemplate(name string, data any) (string, error) {

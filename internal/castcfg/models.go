@@ -22,6 +22,8 @@ func ManifestJSON() []byte { return manifestJSON }
 
 type provider struct {
 	Key            string   `json:"key"`
+	Name           string   `json:"name"`
+	DisplayName    string   `json:"displayName"`
 	Default        bool     `json:"default"`
 	Prefixes       []string `json:"prefixes"`
 	DefaultModel   string   `json:"defaultModel"`

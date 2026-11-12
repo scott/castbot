@@ -115,7 +115,7 @@ func shootS07NoKey(t *testing.T, browser context.Context, dir string, width, hei
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.SendKeys(`#composer textarea`, "hello", chromedp.ByQuery),
 		chromedp.Click(`#send-btn`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("No key for provider digitalocean. Ask the owner to add it.")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("No key for provider DigitalOcean. Ask the owner to add it.")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
 	}); err != nil {
 		t.Fatal(err)
 	}

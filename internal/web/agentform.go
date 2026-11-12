@@ -130,6 +130,7 @@ func (s *Server) formFromAgent(ctx context.Context, user store.User, agent store
 	bundle, err := s.store.LatestBundle(ctx, user.ID, agent.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			f.keepModel()
 			return f, nil
 		}
 		return agentForm{}, err
@@ -140,6 +141,7 @@ func (s *Server) formFromAgent(ctx context.Context, user store.User, agent store
 		if msg := yamlErr(err); msg != "" {
 			f.SaveErr = msg
 		}
+		f.keepModel()
 		return f, nil
 	}
 	f.Instructions = bundle.Instructions
@@ -273,7 +275,7 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 	hosted := h != nil && image != "" && publicURL != ""
 	if hosted {
 		if _, ok := s.userModelKey(r.Context(), user.ID, f.Model); !ok {
-			f.SaveErr = "Add a model key first. Agents run on your own Provider A key, and you have not added one yet."
+			f.SaveErr = missingModelKeyCopy(f.Model)
 			s.showForm(w, r, user, f, http.StatusBadRequest)
 			return
 		}
@@ -293,7 +295,7 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 		}
 		return
 	}
-	if _, err := s.storeBundle(r.Context(), user.ID, agent.ID, spec); err != nil {
+	if _, err := s.storeBundle(r.Context(), user.ID, agent.ID, spec, false); err != nil {
 		if errors.Is(err, errFormMismatch) {
 			f.SaveErr = "The agent file does not match this form."
 			s.showForm(w, r, user, f, http.StatusBadRequest)
@@ -380,7 +382,7 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	version, err := s.storeBundle(r.Context(), user.ID, agent.ID, spec)
+	version, err := s.storeBundle(r.Context(), user.ID, agent.ID, spec, spec.Model == agent.Model && agent.Model != "")
 	if err != nil {
 		if errors.Is(err, errFormMismatch) {
 			f.SaveErr = "The agent file does not match this form."
@@ -611,6 +613,7 @@ func unknownTools(spec castcfg.Spec) string {
 }
 
 func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec, []byte, string, bool) {
+	previous := f.Model
 	if id := strings.TrimSpace(r.FormValue("draft")); draftID(id) {
 		f.DraftID = id
 	}
@@ -618,6 +621,9 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 	f.Title = strings.TrimSpace(r.FormValue("title"))
 	f.SectionID = strings.TrimSpace(r.FormValue("section"))
 	f.Model = strings.TrimSpace(r.FormValue("model"))
+	if f.Editing && f.Model == "" && previous != "" {
+		f.Model = previous
+	}
 	f.Instructions = r.FormValue("instructions")
 	f.Version = r.FormValue("version")
 	f.GitHub = strings.TrimSpace(r.FormValue("github"))
@@ -663,7 +669,7 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 	if f.Model == "" {
 		f.ModelErr = "Choose a model from the list."
 		good = false
-	} else if !castcfg.KnownModel(f.Model) {
+	} else if !castcfg.KnownModel(f.Model) && !(f.Editing && f.Model == previous) {
 		f.ModelErr = "That model is not in the provider manifest."
 		good = false
 	}
@@ -856,7 +862,7 @@ func (s *Server) bindKept(ctx context.Context, userID, agentID string, f *agentF
 	return nil
 }
 
-func (s *Server) storeBundle(ctx context.Context, userID, agentID string, spec castcfg.Spec) (string, error) {
+func (s *Server) storeBundle(ctx context.Context, userID, agentID string, spec castcfg.Spec, allowUnknown bool) (string, error) {
 	raw, err := castcfg.RenderYAML(spec)
 	if err != nil {
 		return "", err
@@ -865,7 +871,7 @@ func (s *Server) storeBundle(ctx context.Context, userID, agentID string, spec c
 	if err != nil {
 		return "", err
 	}
-	if !castcfg.Agree(spec, parsed) || !castcfg.KnownModel(spec.Model) {
+	if !castcfg.Agree(spec, parsed) || strings.TrimSpace(spec.Model) == "" || (!allowUnknown && !castcfg.KnownModel(spec.Model)) {
 		return "", errFormMismatch
 	}
 	for _, name := range parsed.Tools {

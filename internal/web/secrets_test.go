@@ -265,10 +265,11 @@ func TestModelKeyDeleteAndEnvFallback(t *testing.T) {
 	h.login("ada-key@example.com", "correct-horse-1", secret, ip, false)
 	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "env-provider-value")
 	agent := vaultAgent(t, h.st, user.ID, "Atlas")
-	if err := h.st.SetAgentModel(context.Background(), user.ID, agent.ID, "Provider A / model-large"); err != nil {
+	model := defaultModelID()
+	if err := h.st.SetAgentModel(context.Background(), user.ID, agent.ID, model); err != nil {
 		t.Fatal(err)
 	}
-	_, value, missing := h.srv.effectiveModelSecret(context.Background(), user.ID, "Provider A / model-large")
+	_, value, missing := h.srv.effectiveModelSecret(context.Background(), user.ID, model)
 	if missing != "" || value != "env-provider-value" {
 		t.Fatal("env fallback did not win")
 	}
@@ -278,7 +279,7 @@ func TestModelKeyDeleteAndEnvFallback(t *testing.T) {
 	if code != http.StatusSeeOther {
 		t.Fatalf("add key %d", code)
 	}
-	_, value, missing = h.srv.effectiveModelSecret(context.Background(), user.ID, "Provider A / model-large")
+	_, value, missing = h.srv.effectiveModelSecret(context.Background(), user.ID, model)
 	if missing != "" || value != "vault-provider-value" {
 		t.Fatal("vault key did not win")
 	}
@@ -286,7 +287,7 @@ func TestModelKeyDeleteAndEnvFallback(t *testing.T) {
 	id = strings.TrimSuffix(id, "?watch=1")
 	code, body, _ := h.do(http.MethodPost, "/settings/secrets/item/"+id+"/delete", h.form(url.Values{}), ip, nil)
 	shown := html.UnescapeString(body)
-	if code != http.StatusConflict || !strings.Contains(shown, "This key is in use") || !strings.Contains(shown, "provider-a-main is the Provider A key for Atlas.") || !strings.Contains(shown, "Replace this key, or change those agents' model first.") || !strings.Contains(body, "/replace") || strings.Contains(shown, "Add another") || !strings.Contains(shown, "Agent secrets") {
+	if code != http.StatusConflict || !strings.Contains(shown, "This key is in use") || !strings.Contains(shown, "provider-a-main is the OpenRouter key for Atlas.") || !strings.Contains(shown, "Replace this key, or change those agents' model first.") || !strings.Contains(body, "/replace") || strings.Contains(shown, "Add another") || !strings.Contains(shown, "Agent secrets") {
 		t.Fatalf("blocked delete %d", code)
 	}
 	if strings.Contains(body, "vault-provider-value") || strings.Contains(body, "env-provider-value") {
@@ -393,10 +394,11 @@ func TestMachinePullIsGrantPlusModelKey(t *testing.T) {
 	h.srv.SetHost(fake, "example.invalid/castbot-runtime:s08", "https://castbot.example")
 	user, _ := h.account("pull@example.com", "Ada", "correct-horse-1")
 	agent := vaultAgent(t, h.st, user.ID, "Atlas")
-	if err := h.st.SetAgentModel(context.Background(), user.ID, agent.ID, "Provider A / model-large"); err != nil {
+	model := defaultModelID()
+	if err := h.st.SetAgentModel(context.Background(), user.ID, agent.ID, model); err != nil {
 		t.Fatal(err)
 	}
-	agent.Model = "Provider A / model-large"
+	agent.Model = model
 	const granted = "grant-sample-value"
 	const other = "other-sample-value"
 	const modelKey = "model-key-sample"
@@ -413,7 +415,7 @@ func TestMachinePullIsGrantPlusModelKey(t *testing.T) {
 	if err := h.st.GrantSecret(context.Background(), user.ID, agent.ID, g.ID); err != nil {
 		t.Fatal(err)
 	}
-	yaml := "name: Atlas\nbrain:\n  model: Provider A / model-large\n"
+	yaml := "name: Atlas\nbrain:\n  model: " + model + "\n"
 	if _, err := h.st.PutBundle(context.Background(), user.ID, agent.ID, "1", yaml, "Stay brief.\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +444,8 @@ func TestNewestVaultKeyWins(t *testing.T) {
 	user, secret := h.account("ada-newest@example.com", "Ada", "correct-horse-1")
 	h.login("ada-newest@example.com", "correct-horse-1", secret, ip, false)
 	agent := vaultAgent(t, h.st, user.ID, "Atlas")
-	if err := h.st.SetAgentModel(context.Background(), user.ID, agent.ID, "Provider A / model-large"); err != nil {
+	model := defaultModelID()
+	if err := h.st.SetAgentModel(context.Background(), user.ID, agent.ID, model); err != nil {
 		t.Fatal(err)
 	}
 	h.st.SetNow(func() time.Time { return time.Date(2026, 10, 28, 15, 0, 0, 0, time.UTC) })
@@ -459,7 +462,7 @@ func TestNewestVaultKeyWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, value, missing := h.srv.effectiveModelSecret(context.Background(), user.ID, "Provider A / model-large")
+	_, value, missing := h.srv.effectiveModelSecret(context.Background(), user.ID, model)
 	if missing != "" || value != "new-vault-value" {
 		t.Fatal("newest vault key did not win")
 	}
@@ -488,7 +491,7 @@ func TestNewestVaultKeyWins(t *testing.T) {
 		t.Fatalf("effective delete %d", code)
 	}
 	third := slots[2]
-	model := third.Manifest + "/demo-model"
+	model = third.Manifest + "/demo-model"
 	if inf, ok := castcfg.InferenceFor(model); !ok || inf.Key != third.Manifest {
 		t.Fatal("third provider model did not match")
 	}
@@ -652,7 +655,7 @@ func TestVaultMutationsNeedCSRFAndReplaceLock(t *testing.T) {
 	user, secret := h.account("ada-lock2@example.com", "Ada", "correct-horse-1")
 	h.login("ada-lock2@example.com", "correct-horse-1", secret, ip, false)
 	agent := vaultAgent(t, h.st, user.ID, "Atlas")
-	if err := h.st.SetAgentModel(context.Background(), user.ID, agent.ID, "Provider A / model-large"); err != nil {
+	if err := h.st.SetAgentModel(context.Background(), user.ID, agent.ID, defaultModelID()); err != nil {
 		t.Fatal(err)
 	}
 	readyMachine(t, h, fake, agent, "vm-lock", "running")

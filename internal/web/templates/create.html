@@ -58,7 +58,7 @@
 {{else}}
 <div class="setup-h"><span class="av {{.Create.Card.Color}}" aria-hidden="true">{{.Create.Card.Letter}}</span><div class="grow"><span class="lab">Name</span><p class="sname{{if .Create.Card.Conflict}} bad{{end}}">{{.Create.Card.Name}}</p>{{if .Create.Card.Auto}}<span class="tag-auto">Picked by castbot. Rename it any time.</span>{{end}}</div></div>
 {{if .Create.Card.Conflict}}<p class="ferr"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16v.5"/></svg><span>{{.Create.Card.Block}}</span></p>{{end}}
-{{if not .Create.Card.HasKey}}<div class="keymiss"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/></svg><span class="grow"><b>Add a model key first.</b> Agents run on your own Provider A key, and you have not added one yet.</span><a class="btn sm" href="/settings/secrets">Add a key in Secrets</a></div>{{end}}
+{{if not .Create.Card.HasKey}}<div class="keymiss"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/></svg><span class="grow"><b>Add a model key first.</b> {{.Create.Card.KeyMiss}}</span><a class="btn sm" href="/settings/secrets">Add a key in Secrets</a></div>{{end}}
 <dl class="sgrid">
 <div><dt>Job</dt><dd>{{if .Create.Card.Job}}{{.Create.Card.Job}}{{else}}Not set yet. It will ask you after it starts.{{end}}</dd></div>
 <div><dt>Model</dt><dd>{{.Create.Card.ModelLabel}}</dd></div>
