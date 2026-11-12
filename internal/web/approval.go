@@ -833,7 +833,7 @@ func (s *Server) approvalChrome(ctx context.Context, user store.User, agentID, r
 				elapsed, _ = formatElapsed(s.store.Now().Sub(started))
 			}
 			slot := actSlotHTML(runID, actRowHTML(out, elapsed), out.HideThread)
-			act = strings.Replace(slot, `hx-swap="outerHTML"`, `hx-swap="outerHTML" hx-swap-oob="outerHTML"`, 1)
+			act = strings.Replace(slot, `class="act-hold"`, `class="act-hold" hx-swap-oob="outerHTML"`, 1)
 		}
 	}
 	return execTemplate("approvalChrome", chromeView{

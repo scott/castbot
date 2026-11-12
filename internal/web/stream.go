@@ -294,6 +294,7 @@ func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user 
 		if err != nil {
 			return err
 		}
+		body += `<div id="tail-` + html.EscapeString(runRow.ID) + `" class="act-hold" hidden hx-swap-oob="outerHTML"></div>`
 		body += s.sideOOB(ctx, user, runRow.AgentID)
 		clearDwell(runRow.ID)
 		return writeSSE(w, ev.Seq, "fail", body)
@@ -369,11 +370,6 @@ func (s *Server) writeMarkdownProgress(ctx context.Context, w http.ResponseWrite
 	before, through := textBefore(events, ev.Seq)
 	prev, _ := md.Split(before)
 	closed, tail := md.Split(through)
-	for i := len(prev); i < len(closed); i++ {
-		if err := writeSSE(w, ev.Seq, "block", md.Render(closed[i].Raw)); err != nil {
-			return err
-		}
-	}
 	_, _, tools, fact, _ := foldRun(events)
 	pending := runRow.Status == "waiting_approval"
 	if rows, err := s.store.ListRunApprovals(ctx, user.ID, runRow.ID); err == nil {
@@ -404,8 +400,13 @@ func (s *Server) writeMarkdownProgress(ctx context.Context, w http.ResponseWrite
 	} else {
 		inner = strings.ReplaceAll(inner, `<span class="caret" aria-hidden="true"></span>`, "")
 	}
-	if err := writeSSE(w, ev.Seq, "tail", tailWrap(current.ID, inner)); err != nil {
+	if err := writeSSE(w, ev.Seq, "tail", inner); err != nil {
 		return err
+	}
+	for i := len(prev); i < len(closed); i++ {
+		if err := writeSSE(w, ev.Seq, "block", md.Render(closed[i].Raw)); err != nil {
+			return err
+		}
 	}
 	if err := writeSSE(w, ev.Seq, "tools", tools); err != nil {
 		return err

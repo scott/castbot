@@ -164,10 +164,12 @@
 <span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span>
 <div class="body">
 <div class="cards" sse-swap="card" hx-swap="innerHTML">{{template "approvalCards" .}}</div>
+<p class="stream" sse-swap="text" hx-swap="beforeend" hidden></p>
 <div class="tools" sse-swap="tools" hx-swap="innerHTML">{{.Tools}}</div>
 <div class="md" id="md-{{.RunID}}" aria-busy="true" sse-swap="block" hx-swap="beforeend">{{.Blocks}}</div>
 {{.Tail}}
-{{.Act}}
+<div class="act-slot" sse-swap="act" hx-swap="innerHTML">{{.Act}}</div>
+<div class="fail-slot" sse-swap="fail" hx-swap="innerHTML"></div>
 </div>
 </div>
 {{end}}

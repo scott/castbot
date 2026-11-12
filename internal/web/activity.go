@@ -142,7 +142,7 @@ func actSlotHTML(runID string, inner template.HTML, hidden bool) string {
 	var b strings.Builder
 	b.WriteString(`<div class="act-hold" id="tail-`)
 	b.WriteString(html.EscapeString(runID))
-	b.WriteString(`" sse-swap="act,fail" hx-swap="outerHTML"`)
+	b.WriteString(`"`)
 	if hidden {
 		b.WriteString(` hidden`)
 	}
@@ -157,7 +157,7 @@ func sidebarActHTML(out activityOut) template.HTML {
 }
 
 func tailWrap(runID, inner string) string {
-	return `<div class="md-tail" id="md-tail-` + html.EscapeString(runID) + `" sse-swap="tail" hx-swap="outerHTML">` + inner + `</div>`
+	return `<div class="md-tail" id="md-tail-` + html.EscapeString(runID) + `" sse-swap="tail" hx-swap="innerHTML">` + inner + `</div>`
 }
 
 type calmCopy struct {

@@ -1328,7 +1328,7 @@ html.light .m-user.c9.queued { border-color: #aae6f6; }
 .act .el { color: var(--tx3); font-weight: 500; }
 .act .hint { color: var(--tx3); font-weight: 500; }
 .act-hold[hidden], #netbar[hidden], .md-src { display: none; }
-.tools:empty, .md-tail:empty { display: none; }
+.tools:empty, .md-tail:empty, .fail-slot:empty, .act-slot:empty { display: none; }
 .ag .sub.act-sub { display: inline-flex; align-items: center; gap: 6px; }
 .md { display: grid; gap: 12px; min-width: 0; font-size: 15px; line-height: 1.6; color: var(--tx); }
 .md > * { margin: 0; min-width: 0; }

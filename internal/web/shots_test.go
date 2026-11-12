@@ -444,7 +444,7 @@ func shootError(t *testing.T, browser context.Context, dir string, width, height
 		chromedp.Poll(js(`(function(){return document.documentElement.classList.contains("light")&&`+retryInsideExpr()+`;})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
 		chromedp.SendKeys(`textarea[name="body"]`, "hello again", chromedp.ByQuery),
 		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var n=document.querySelectorAll(".errbox button").length;return n>=2&&`+retryInsideExpr()+`;})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		chromedp.Poll(js(`(function(){var n=document.querySelectorAll(".errbox button, .ch-body .calm button").length;return n>=2&&`+retryInsideExpr()+`;})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1343,7 +1343,7 @@ func saveShot(t *testing.T, ctx context.Context, path string) {
 }
 
 func retryInsideExpr() string {
-	return `(function(){var box=document.querySelector(".ch-body");var btns=box&&box.querySelectorAll(".errbox button");var btn=btns&&btns.length?btns[btns.length-1]:null;if(!box||!btn)return false;var a=box.getBoundingClientRect();var b=btn.getBoundingClientRect();return b.top>=a.top-1&&b.bottom<=a.bottom+1&&b.left>=a.left-1&&b.right<=a.right+1;})()`
+	return `(function(){var box=document.querySelector(".ch-body");var btns=box&&box.querySelectorAll(".errbox button, .calm button");var btn=btns&&btns.length?btns[btns.length-1]:null;if(!box||!btn)return false;var a=box.getBoundingClientRect();var b=btn.getBoundingClientRect();return b.top>=a.top-1&&b.bottom<=a.bottom+1&&b.left>=a.left-1&&b.right<=a.right+1;})()`
 }
 
 func retryInside() string {
