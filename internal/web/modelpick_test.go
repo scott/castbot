@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/scott/castbot/internal/castcfg"
+	"github.com/scott/castbot/internal/store"
 )
 
 func TestAdvancedKeepsTheCardModel(t *testing.T) {
@@ -55,6 +56,105 @@ func saveCard(t *testing.T, h *harness, userID, model string) {
 	}
 	if _, err := h.st.SaveCreateDraft(context.Background(), userID, string(raw)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEditKeepsAModelOutsideTheCatalog(t *testing.T) {
+	h := newHarness(t)
+	user, secret := h.account("qa02@example.com", "Ada", "correct-horse-1")
+	ip := "203.0.113.42:9"
+	h.login("qa02@example.com", "correct-horse-1", secret, ip, false)
+	const kept = "legacy-model-not-in-catalog"
+	if castcfg.KnownModel(kept) {
+		t.Fatal("fixture model is in the catalog")
+	}
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{
+		SectionID: sec.ID, Name: "Scout", Title: "Helper", Model: kept, Status: "ready",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, bare, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/edit", "", ip, nil)
+	if code != http.StatusOK || selectedOption(t, bare, "model") != kept {
+		t.Fatalf("edit without a bundle selected %q (%d)", selectedOption(t, bare, "model"), code)
+	}
+	if _, err := h.st.PutBundle(context.Background(), user.ID, agent.ID, "1", ":\n", "Check the docs.\n"); err != nil {
+		t.Fatal(err)
+	}
+	code, broken, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/edit", "", ip, nil)
+	if code != http.StatusOK || selectedOption(t, broken, "model") != kept {
+		t.Fatalf("edit with a broken file selected %q", selectedOption(t, broken, "model"))
+	}
+	yaml := "name: Scout\nbrain:\n  model: " + kept + "\n"
+	if _, err := h.st.PutBundle(context.Background(), user.ID, agent.ID, "2", yaml, "Check the docs.\n"); err != nil {
+		t.Fatal(err)
+	}
+	code, page, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/edit", "", ip, nil)
+	if code != http.StatusOK || selectedOption(t, page, "model") != kept {
+		t.Fatalf("edit did not preselect %s", kept)
+	}
+	fields := map[string][]string{
+		"form": {"agent"}, "name": {"Scout"}, "title": {"Helper"}, "section": {sec.ID},
+		"instructions": {"Check the docs."},
+	}
+	code, body, _ := h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, fields, nil)
+	if code != http.StatusSeeOther {
+		t.Fatalf("empty model post %d %s", code, snippet(body))
+	}
+	assertModel(t, h, user.ID, agent.ID, kept)
+	fields["model"] = []string{kept}
+	code, body, _ = h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, fields, nil)
+	if code != http.StatusSeeOther {
+		t.Fatalf("same model post %d %s", code, snippet(body))
+	}
+	assertModel(t, h, user.ID, agent.ID, kept)
+	fields["model"] = []string{"another-legacy-model"}
+	code, body, _ = h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, fields, nil)
+	if code != http.StatusBadRequest || !strings.Contains(body, "That model is not in the provider manifest.") {
+		t.Fatalf("other model %d %s", code, snippet(body))
+	}
+	assertModel(t, h, user.ID, agent.ID, kept)
+
+	fields = map[string][]string{
+		"form": {"agent"}, "confirm": {"advanced"}, "name": {"Relay"}, "title": {"Helper"},
+		"section": {sec.ID}, "model": {"another-legacy-model"}, "instructions": {"Check the docs."},
+	}
+	code, body, _ = h.send(http.MethodPost, "/new-agent", ip, fields, nil)
+	if code != http.StatusBadRequest || !strings.Contains(body, "That model is not in the provider manifest.") {
+		t.Fatalf("new agent %d %s", code, snippet(body))
+	}
+	rows, err := h.st.ListAgents(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ID != agent.ID || rows[0].Model != kept {
+		t.Fatalf("new agent wrote a model: %+v", rows)
+	}
+}
+
+func assertModel(t *testing.T, h *harness, userID, agentID, model string) {
+	t.Helper()
+	got, err := h.st.GetAgent(context.Background(), userID, agentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != model {
+		t.Fatalf("agent model %q", got.Model)
+	}
+	bundle, err := h.st.LatestBundle(context.Background(), userID, agentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := castcfg.ParseYAML(bundle.YAML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Model != model {
+		t.Fatalf("bundle model %q", spec.Model)
 	}
 }
 

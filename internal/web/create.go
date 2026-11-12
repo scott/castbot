@@ -712,7 +712,7 @@ func (s *Server) materialize(ctx context.Context, user store.User, card setupSta
 		Name: card.Name, Title: title, Version: "1", Model: card.Model,
 		Instructions: card.Instructions, Permissions: map[string]string{},
 	}
-	if _, err := s.storeBundle(ctx, user.ID, agent.ID, spec); err != nil {
+	if _, err := s.storeBundle(ctx, user.ID, agent.ID, spec, false); err != nil {
 		_ = s.store.DeleteAgent(ctx, user.ID, agent.ID)
 		return store.Agent{}, err
 	}
