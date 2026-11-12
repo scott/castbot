@@ -211,32 +211,6 @@ func (s *Server) denyRoutinePermission(job run.Job, appr store.Approval) {
 	s.runs.Hub.Notify(job.RunID)
 }
 
-func (s *Server) routinesHome(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
-	agents, err := s.store.ListAgents(r.Context(), user.ID)
-	if err != nil || len(agents) == 0 {
-		s.workspacePage(w, r)
-		return
-	}
-	last := agents[len(agents)-1]
-	http.Redirect(w, r, "/agents/"+url.PathEscape(last.ID)+"?panel=routines", http.StatusSeeOther)
-}
-
-func (s *Server) routinesRedirect(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
-	agent, err := s.store.GetAgent(r.Context(), user.ID, r.PathValue("id"))
-	if s.missing(w, err) {
-		return
-	}
-	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID)+"?panel=routines", http.StatusSeeOther)
-}
-
 func (s *Server) routinePreview(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.requireUser(w, r)
 	if !ok {

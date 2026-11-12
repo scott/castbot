@@ -437,7 +437,7 @@ func TestUnseenCLITokenIsRevokedWhenThePageIsNotSent(t *testing.T) {
 	if len(fake.Pushed) == 0 {
 		t.Fatal("revoke was not pushed")
 	}
-	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if code != 200 || !strings.Contains(body, "Not shown") || !strings.Contains(body, "Revoked") {
 		t.Fatalf("list %d", code)
 	}
@@ -515,12 +515,12 @@ func TestEdgeResumeAndUnknownFirstRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.Machines["vm-edge"] = host.Machine{ID: "vm-edge", State: "paused", Endpoint: "https://vm.example"}
-	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if code != 200 || !strings.Contains(body, "First running") || !strings.Contains(body, "unknown") {
 		t.Fatalf("page %d", code)
 	}
 	fake.Machines["vm-edge"] = host.Machine{ID: "vm-edge", State: "running", Endpoint: "https://vm.example"}
-	if code, _, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil); code != 200 {
+	if code, _, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil); code != 200 {
 		t.Fatal(code)
 	}
 	if !kindPresent(mustEvents(t, h, agent), store.EventEdgeResume) {

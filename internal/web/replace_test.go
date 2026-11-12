@@ -62,7 +62,7 @@ func TestReplacePageCopyAndRefusals(t *testing.T) {
 		}
 	}
 
-	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if code != 200 || !strings.Contains(body, "7b5e414 · Update available") || !strings.Contains(body, "A newer runtime is available (ff6d7ea).") {
 		t.Fatalf("available page %d", code)
 	}
@@ -101,7 +101,7 @@ func TestReplacePageCopyAndRefusals(t *testing.T) {
 		t.Fatalf("start %d %s", code, hdr.Get("Location"))
 	}
 	waitReplace(t, h, agent, ip, "Machine replaced.")
-	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if !strings.Contains(body, "Machine replaced.") || !strings.Contains(body, "Copied memory and 1 file.") || strings.Contains(body, "1 files.") {
 		t.Fatalf("success copy missing")
 	}
@@ -156,7 +156,7 @@ func TestReplaceRefusesWhileRunning(t *testing.T) {
 	if _, _, err := h.st.BeginReplacement(context.Background(), user.ID, agent.ID, "cli", "example.invalid/castbot-runtime:ff6d7ea", false); err != nil {
 		t.Fatal(err)
 	}
-	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if code != 200 || !strings.Contains(body, "A replacement is already running.") || !strings.Contains(body, "Starting a new machine") {
 		t.Fatalf("cli progress %d", code)
 	}
@@ -237,7 +237,7 @@ func TestReplaceFailureCopy(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected failure")
 	}
-	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if code != 200 || !strings.Contains(body, "The machine was not replaced.") || !strings.Contains(body, "The old machine could not be read.") || !strings.Contains(body, "Try again") {
 		t.Fatalf("failure page %d", code)
 	}
@@ -248,7 +248,7 @@ func waitReplace(t *testing.T, h *harness, agent store.Agent, ip, needle string)
 	deadline := time.Now().Add(5 * time.Second)
 	var last string
 	for time.Now().Before(deadline) {
-		code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+		code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 		last = body
 		if code == 200 && strings.Contains(body, needle) {
 			return
@@ -287,7 +287,7 @@ func TestReplaceCleanupDoesNotLockTheAgent(t *testing.T) {
 	if err := h.st.MarkCleanupPending(context.Background(), user.ID, row.ID, "copy", "copy"); err != nil {
 		t.Fatal(err)
 	}
-	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if code != 200 || strings.Contains(body, "Replacing") || strings.Contains(body, "cleanup pending") || strings.Contains(body, "This machine is being replaced.") || strings.Contains(body, "A replacement is already running.") {
 		t.Fatalf("locked page %d", code)
 	}

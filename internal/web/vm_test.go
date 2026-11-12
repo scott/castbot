@@ -50,7 +50,7 @@ func TestMachineHandlers(t *testing.T) {
 			if !containsTag(spec.Tags, host.InstanceTag(inst)) {
 				t.Fatalf("create tags %#v", spec.Tags)
 			}
-			code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+			code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 			if code != 200 || !strings.Contains(body, "Pause") || strings.Contains(body, spec.Bootstrap) || strings.Contains(body, "vm.example") {
 				t.Fatalf("page leaked or missed pause: %d", code)
 			}
@@ -92,7 +92,7 @@ func TestMachineHandlers(t *testing.T) {
 				t.Fatalf("fail %d", code)
 			}
 			waitMachine(t, h, agent, ip, "The machine did not start.")
-			_, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+			_, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 			if !strings.Contains(body, "Try again") {
 				t.Fatal("page has no retry")
 			}
@@ -504,7 +504,7 @@ func TestSweepReleasesStaleAndOrphans(t *testing.T) {
 			t.Fatalf("%s was deleted", id)
 		}
 	}
-	_, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	_, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if !strings.Contains(body, "Try again") {
 		t.Fatal(body)
 	}
@@ -542,7 +542,7 @@ func TestStartingMachineIsNotReady(t *testing.T) {
 	if !strings.Contains(body, "dot start") || !strings.Contains(body, "Starting") {
 		t.Fatal("starting state was not shown")
 	}
-	_, machine, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	_, machine, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if !strings.Contains(machine, "The machine is starting.") {
 		t.Fatal("machine page did not say it is starting")
 	}
@@ -557,7 +557,7 @@ func TestCreatingCopyMatchesTheChip(t *testing.T) {
 	if _, err := h.st.BeginVM(context.Background(), agent.UserID, agent.ID, host.MachineName(agent.ID), "example.invalid/castbot-runtime:s05"); err != nil {
 		t.Fatal(err)
 	}
-	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if code != 200 || !strings.Contains(body, "The machine is starting.") || !strings.Contains(body, ">Starting<") || strings.Contains(body, "The machine is waking.") {
 		t.Fatalf("creating copy %d %s", code, snippet(body))
 	}
@@ -607,7 +607,7 @@ func waitMachine(t *testing.T, h *harness, agent store.Agent, ip, needle string)
 	deadline := time.Now().Add(3 * time.Second)
 	var last string
 	for time.Now().Before(deadline) {
-		code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+		code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 		last = body
 		if code == 200 && strings.Contains(body, needle) {
 			return

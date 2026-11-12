@@ -597,7 +597,7 @@ func TestPendingReloadDoesNotBlockAndKeepsANewerSave(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+			h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 		}()
 	}
 	select {
@@ -684,7 +684,7 @@ func TestFailedReloadBacksOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.ReloadErr = errors.New("reload failed")
-	if code, _, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil); code != 200 {
+	if code, _, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil); code != 200 {
 		t.Fatal(code)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -704,7 +704,7 @@ func TestFailedReloadBacksOff(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if code, _, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil); code != 200 {
+	if code, _, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil); code != 200 {
 		t.Fatal(code)
 	}
 	time.Sleep(80 * time.Millisecond)

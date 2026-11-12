@@ -54,7 +54,7 @@ func shootReplace(t *testing.T, browser context.Context, dir string, width, heig
 	h, agent, path, ready := replaceShot(t, theme, kind)
 	ctx := openS07(t, browser, h, agent.UserID, path, width, height, ready)
 	if kind == "09b" || kind == "09d" {
-		if err := chromedp.Run(ctx, chromedp.Click(`a[href$="/machine/replace"]`, chromedp.ByQuery)); err != nil && !strings.Contains(err.Error(), "navigated") {
+		if err := chromedp.Run(ctx, chromedp.Click(`a[href*="/machine/replace"]`, chromedp.ByQuery)); err != nil && !strings.Contains(err.Error(), "navigated") {
 			t.Fatal(err)
 		}
 		waitText(t, ctx, "Replace this machine?")

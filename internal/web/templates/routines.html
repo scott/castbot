@@ -1,6 +1,6 @@
 {{define "routinesPane"}}
-<aside class="pane routines" aria-label="{{.Agent.Name}} routines"><div class="grabber" aria-hidden="true"></div>
-<div class="pane-h"><span class="av {{.Agent.Color}} lg" aria-hidden="true">{{.Agent.Letter}}</span><div class="grow"><div class="nm">{{.Agent.Name}}</div><div class="sub">{{.Agent.Title}}{{if .Agent.Created}} · created {{.Agent.Created}}{{end}}</div></div><a class="btn ghost sm pclose dt-only" href="/agents/{{.Agent.ID}}" aria-label="Close agent panel (Esc)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>Close</a></div>
+<aside class="pane routines s19pane{{if .Routines.Wide}} wide{{end}}" id="agent-panel" role="complementary" aria-label="{{.Agent.Name}} panel"><div class="grabber" aria-hidden="true"></div>
+<div class="pane-h s19ph"><a class="btn ghost pclose-ph ph-only" href="/agents/{{.Agent.ID}}" data-close-panel aria-label="Back to chat">{{template "backsvg" .}}Chat</a><span class="av {{.Agent.Color}} lg dt-only" aria-hidden="true">{{.Agent.Letter}}</span><div class="grow"><div class="nm">{{.Agent.Name}}</div><div class="sub">{{.Agent.Title}}{{if .Agent.Created}} · created {{.Agent.Created}}{{end}}</div></div><a class="btn ghost sm pclose dt-only" href="/agents/{{.Agent.ID}}" data-close-panel aria-label="Close agent panel (Esc)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>Close</a></div>
 {{template "panelTabs" .}}
 <div class="pbody">
 {{if eq .Routines.Mode "edit"}}{{template "routineEditor" .}}{{else if eq .Routines.Mode "detail"}}{{template "routineDetail" .}}{{else if eq .Routines.Mode "empty"}}{{template "routineEmpty" .}}{{else}}{{template "routineList" .}}{{end}}
@@ -17,7 +17,7 @@
 {{end}}
 
 {{define "routineEmpty"}}
-<section class="psec empty-r"><h3>{{.Routines.EmptyLead}}</h3><p>{{.Routines.EmptyBody}}</p><a class="btn pri" href="/agents/{{.Agent.ID}}?panel=routines&amp;routine=new">New routine</a><h4>Ideas</h4>{{range .Routines.Ideas}}<a class="sug" href="{{.Href}}"><b>{{.Name}}</b>{{.Sub}}</a>{{end}}</section>
+<section class="psec empty-r"><h3>{{.Routines.EmptyLead}}</h3><p>{{.Routines.EmptyBody}}</p><a class="btn pri" href="/agents/{{.Agent.ID}}?panel=routines&amp;routine=new">New routine</a><p class="fineprint">{{.Routines.Fine}}</p><h4>Ideas</h4>{{range .Routines.Ideas}}<a class="sug" href="{{.Href}}"><b>{{.Name}}</b>{{.Sub}}</a>{{end}}</section>
 {{end}}
 
 {{define "routineEditor"}}

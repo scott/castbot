@@ -34,7 +34,10 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusOK, "app", finish(p))
 		return
 	}
-	s.renderChat(w, r, user, agents[0].ID, false, "home", http.StatusOK, "")
+	p.Page = "home"
+	p.Title = "Agents"
+	p.AgentCount = len(agents)
+	s.render(w, http.StatusOK, "app", finish(p))
 }
 
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +152,11 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 			p.Messages = weaveCards(p.Messages, cards, live)
 		}
 	}
-	if tab == "machine" || tab == "" {
+	panelAsk := requestedPanel(r)
+	if wantsConfirm(r) {
+		panelAsk = "machine"
+	}
+	if tab == "machine" || tab == "" || panelAsk == "machine" || strings.HasSuffix(r.URL.Path, "/machine/card") {
 		tokens, err := s.store.ListCLITokens(r.Context(), user.ID, agent.ID)
 		if err != nil {
 			http.Error(w, "Error", http.StatusInternalServerError)
@@ -217,12 +224,27 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		p.Panel = "files"
 		p.Files = s.loadFiles(r, user, agent)
 	}
+	if !s.applyPanel(w, r, user, agent, &p) {
+		return nil
+	}
 	if status == 0 {
 		status = http.StatusOK
 	}
 	name := "app"
-	if strings.HasSuffix(r.URL.Path, "/machine/card") {
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/machine/card"):
 		name = "machinePanel"
+	case panelPartial(r):
+		if outsidePanelChrome(p) {
+			w.Header().Set("HX-Redirect", panelRedirect(r))
+			w.WriteHeader(http.StatusNoContent)
+			return nil
+		}
+		name = panelTemplate(p)
+	default:
+		if p.HasAgent {
+			s.fillToasts(w, r, agent.ID, &p)
+		}
 	}
 	return s.render(w, status, name, finish(p))
 }
@@ -234,7 +256,7 @@ func tabCopy(tab string) (string, string) {
 	case "agent-files":
 		return "Files", "Files arrive in a later update."
 	default:
-		return "Machine", "Status is the machine record. Checking it does not wake the machine."
+		return "Machine", "State from the cloud API. Checking it does not wake the machine."
 	}
 }
 
@@ -585,49 +607,6 @@ func (s *Server) createSection(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, back(r), http.StatusSeeOther)
 }
 
-func (s *Server) workspacePage(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
-	p, err := s.shell(r, user)
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	switch r.URL.Path {
-	case "/approvals":
-		p.Page = "approvals"
-		p.Title = "Approvals"
-		p.StubTitle = "Approvals"
-		p.StubBody = "When an agent needs a yes or no, it shows up here. Nothing is waiting."
-		if rows, err := s.store.ListPendingApprovals(r.Context(), user.ID); err == nil {
-			for _, row := range rows {
-				p.Cards = append(p.Cards, s.presentApproval(row, user, from(r).CSRF))
-			}
-			if len(p.Cards) > 0 {
-				p.StubBody = "When an agent needs a yes or no, it shows up here."
-			}
-		}
-	case "/routines":
-		p.Page = "routines"
-		p.Title = "Routines"
-		p.StubTitle = "Routines"
-		p.StubBody = "Prompts that run on a schedule arrive in a later update."
-	case "/files":
-		p.Page = "files"
-		p.Title = "Files"
-		p.StubBody = "A library of files arrives in a later update."
-		p.StubTitle = "Files"
-	default:
-		p.Page = "usage"
-		p.Title = "Usage"
-		p.StubTitle = "Usage"
-		p.StubBody = "Machine time is not metered in this version. The amount in the sidebar is a placeholder."
-	}
-	s.render(w, http.StatusOK, "app", finish(p))
-}
-
 func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 	sections, err := s.store.ListSections(r.Context(), user.ID)
 	if err != nil {
@@ -648,21 +627,17 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 	for _, sec := range sections {
 		sv = append(sv, sectionView{ID: sec.ID, Name: sec.Name, Kind: sec.Kind, Agents: by[sec.ID]})
 	}
-	usage := "$0.00"
-	if len(agents) > 0 {
-		usage = "$7.42"
-	}
 	p := page{
-		Theme:     user.Theme,
-		CSRF:      from(r).CSRF,
-		User:      user,
-		HasUser:   true,
-		Initials:  initials(user.DisplayName),
-		Sections:  sv,
-		Approvals: approvals,
-		Usage:     usage,
-		Empty:     len(agents) == 0,
-		RoleLine:  roleLine(user.Role, user.WorkspaceName),
+		Theme:      user.Theme,
+		CSRF:       from(r).CSRF,
+		User:       user,
+		HasUser:    true,
+		Initials:   initials(user.DisplayName),
+		Sections:   sv,
+		Approvals:  approvals,
+		AgentCount: len(agents),
+		Empty:      len(agents) == 0,
+		RoleLine:   roleLine(user.Role, user.WorkspaceName),
 		PasswordOn: func() string {
 			d := monthDay(user.PasswordChangedAt, loc)
 			if d == "" {

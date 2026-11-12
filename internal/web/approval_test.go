@@ -263,7 +263,11 @@ func TestApprovalAuthz(t *testing.T) {
 	h.jar = map[string]*http.Cookie{}
 	h.csrf = ""
 	h.login("owner-s07b@example.com", "correct-horse-1", ownerSecret, "203.0.113.78:9", false)
-	code, body, _ := h.do(http.MethodGet, "/approvals/"+ap.ID, "", "203.0.113.78:9", nil)
+	code, _, hdr := h.do(http.MethodGet, "/approvals/"+ap.ID, "", "203.0.113.78:9", nil)
+	if code != http.StatusFound || !strings.Contains(hdr.Get("Location"), "?panel=approvals#appr-"+ap.ID) {
+		t.Fatalf("owner redirect %d %s", code, hdr.Get("Location"))
+	}
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=approvals", "", "203.0.113.78:9", nil)
 	if code != http.StatusOK || !strings.Contains(body, ">Approve<") || !strings.Contains(body, "ls demo") {
 		t.Fatalf("owner card %d %s", code, body)
 	}
@@ -702,9 +706,17 @@ func TestSecretArgNamesStayHidden(t *testing.T) {
 	sendPrompt(t, h, agent, ip, "go")
 	ap := waitPending(t, h, user.ID)
 	page := h.poll(ip, "/agents/"+agent.ID, ">Approve<")
-	code, card, _ := h.do(http.MethodGet, "/approvals/"+ap.ID, "", ip, nil)
-	if code != http.StatusOK {
+	code, _, hdr := h.do(http.MethodGet, "/approvals/"+ap.ID, "", ip, nil)
+	if code != http.StatusFound {
 		t.Fatal(code)
+	}
+	loc := hdr.Get("Location")
+	if i := strings.Index(loc, "#"); i >= 0 {
+		loc = loc[:i]
+	}
+	code, card, _ := h.do(http.MethodGet, loc, "", ip, nil)
+	if code != http.StatusOK {
+		t.Fatalf("card page %d", code)
 	}
 	events, err := h.st.ListRunEvents(context.Background(), user.ID, ap.RunID, 0)
 	if err != nil {
@@ -802,7 +814,12 @@ func TestLongValueTruncatesOnRunes(t *testing.T) {
 	h, _, user, agent, ip := newAsk(t, map[string]any{"command": long}, nil)
 	sendPrompt(t, h, agent, ip, "go")
 	ap := waitPending(t, h, user.ID)
-	_, card, _ := h.do(http.MethodGet, "/approvals/"+ap.ID, "", ip, nil)
+	_, _, hdr := h.do(http.MethodGet, "/approvals/"+ap.ID, "", ip, nil)
+	loc := hdr.Get("Location")
+	if i := strings.Index(loc, "#"); i >= 0 {
+		loc = loc[:i]
+	}
+	_, card, _ := h.do(http.MethodGet, loc, "", ip, nil)
 	if !utf8.ValidString(card) {
 		t.Fatal("card is not valid utf-8")
 	}

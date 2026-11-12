@@ -29,7 +29,7 @@ type replaceView struct {
 	ImageTag, ImageLine                         string
 	Update, Same, HasImage                      bool
 	HintBold, HintRest                          string
-	Reason, ReasonHref, ReasonLabel             string
+	Reason, ReasonHref, ReasonLabel, Opener     string
 	Lock, LockLine, Already                     bool
 	Steps                                       []replaceStep
 	Fine                                        string
@@ -138,7 +138,7 @@ func (s *Server) replaceView(ctx context.Context, user store.User, agent store.A
 				out.ReasonHref = "/agents/" + url.PathEscape(agent.ID)
 				out.ReasonLabel = "Go to chat"
 			case "Answer the waiting approval first.":
-				out.ReasonHref = "/approvals"
+				out.ReasonHref = "/agents/" + url.PathEscape(agent.ID) + "?panel=approvals"
 				out.ReasonLabel = "Review approval"
 			}
 		} else if err == nil && line == "" {
