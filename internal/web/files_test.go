@@ -230,7 +230,7 @@ func TestWorkspaceDownloadFailedWake(t *testing.T) {
 		t.Fatalf("%d %s", code, body)
 	}
 	events, err := h.st.ListVMEvents(context.Background(), agent.UserID, agent.ID)
-	if err != nil || !eventKind(events, store.EventWakeRequested) || eventKind(events, store.EventWakeReady) {
+	if err != nil || !eventKind(events, store.EventWakeRequested) || !eventKind(events, store.EventWakeFailed) || eventKind(events, store.EventWakeReady) {
 		t.Fatalf("events %#v %v", events, err)
 	}
 }
