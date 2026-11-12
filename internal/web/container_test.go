@@ -229,7 +229,6 @@ func TestContainerBootsFromBundle(t *testing.T) {
 	client := runtime.NewHTTP(guest.URL())
 	client.SetToken(token)
 	h.srv.SetClient(client)
-	h.srv.SetGuest(agent.ID, guest.URL(), token)
 
 	ip := "203.0.113.81:9"
 	h.login("guest@example.com", "correct-horse-1", secret, ip, false)
@@ -251,9 +250,9 @@ func TestContainerBootsFromBundle(t *testing.T) {
 		t.Fatalf("put %d", put.StatusCode)
 	}
 	put.Body.Close()
-	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/workspace/uploads/hello.txt", "", ip, nil)
-	if code != 200 || body != "hello file" {
-		t.Fatalf("owner file %d %q", code, body)
+	gotFile := castletText(t, http.MethodGet, guest.URL()+"/castlet/files/uploads/hello.txt", token, nil)
+	if gotFile != "hello file" {
+		t.Fatalf("guest file %q", gotFile)
 	}
 
 	var mem bytes.Buffer

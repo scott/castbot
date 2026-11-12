@@ -54,7 +54,6 @@ type Server struct {
 	ka     time.Duration
 
 	mu        sync.Mutex
-	guests    map[string]guest
 	machine   host.AgentHost
 	image     string
 	publicURL string
@@ -98,18 +97,22 @@ type Server struct {
 	wakeFor     time.Duration
 	gateMu      sync.Mutex
 	gates       map[string]*sync.Mutex
+
+	// File uploads. Hooks are append-only so another slice can register too.
+	fileMu     sync.Mutex
+	fileHooks  []func(context.Context, string, string)
+	fileHookOn sync.Once
+	diskFreeFn func(string) (uint64, error)
+	uploadHold <-chan struct{}
+	uploadSlot map[string]chan struct{}
+	nameLock   map[string]*sync.Mutex
+	uploadLog  []string
 }
 
 // pauseSweeps stops the background approval ticker. Tests call the follow-up
 // methods themselves so a tick cannot post between assertions.
 func (s *Server) pauseSweeps() {
 	s.sweepPause.Store(true)
-}
-
-// guest is one local castlet the control plane can proxy files through.
-type guest struct {
-	Base  string
-	Token string
 }
 
 // New builds a server. key is the 32-byte session key.
@@ -263,24 +266,6 @@ func (s *Server) SetClient(c runtime.Client) {
 	}
 }
 
-// SetGuest records the castlet address and agent token for one agent.
-// File reads for that agent are proxied there. The token is not logged.
-func (s *Server) SetGuest(agentID, base, token string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.guests == nil {
-		s.guests = map[string]guest{}
-	}
-	s.guests[agentID] = guest{Base: strings.TrimRight(base, "/"), Token: token}
-}
-
-func (s *Server) lookupGuest(agentID string) (guest, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	g, ok := s.guests[agentID]
-	return g, ok && g.Base != "" && g.Token != ""
-}
-
 // SetKeepalive changes how often the event stream writes a comment.
 func (s *Server) SetKeepalive(d time.Duration) {
 	s.ka = d
@@ -353,6 +338,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}/routines/{routine}/run", s.runRoutine)
 	mux.HandleFunc("POST /agents/{id}/routines/{routine}/delete", s.deleteRoutine)
 	mux.HandleFunc("GET /agents/{id}/files", s.agentTab)
+	mux.HandleFunc("GET /agents/{id}/workspace", s.notFound)
+	mux.HandleFunc("GET /agents/{id}/workspace/{path...}", s.notFound)
+	mux.HandleFunc("POST /agents/{id}/uploads", s.postUpload)
+	mux.HandleFunc("GET /agents/{id}/files/{fileID}/download", s.downloadFile)
+	mux.HandleFunc("GET /agents/{id}/files/{fileID}/preview", s.previewFile)
+	mux.HandleFunc("GET /search", s.search)
 	mux.HandleFunc("POST /agents/{id}", s.updateAgent)
 	mux.HandleFunc("POST /agents/{id}/machine", s.provisionMachine)
 	mux.HandleFunc("POST /agents/{id}/machine/pause", s.pauseMachine)
@@ -369,8 +360,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /agents/{id}/secrets", s.ownerSecrets)
 	mux.HandleFunc("POST /agents/{id}/secrets/grant", s.vaultGrant)
 	mux.HandleFunc("POST /agents/{id}/secrets/revoke", s.vaultRevoke)
-	mux.HandleFunc("GET /agents/{id}/workspace", s.ownerFiles)
-	mux.HandleFunc("GET /agents/{id}/workspace/{path...}", s.ownerFile)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/bootstrap", s.bootstrap)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/bundle", s.machineBundle)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/secrets", s.machineSecrets)
@@ -431,16 +420,20 @@ func (s *Server) wrap(next http.Handler) http.Handler {
 		r = r.WithContext(context.WithValue(r.Context(), stateKey, st))
 		// castlet calls these with a bearer token, not a browser form.
 		if r.Method == http.MethodPost && !strings.HasPrefix(r.URL.Path, "/api/castlet/") {
-			r.Body = http.MaxBytesReader(w, r.Body, postLimit(r.URL.Path))
-			var err error
-			if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
-				err = r.ParseMultipartForm(8 << 20)
-			} else {
-				err = r.ParseForm()
-			}
-			if err != nil {
-				http.Error(w, "Bad request", http.StatusBadRequest)
-				return
+			// The upload route streams the body itself. A form parse would
+			// buffer it and the default post limit would cut it off at 1 MiB.
+			if !isUploadPost(r.URL.Path) {
+				r.Body = http.MaxBytesReader(w, r.Body, postLimit(r.URL.Path))
+				var err error
+				if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+					err = r.ParseMultipartForm(8 << 20)
+				} else {
+					err = r.ParseForm()
+				}
+				if err != nil {
+					http.Error(w, "Bad request", http.StatusBadRequest)
+					return
+				}
 			}
 			if !sameOrigin(r) {
 				s.render(w, http.StatusForbidden, "auth", finish(page{
@@ -450,7 +443,16 @@ func (s *Server) wrap(next http.Handler) http.Handler {
 				}))
 				return
 			}
-			if !csrfOK(r, st.CSRF) {
+			if isUploadPost(r.URL.Path) {
+				if !uploadCSRF(r, st.CSRF) {
+					s.render(w, http.StatusForbidden, "auth", finish(page{
+						Page: "auth", Title: "Form expired", Theme: "dark",
+						Banner: true, BannerLead: "That form expired.", BannerRest: "Reload the page and try again.",
+						BannerIcon: "warn",
+					}))
+					return
+				}
+			} else if !csrfOK(r, st.CSRF) {
 				s.render(w, http.StatusForbidden, "auth", finish(page{
 					Page: "auth", Title: "Form expired", Theme: "dark",
 					Banner: true, BannerLead: "The form expired.", BannerRest: "Reload the page and try again.",
@@ -520,6 +522,15 @@ func sameOrigin(r *http.Request) bool {
 		return false
 	}
 	return strings.EqualFold(u.Host, r.Host)
+}
+
+// uploadCSRF checks only the header. Parsing the body would buffer the upload.
+func uploadCSRF(r *http.Request, want string) bool {
+	hdr := r.Header.Get("X-CSRF-Token")
+	if want == "" || hdr == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(hdr), []byte(want)) == 1
 }
 
 func csrfOK(r *http.Request, want string) bool {

@@ -33,14 +33,25 @@ type sectionView struct {
 	Agents         []agentView
 }
 
+type chipView struct {
+	Name string
+}
+
+type fileLinkView struct {
+	Name, Meta, Open, Download string
+}
+
 type msgView struct {
-	ID, Author, Body, Color, Letter, Stamp, Day, At string
-	Origin                                          string
-	ShowDay                                         bool
-	HasCard                                         bool
-	Card                                            cardView
-	Prompt, Marker, Hide                            bool
-	Href, Pill, PillClass, Sub                      string
+	ID, Author, Body, Text, Color, Letter, Stamp, Day, At string
+	Origin                                                string
+	ShowDay                                               bool
+	HasCard                                               bool
+	Card                                                  cardView
+	Prompt, Marker, Hide                                  bool
+	Href, Pill, PillClass, Sub                            string
+	Chips                                                 []chipView
+	PathLines                                             []string
+	File                                                  *fileLinkView
 }
 
 type threadView struct {
@@ -145,6 +156,12 @@ type page struct {
 	Run          runBar
 	PendingTool  string
 	Vault        vaultView
+	Panel        string
+	LowSpace     bool
+	Files        filesPanel
+	SearchQuery  string
+	SearchAgents []agentView
+	FileHits     []fileHitView
 }
 
 func finish(p page) page {
@@ -158,7 +175,10 @@ func finish(p page) page {
 		p.ShowNav = true
 		p.Nav = "agents"
 	case "chat":
-		if p.Pane || p.Vault.Panel {
+		if p.Panel == "files" {
+			p.BodyClass = "p-chat p-files"
+			p.Pane = true
+		} else if p.Pane || p.Vault.Panel {
 			p.BodyClass = "p-pane"
 			if p.Vault.Panel {
 				p.BodyClass += " vault-open p-slide"

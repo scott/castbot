@@ -693,7 +693,7 @@ func (m *MicroVM) ListWorkspace(ctx context.Context, endpoint, agentToken string
 	for _, item := range listed {
 		name := strings.TrimSpace(item.Name)
 		if !safeWorkspace(name) {
-			return nil, ErrGuest
+			continue
 		}
 		out = append(out, WorkspaceFile{Name: name, Size: item.Size})
 	}
@@ -727,7 +727,11 @@ func (m *MicroVM) WriteWorkspace(ctx context.Context, endpoint, agentToken, name
 
 func safeWorkspace(name string) bool {
 	name = strings.TrimSpace(name)
-	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.Contains(name, "..") {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.Contains(name, "..") || strings.ContainsRune(name, 0) {
+		return false
+	}
+	low := strings.ToLower(name)
+	if strings.Contains(low, "%2f") || strings.Contains(low, "%5c") || strings.Contains(low, "%00") || strings.Contains(low, "%2e%2e") {
 		return false
 	}
 	for _, part := range strings.Split(name, "/") {

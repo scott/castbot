@@ -422,6 +422,9 @@ func (s *Server) postReplace(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("replace finished agent %s class %s", agent.ID, replaceClass(err))
 		}
+		if !s.replacing(ctx, user.ID, agent.ID) {
+			s.fireAfterRun(ctx, user.ID, agent.ID)
+		}
 	}()
 	target := "/agents/" + url.PathEscape(agent.ID) + "/machine"
 	if r.Header.Get("HX-Request") == "true" {
