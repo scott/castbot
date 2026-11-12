@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -222,5 +223,92 @@ func s19Machine(t *testing.T, h *harness, userID, agentID string) {
 	fake.Machines["vm-s19"] = host.Machine{
 		ID: "vm-s19", Name: "castbot-s19", State: "running", Endpoint: "https://s19.example",
 		Image: current, Tags: []string{"agent:" + agentID},
+	}
+}
+
+func shootS19Secrets(t *testing.T, browser context.Context, width, height int) {
+	t.Helper()
+	h := newHarness(t)
+	h.srv.SetDevEcho(false)
+	user, _ := h.account("s19-sec-"+strconv.Itoa(width)+"@example.com", "Alex Rivera", "correct-horse-1")
+	if err := h.st.UpdateTheme(context.Background(), user.ID, "dark"); err != nil {
+		t.Fatal(err)
+	}
+	ids := seedVaultCast(t, h.st, user.ID, true)
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	ctx := tab(t, browser)
+	page := ts.URL + "/agents/" + ids.atlas + "?panel=secrets"
+	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
+		t.Fatal(err)
+	}
+	waitText(t, ctx, "GITHUB_TOKEN")
+	var before string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.body?document.body.innerText:""`), &before)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(before, "Give Atlas a secret") || strings.Contains(before, "Take GITHUB_TOKEN away from Atlas?") {
+		t.Fatal("the drawer was open before the click")
+	}
+	if err := chromedp.Run(ctx, chromedp.Click(`a[href*="give=1"]`, chromedp.ByQuery)); err != nil && !containsNav(err) {
+		t.Fatal(err)
+	}
+	waitText(t, ctx, "Give Atlas a secret")
+	if err := chromedp.Run(ctx, chromedp.Navigate(page)); err != nil {
+		t.Fatal(err)
+	}
+	waitText(t, ctx, "GITHUB_TOKEN")
+	if err := chromedp.Run(ctx, chromedp.Click(`a[aria-label="Revoke GITHUB_TOKEN from Atlas"]`, chromedp.ByQuery)); err != nil && !containsNav(err) {
+		t.Fatal(err)
+	}
+	waitText(t, ctx, "Take GITHUB_TOKEN away from Atlas?")
+	assertVaultShot(t, ctx, height)
+	assertNoSideScroll(t, ctx)
+	assertShotClean(t, ctx)
+}
+
+func shootS19Back(t *testing.T, browser context.Context) {
+	t.Helper()
+	h := newHarness(t)
+	h.srv.SetDevEcho(false)
+	user, _ := h.account("s19-back@example.com", "Alex Rivera", "correct-horse-1")
+	if err := h.st.UpdateTheme(context.Background(), user.ID, "dark"); err != nil {
+		t.Fatal(err)
+	}
+	agent := makeAgent(t, h.st, user.ID, "Atlas")
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	ctx := tab(t, browser)
+	page := ts.URL + "/agents/" + agent.ID + "?panel=routines"
+	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), page, 1280, 800)...); err != nil {
+		t.Fatal(err)
+	}
+	waitText(t, ctx, "No routines yet")
+	if err := chromedp.Run(ctx, chromedp.Click(`a.btn.pri[href*="routine=new"]`, chromedp.ByQuery)); err != nil && !containsNav(err) {
+		t.Fatal(err)
+	}
+	waitText(t, ctx, "What should Atlas do?")
+	var search string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`location.search`), &search)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(search, "routine=new") {
+		t.Fatalf("editor url %s", search)
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`history.back()`), nil)); err != nil && !containsNav(err) {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Poll(js(`location.search.indexOf("panel=routines")>=0 && location.search.indexOf("routine=")<0 && (document.body.innerText||"").indexOf("What should Atlas do?")<0`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+		var now string
+		_ = chromedp.Run(ctx, chromedp.Evaluate(js(`location.search+"\n"+(document.body?document.body.innerText:"")`), &now))
+		t.Fatalf("back to the list: %v\n%s", err, now)
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`history.back()`), nil)); err != nil && !containsNav(err) {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Poll(js(`location.search.indexOf("panel=")<0 && (function(){var p=document.getElementById("agent-panel");return !p||p.hidden||!p.classList.contains("s19pane");})()`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+		var now string
+		_ = chromedp.Run(ctx, chromedp.Evaluate(js(`location.href`), &now))
+		t.Fatalf("back to chat: %v %s", err, now)
 	}
 }

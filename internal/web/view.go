@@ -249,9 +249,6 @@ func finish(p page) page {
 	if p.Theme == "" {
 		p.Theme = "system"
 	}
-	if p.Usage == "" {
-		p.Usage = "$0.00"
-	}
 	return p
 }
 

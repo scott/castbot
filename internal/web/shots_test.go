@@ -253,6 +253,9 @@ func TestShots(t *testing.T) {
 			}
 		}
 	}
+	t.Run("s19-sec-dark-1280", func(t *testing.T) { shootS19Secrets(t, browserCtx, 1280, 800) })
+	t.Run("s19-sec-dark-390", func(t *testing.T) { shootS19Secrets(t, browserCtx, 390, 844) })
+	t.Run("s19-back-dark-1280", func(t *testing.T) { shootS19Back(t, browserCtx) })
 }
 
 // shootDecisionBar clicks Approve on a live card and checks the waiting bar

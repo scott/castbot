@@ -51,6 +51,23 @@ func panelPartial(r *http.Request) bool {
 	}
 }
 
+// outsidePanelChrome is true when this response also paints a drawer or modal
+// that lives outside #agent-panel. A panel swap cannot show that chrome.
+func outsidePanelChrome(p page) bool {
+	return p.Vault.Drawer || p.Vault.ModalOpen || p.Routines.Delete.On || p.Replace.Confirm
+}
+
+func panelRedirect(r *http.Request) string {
+	if r.URL.RequestURI() != "" {
+		return r.URL.RequestURI()
+	}
+	loc := r.URL.Path
+	if r.URL.RawQuery != "" {
+		loc += "?" + r.URL.RawQuery
+	}
+	return loc
+}
+
 func panelTemplate(p page) string {
 	switch p.Panel {
 	case "files":

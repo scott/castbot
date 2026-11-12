@@ -142,7 +142,6 @@
 {{define "approvalChrome"}}
 <div id="pending-bar" class="pending-bar" hx-swap-oob="outerHTML"{{if eq .AgentApprovals 0}} hidden{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span class="grow">{{if eq .AgentApprovals 1}}1 approval waiting{{else if gt .AgentApprovals 1}}{{.AgentApprovals}} approvals waiting{{end}}</span><a class="btn sm" href="/agents/{{.AgentID}}?panel=approvals" data-open-panel>Review</a></div>
 <span id="nav-approvals" hx-swap-oob="outerHTML">{{if gt .Total 0}}<span class="cnt">{{.Total}}</span>{{end}}</span>
-<span id="bnav-approvals" hx-swap-oob="outerHTML">{{if gt .Total 0}}<span class="badge">{{.Total}}</span>{{end}}</span>
 <span id="ag-appr-{{.AgentID}}" hx-swap-oob="outerHTML">{{if gt .AgentApprovals 0}}<span class="badge apb" aria-label="{{.AgentApprovals}} approval waiting"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg>{{.AgentApprovals}}</span>{{else if gt .Unread 0}}<span class="badge acc" aria-label="{{.Unread}} unread">{{.Unread}}</span>{{end}}</span>
 {{if .RunID}}<div class="tail" id="tail-{{.RunID}}" sse-swap="fail" hx-swap="outerHTML" hx-swap-oob="outerHTML"><span class="stamp">{{.Tail}}</span></div>{{end}}
 {{end}}
@@ -224,7 +223,7 @@
 {{template "secretsSummary" .}}
 <section class="card" id="usage" aria-labelledby="s-use-h"><div class="card-h"><h3 id="s-use-h">Usage</h3><span class="tag-new">New here</span></div>
 <div class="banner" role="status"><span class="grow"><b>Machine time is not metered in this version.</b> The estimate arrives with the machine panel update.</span></div>
-<div class="set-row"><div class="grow"><div class="k">Machines</div><div class="v">{{.AgentCount}} agents, each on its own machine</div><span class="t2">Machines pause after idle time, so a paused agent costs disk only.</span></div></div>
+<div class="set-row"><div class="grow"><div class="k">Machines</div><div class="v">{{if eq .AgentCount 1}}1 agent{{else}}{{.AgentCount}} agents{{end}}, each on its own machine</div><span class="t2">Machines pause after idle time, so a paused agent costs disk only.</span></div></div>
 <div class="set-row"><div class="grow"><div class="k">Model tokens</div><div class="v">Billed by your provider</div><span class="t2">castbot never adds a charge on top.</span></div></div>
 </section>
 <section class="card" aria-labelledby="s-app"><div class="card-h"><h3 id="s-app">Appearance</h3></div>

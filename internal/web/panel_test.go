@@ -173,7 +173,7 @@ func TestUsageSectionUnmetered(t *testing.T) {
 	for _, line := range []string{
 		"Machine time is not metered in this version.",
 		"The estimate arrives with the machine panel update.",
-		"1 agents, each on its own machine",
+		"1 agent, each on its own machine",
 		"Machines pause after idle time, so a paused agent costs disk only.",
 		"Billed by your provider",
 		"castbot never adds a charge on top.",
@@ -328,6 +328,75 @@ func TestPanelAuthz(t *testing.T) {
 		if code != http.StatusNotFound || strings.Contains(body, "ls demo") || strings.Contains(body, "Atlas") {
 			t.Fatalf("user B %s -> %d %s", path, code, body)
 		}
+	}
+}
+
+func TestPanelPartialRedirectsOutsideChrome(t *testing.T) {
+	h, user, ip := panelSession(t, "chrome-s19@example.com", "Alex Rivera")
+	agent := makeAgent(t, h.st, user.ID, "Atlas")
+	sec, err := h.st.CreateSecret(context.Background(), user.ID, store.SecretInput{
+		Name: "GITHUB_TOKEN", Value: "demo-only-value",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.GrantSecret(context.Background(), user.ID, agent.ID, sec.ID); err != nil {
+		t.Fatal(err)
+	}
+	routine, err := h.st.CreateRoutine(context.Background(), user.ID, agent.ID, store.RoutineInput{
+		Name: "Morning docs check", Cron: "0 8 * * 1-5", Timezone: "America/Denver",
+		Prompt: "Check the docs.", Enabled: true, ApprovalPolicy: store.ApprovalWait, MissedPolicy: store.MissedSkip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hx := map[string]string{"HX-Request": "true", "HX-Target": "agent-panel"}
+	list := "/agents/" + agent.ID + "?panel=secrets"
+	code, body, hdr := h.do(http.MethodGet, list, "", ip, hx)
+	if code != http.StatusOK || hdr.Get("HX-Redirect") != "" || !strings.Contains(body, "GITHUB_TOKEN") || strings.Contains(body, "Give Atlas a secret") {
+		t.Fatalf("plain panel %d redirect %q", code, hdr.Get("HX-Redirect"))
+	}
+	for _, path := range []string{
+		list + "&give=1",
+		list + "&revoke=" + sec.ID,
+		"/agents/" + agent.ID + "?panel=routines&routine=" + routine.ID + "&delete=1",
+	} {
+		code, body, hdr := h.do(http.MethodGet, path, "", ip, hx)
+		if code != http.StatusNoContent || hdr.Get("HX-Redirect") != path {
+			t.Fatalf("%s -> %d %q", path, code, hdr.Get("HX-Redirect"))
+		}
+		if body != "" || strings.Contains(body, "demo-only-value") {
+			t.Fatal("panel swap included chrome that lives outside the panel")
+		}
+	}
+	code, body, hdr = h.do(http.MethodGet, list+"&give=1", "", ip, nil)
+	if code != http.StatusOK || hdr.Get("HX-Redirect") != "" || !strings.Contains(body, "Give Atlas a secret") || strings.Contains(body, "demo-only-value") {
+		t.Fatal("full load did not paint the give drawer")
+	}
+	code, body, _ = h.do(http.MethodGet, list+"&revoke="+sec.ID, "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, "Take GITHUB_TOKEN away from Atlas?") || strings.Contains(body, "demo-only-value") {
+		t.Fatal("full load did not paint the revoke confirm")
+	}
+	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=routines&routine="+routine.ID+"&delete=1", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, "Delete Morning docs check?") {
+		t.Fatal("full load did not paint the delete confirm")
+	}
+}
+
+func TestPanelNestedBack(t *testing.T) {
+	h, _, ip := panelSession(t, "back-s19@example.com", "Alex Rivera")
+	_, js, _ := h.do(http.MethodGet, "/static/app.js", "", ip, nil)
+	if !strings.Contains(js, `hasAttribute("data-panel-nested")`) || !strings.Contains(js, `setAttribute("data-hist-now", "push")`) {
+		t.Fatal("a nested panel link does not push a history entry")
+	}
+	if !strings.Contains(js, `panelOpen() ? "replace" : "push"`) {
+		t.Fatal("switching tabs does not replace the open panel entry")
+	}
+	if !strings.Contains(js, "function hidePanel") || !strings.Contains(js, "if (!panel)") || !strings.Contains(js, "hidePanel()") {
+		t.Fatal("leaving the panel does not return to chat")
+	}
+	if !strings.Contains(js, `setAttribute("data-panel-nested", "")`) {
+		t.Fatal("panel links are not marked nested")
 	}
 }
 

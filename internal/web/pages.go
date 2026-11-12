@@ -235,6 +235,11 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	case strings.HasSuffix(r.URL.Path, "/machine/card"):
 		name = "machinePanel"
 	case panelPartial(r):
+		if outsidePanelChrome(p) {
+			w.Header().Set("HX-Redirect", panelRedirect(r))
+			w.WriteHeader(http.StatusNoContent)
+			return nil
+		}
 		name = panelTemplate(p)
 	default:
 		if p.HasAgent {
@@ -600,49 +605,6 @@ func (s *Server) createSection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, back(r), http.StatusSeeOther)
-}
-
-func (s *Server) workspacePage(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
-	p, err := s.shell(r, user)
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	switch r.URL.Path {
-	case "/approvals":
-		p.Page = "approvals"
-		p.Title = "Approvals"
-		p.StubTitle = "Approvals"
-		p.StubBody = "When an agent needs a yes or no, it shows up here. Nothing is waiting."
-		if rows, err := s.store.ListPendingApprovals(r.Context(), user.ID); err == nil {
-			for _, row := range rows {
-				p.Cards = append(p.Cards, s.presentApproval(row, user, from(r).CSRF))
-			}
-			if len(p.Cards) > 0 {
-				p.StubBody = "When an agent needs a yes or no, it shows up here."
-			}
-		}
-	case "/routines":
-		p.Page = "routines"
-		p.Title = "Routines"
-		p.StubTitle = "Routines"
-		p.StubBody = "Prompts that run on a schedule arrive in a later update."
-	case "/files":
-		p.Page = "files"
-		p.Title = "Files"
-		p.StubBody = "A library of files arrives in a later update."
-		p.StubTitle = "Files"
-	default:
-		p.Page = "usage"
-		p.Title = "Usage"
-		p.StubTitle = "Usage"
-		p.StubBody = "Machine time is not metered in this version. The amount in the sidebar is a placeholder."
-	}
-	s.render(w, http.StatusOK, "app", finish(p))
 }
 
 func (s *Server) shell(r *http.Request, user store.User) (page, error) {
