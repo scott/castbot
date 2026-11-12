@@ -426,7 +426,7 @@ func newAsk(t *testing.T, args map[string]any, now func() time.Time) (*harness, 
 func sendPrompt(t *testing.T, h *harness, agent store.Agent, ip, text string) {
 	t.Helper()
 	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {text}}), ip, map[string]string{"HX-Request": "true"})
-	if code != http.StatusOK || !strings.Contains(body, "Replying") {
+	if code != http.StatusOK || !strings.Contains(body, `class="act"`) || strings.Contains(body, ">Replying<") {
 		t.Fatalf("post %d %s", code, body)
 	}
 }

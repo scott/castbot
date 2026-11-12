@@ -54,7 +54,7 @@ func TestDurableEchoSurvivesCutsAndReload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {msg}}), ip, map[string]string{"HX-Request": "true"})
-	if code != 200 || !strings.Contains(body, "Replying") {
+	if code != 200 || !strings.Contains(body, `class="act"`) || strings.Contains(body, ">Replying<") {
 		t.Fatalf("post %d %s", code, body)
 	}
 	runID := runIDFrom(t, body)
@@ -307,7 +307,7 @@ func TestRuntimeDownShowsRetry(t *testing.T) {
 	h.login("down@example.com", "correct-horse-1", secret, ip, false)
 	agent := h.newAgent(ip, "Atlas")
 	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {"hello there"}}), ip, map[string]string{"HX-Request": "true"})
-	if code != 200 || !strings.Contains(body, "Replying") {
+	if code != 200 || !strings.Contains(body, `class="act"`) || strings.Contains(body, ">Replying<") {
 		t.Fatalf("post %d %s", code, body)
 	}
 	page := h.poll(ip, "/agents/"+agent.ID, "The agent is not reachable right now.")

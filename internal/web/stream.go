@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/scott/castbot/internal/md"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
@@ -73,7 +74,8 @@ func (s *Server) retryRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Header.Get("HX-Request") == "true" {
 		av := presentAgent(agent, true, userLocation(user.Timezone))
-		body, err := execTemplate("pending", liveView{RunID: next.ID, Color: av.Color, Letter: av.Letter, CSRF: from(r).CSRF})
+		live := s.paintLive(r.Context(), user, next, av, from(r).CSRF)
+		body, err := execTemplate("pending", live)
 		if err != nil {
 			http.Error(w, "Error", http.StatusInternalServerError)
 			return
@@ -272,7 +274,15 @@ func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user 
 		if err := json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
 			return err
 		}
-		return writeSSE(w, ev.Seq, "text", html.EscapeString(payload.Text))
+		if err := writeSSE(w, ev.Seq, "text", html.EscapeString(payload.Text)); err != nil {
+			return err
+		}
+		return s.writeMarkdownProgress(ctx, w, user, runRow, ev, csrf)
+	case "tool":
+		if err := writeSSE(w, ev.Seq, "note", ""); err != nil {
+			return err
+		}
+		return s.writeMarkdownProgress(ctx, w, user, runRow, ev, csrf)
 	case "error":
 		var payload struct {
 			Message string `json:"message"`
@@ -280,10 +290,12 @@ func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user 
 		if err := json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
 			return err
 		}
-		body, err := execTemplate("runError", liveView{RunID: runRow.ID, Error: payload.Message, CSRF: csrf})
+		body, err := execTemplate("runError", s.calmLive(ctx, user, runRow, payload.Message, csrf))
 		if err != nil {
 			return err
 		}
+		body += s.sideOOB(ctx, user, runRow.AgentID)
+		clearDwell(runRow.ID)
 		return writeSSE(w, ev.Seq, "fail", body)
 	case "done":
 		var payload struct {
@@ -330,7 +342,79 @@ func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user stor
 	if chrome, cerr := s.approvalChrome(ctx, user, runRow.AgentID, runRow.ID); cerr == nil {
 		body += chrome
 	}
+	body += s.sideOOB(ctx, user, runRow.AgentID)
+	clearDwell(runRow.ID)
 	return writeSSE(w, seq, "done", body)
+}
+
+func (s *Server) calmLive(ctx context.Context, user store.User, runRow store.Run, message, csrf string) liveView {
+	name := "The agent"
+	if row, err := s.store.GetAgent(ctx, user.ID, runRow.AgentID); err == nil && row.Name != "" {
+		name = row.Name
+	}
+	events, _ := s.store.ListRunEvents(ctx, user.ID, runRow.ID, 0)
+	text, _, _, _, _ := foldRun(events)
+	calm := calmFor(name, message, strings.TrimSpace(text) != "")
+	return liveView{
+		RunID: runRow.ID, Error: message, CSRF: csrf, AgentID: runRow.AgentID, AgentName: name,
+		CalmTitle: calm.Title, CalmLine: calm.Line, CalmRetry: calm.Retry, CalmSecond: calm.Second, CalmWake: calm.Wake,
+	}
+}
+
+func (s *Server) writeMarkdownProgress(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, ev store.RunEvent, csrf string) error {
+	events, err := s.store.ListRunEvents(ctx, user.ID, runRow.ID, 0)
+	if err != nil {
+		return err
+	}
+	before, through := textBefore(events, ev.Seq)
+	prev, _ := md.Split(before)
+	closed, tail := md.Split(through)
+	for i := len(prev); i < len(closed); i++ {
+		if err := writeSSE(w, ev.Seq, "block", md.Render(closed[i].Raw)); err != nil {
+			return err
+		}
+	}
+	_, _, tools, fact, _ := foldRun(events)
+	pending := runRow.Status == "waiting_approval"
+	if rows, err := s.store.ListRunApprovals(ctx, user.ID, runRow.ID); err == nil {
+		for _, row := range rows {
+			if row.Status == "pending" {
+				pending = true
+				break
+			}
+		}
+	}
+	current := runRow
+	if row, err := s.store.GetRun(ctx, user.ID, runRow.ID); err == nil {
+		current = row
+	}
+	out := s.activityFor(ctx, user.ID, current, through, fact, pending)
+	elapsed := ""
+	if started, perr := time.Parse(time.RFC3339, current.StartedAt); perr == nil {
+		elapsed, _ = formatElapsed(s.store.Now().Sub(started))
+	}
+	inner := ""
+	if strings.TrimSpace(tail.Raw) != "" {
+		inner = md.RenderTail(tail)
+	}
+	if out.HideThread {
+		if inner == "" && strings.TrimSpace(through) != "" {
+			inner = `<span class="caret" aria-hidden="true"></span>`
+		}
+	} else {
+		inner = strings.ReplaceAll(inner, `<span class="caret" aria-hidden="true"></span>`, "")
+	}
+	if err := writeSSE(w, ev.Seq, "tail", tailWrap(current.ID, inner)); err != nil {
+		return err
+	}
+	if err := writeSSE(w, ev.Seq, "tools", tools); err != nil {
+		return err
+	}
+	slot := actSlotHTML(current.ID, actRowHTML(out, elapsed), out.HideThread)
+	if err := writeSSE(w, ev.Seq, "act", slot); err != nil {
+		return err
+	}
+	return nil
 }
 
 func batchTerminal(events []store.RunEvent) bool {
@@ -388,25 +472,28 @@ func (s *Server) loadLives(r *http.Request, user store.User, threadID string, ag
 	last := runs[len(runs)-1]
 	var out []liveView
 	for _, row := range runs {
-		view := liveView{RunID: row.ID, Color: agent.Color, Letter: agent.Letter, CSRF: from(r).CSRF}
-		if cards, err := s.cardsFor(r.Context(), user, row.ID, from(r).CSRF); err == nil {
-			view.Cards = cards
-		}
 		if s.isGreetRun(row.ID) {
 			continue
 		}
+		cards, _ := s.cardsFor(r.Context(), user, row.ID, from(r).CSRF)
 		switch row.Status {
 		case "queued", "streaming", "waiting_approval":
-			if row.RoutineRunID != "" && row.Status != "waiting_approval" {
-				view.Status = "Working"
-			}
+			view := s.paintLive(r.Context(), user, row, agent, from(r).CSRF)
+			view.Cards = cards
 			out = append(out, view)
 		case "failed":
 			if row.ID != last.ID || row.RoutineRunID != "" {
 				continue
 			}
+			view := s.paintLive(r.Context(), user, row, agent, from(r).CSRF)
+			view.Cards = cards
 			view.Failed = true
-			view.Text, view.Error = s.runProgress(r, user.ID, row)
+			if view.Error == "" {
+				_, view.Error = s.runProgress(r, user.ID, row)
+				calm := calmFor(agent.Name, view.Error, strings.TrimSpace(view.Text) != "")
+				view.CalmTitle, view.CalmLine, view.CalmRetry, view.CalmSecond = calm.Title, calm.Line, calm.Retry, calm.Second
+				view.CalmWake = calm.Wake
+			}
 			out = append(out, view)
 		}
 	}

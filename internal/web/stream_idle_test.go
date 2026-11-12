@@ -37,7 +37,7 @@ func TestIdleStreamSurvivesCutsAndReload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {msg}}), ip, map[string]string{"HX-Request": "true"})
-	if code != 200 || !strings.Contains(body, "Replying") {
+	if code != 200 || !strings.Contains(body, `class="act"`) || strings.Contains(body, ">Replying<") {
 		t.Fatalf("post %d", code)
 	}
 	runID := runIDFrom(t, body)
