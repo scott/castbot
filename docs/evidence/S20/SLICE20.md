@@ -32,8 +32,8 @@ Real clicks cover a suggestion chip, Send, Edit, Advanced, Create, the disabled 
 - `14c-dark-1280.png`, `14c-dark-390.png`, `14c-light-1280.png`, `14c-light-390.png` named agent with no job
 - `14d-dark-1280.png`, `14d-dark-390.png`, `14d-light-1280.png`, `14d-light-390.png` auto-named Relay
 - `14e-dark-1280.png`, `14e-dark-390.png`, `14e-light-1280.png`, `14e-light-390.png` full form from the card
-- `14f-dark-1280.png`, `14f-dark-390.png`, `14f-light-1280.png`, `14f-light-390.png` starting up, message waiting
-- `14f2-dark-1280.png`, `14f2-dark-390.png`, `14f2-light-1280.png`, `14f2-light-390.png` machine panel while starting
+- `14f-dark-1280.png`, `14f-dark-390.png`, `14f-light-1280.png`, `14f-light-390.png` starting up, message waiting. Wide shots also open the side panel, which shows the saved model id. The card still says Provider A / model-large.
+- `14f2-dark-1280.png`, `14f2-dark-390.png`, `14f2-light-1280.png`, `14f2-light-390.png` machine tab in the side panel while starting
 - `14g-dark-1280.png`, `14g-dark-390.png`, `14g-light-1280.png`, `14g-light-390.png` greeting that starts the job
 - `14h-dark-1280.png`, `14h-dark-390.png`, `14h-light-1280.png`, `14h-light-390.png` greeting that asks for a job
 - `14i-dark-1280.png`, `14i-dark-390.png`, `14i-light-1280.png`, `14i-light-390.png` re-prompt for "hi"

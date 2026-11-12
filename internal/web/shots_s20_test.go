@@ -134,7 +134,7 @@ func s20Drive(t *testing.T, ctx context.Context, kind string, gate *s20Gate, fak
 		if err := chromedp.Run(ctx, chromedp.Navigate(loc+"?panel=machine")); err != nil {
 			t.Fatal(err)
 		}
-		s20Wait(t, ctx, `(document.body.innerText||'').indexOf('Nothing to do here')>=0 && (document.body.innerText||'').indexOf('Machine')>=0`)
+		s20Wait(t, ctx, `!!document.querySelector('#agent-panel') && (document.body.innerText||'').indexOf('Machine')>=0 && (document.body.innerText||'').indexOf('Size')>=0 && (document.body.innerText||'').indexOf('Auto-pause')>=0`)
 	case "14g":
 		s20ArriveStarting(t, ctx, s20Scout, true)
 		gate.release()
@@ -247,7 +247,9 @@ func s20CopyClean(t *testing.T, ctx context.Context, kind string) {
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.documentElement.outerHTML`), &html)); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.body?document.body.innerText:''`), &text)); err != nil {
+	// Wide agent chats open the side panel, which shows the saved model id.
+	// The card and the chat column still must not name a provider.
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var root=document.body.cloneNode(true);var panel=root.querySelector('#agent-panel');if(panel)panel.remove();return root.innerText||'';})()`), &text)); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(html, "demo-model-key") || strings.Contains(html, "server-side-demo") || strings.Contains(html, "CASTBOT_") {

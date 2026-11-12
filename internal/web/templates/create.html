@@ -113,11 +113,3 @@
 <button class="pchip" type="button" data-fill="Draft replies to my inbox">Draft replies to my inbox</button>
 </div>{{end}}
 {{end}}
-
-{{define "bootMachine"}}
-<aside class="pane" aria-label="Machine">
-<div class="pane-h"><span class="av {{.Agent.Color}} lg" aria-hidden="true">{{.Agent.Letter}}</span><div class="grow"><div class="nm">Machine</div><div class="sub">{{if .Boot.Created}}Created {{.Boot.Created}}{{end}}</div></div><a class="ibtn" href="/agents/{{.Agent.ID}}" aria-label="Close machine"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></a></div>
-{{template "panelTabs" .}}
-<section class="psec"><p>{{if .Boot.Nothing}}{{.Boot.Nothing}}{{else}}Nothing to do here.{{end}}</p>{{if .Boot.Logs}}<ul class="evs">{{range .Boot.Logs}}<li>{{.}}</li>{{end}}</ul>{{end}}</section>
-</aside>
-{{end}}

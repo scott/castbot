@@ -22,9 +22,6 @@ type bootView struct {
 	TryAgain             bool
 	Started              string
 	Placeholder          string
-	Logs                 []string
-	Nothing              string
-	Created              string
 	Fragment             bool
 }
 
@@ -285,13 +282,6 @@ func (s *Server) attachBoot(r *http.Request, user store.User, agent store.Agent,
 			p.Messages[i].Wait = "Waiting · sends when " + agent.Name + " is up"
 		}
 	}
-	if r.URL.Query().Get("panel") == "machine" {
-		p.Pane = true
-		p.Panel = "machine"
-		p.Boot.Logs = s.bootLogs(r.Context(), user, agent)
-		p.Boot.Nothing = "castbot made this machine for you when you created " + agent.Name + ". Nothing to do here."
-		p.Boot.Created = s.createdStamp(r.Context(), user, agent)
-	}
 }
 
 func (s *Server) reloadGreet(r *http.Request, user store.User, agent store.Agent, p *page) {
@@ -409,50 +399,6 @@ func (s *Server) bootSteps(agent store.Agent, vm store.VM, vmErr error, healthy,
 		}
 	}
 	return steps
-}
-
-func (s *Server) bootLogs(ctx context.Context, user store.User, agent store.Agent) []string {
-	events, err := s.store.ListVMEvents(ctx, user.ID, agent.ID)
-	if err != nil {
-		return nil
-	}
-	loc := userLocation(user.Timezone)
-	var out []string
-	for _, ev := range events {
-		line := ""
-		switch ev.Kind {
-		case store.EventCreateRequested, store.EventCreateAccepted:
-			line = "machine created"
-		case store.EventRunning:
-			line = "machine running"
-		case store.EventGuestReady:
-			line = "castlet: bootstrap ok, pulling bundle"
-		default:
-			continue
-		}
-		when := ""
-		if t, ok := inZone(ev.At, loc); ok {
-			when = t.Format("15:04:05")
-		}
-		if when != "" {
-			line = when + " " + line
-		}
-		out = append(out, line)
-	}
-	return out
-}
-
-func (s *Server) createdStamp(ctx context.Context, user store.User, agent store.Agent) string {
-	vm, err := s.store.LiveVM(ctx, user.ID, agent.ID)
-	stamp := agent.CreatedAt
-	if err == nil && vm.CreatedAt != "" {
-		stamp = vm.CreatedAt
-	}
-	loc := userLocation(user.Timezone)
-	if t, ok := inZone(stamp, loc); ok {
-		return "Today " + t.Format("3:04 PM")
-	}
-	return ""
 }
 
 func (s *Server) bootFragment(w http.ResponseWriter, r *http.Request) {
