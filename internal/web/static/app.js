@@ -18,16 +18,6 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     var search = document.getElementById("search");
-    if (search) {
-      search.addEventListener("input", function () {
-        var q = search.value.trim().toLowerCase();
-        var rows = document.querySelectorAll(".ag");
-        for (var i = 0; i < rows.length; i++) {
-          var name = (rows[i].getAttribute("data-name") || "").toLowerCase();
-          rows[i].hidden = q !== "" && name.indexOf(q) === -1;
-        }
-      });
-    }
 
     document.addEventListener("keydown", function (ev) {
       var tag = document.activeElement && document.activeElement.tagName;

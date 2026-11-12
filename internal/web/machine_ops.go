@@ -90,6 +90,7 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 				return nil, err
 			}
 			if state == "running" && err == nil && endpoint != "" && token != "" {
+				s.fireAfterRun(ctx, job.UserID, job.AgentID)
 				if !deferRestart {
 					if rerr := s.refreshSecrets(ctx, job.UserID, agent, endpoint, token); rerr != nil {
 						return nil, rerr
@@ -454,12 +455,17 @@ func (s *Server) machineAction(w http.ResponseWriter, r *http.Request, kind stri
 		}
 	}
 	if kind != "pause" && got.State == "running" {
+		s.fireAfterRun(r.Context(), user.ID, agent.ID)
 		if err := s.runReload(r.Context(), user.ID, agent.ID); err != nil {
 			s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusBadGateway, "The machine woke, but the saved agent could not be reloaded.")
 			return
 		}
 	}
-	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID)+"/machine", http.StatusSeeOther)
+	target := "/agents/" + url.PathEscape(agent.ID) + "/machine"
+	if r.FormValue("next") == "files" {
+		target = "/agents/" + url.PathEscape(agent.ID) + "?panel=files"
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request) {

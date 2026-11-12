@@ -207,6 +207,15 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 			p.Replace.PausedNote = true
 		}
 	}
+	p.LowSpace = s.diskLow()
+	filesOn := (r.URL.Query().Get("panel") == "files" || strings.HasSuffix(r.URL.Path, "/files")) && p.Page != "machine"
+	if filesOn {
+		p.Page = "chat"
+		p.Tab = "chat"
+		p.Pane = true
+		p.Panel = "files"
+		p.Files = s.loadFiles(r, user, agent)
+	}
 	if status == 0 {
 		status = http.StatusOK
 	}
@@ -241,6 +250,14 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := strings.TrimSpace(r.FormValue("body"))
+	extra, announced := s.pendingPathText(r, user.ID, agent.ID, agent.Name)
+	if extra != "" {
+		if body != "" {
+			body += "\n\n" + extra
+		} else {
+			body = extra
+		}
+	}
 	thread, err := s.pickThread(r, user.ID, agent.ID)
 	if s.missing(w, err) {
 		return
@@ -248,6 +265,9 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	msg, err := s.store.CreateMessage(r.Context(), user.ID, thread.ID, "user", user.ID, body)
 	if s.bad(w, err) {
 		return
+	}
+	if len(announced) > 0 {
+		_ = s.store.MarkAnnounced(r.Context(), user.ID, announced)
 	}
 	var run store.Run
 	s.withAgent(agent.ID, func() {
@@ -631,7 +651,7 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 	if len(agents) > 0 {
 		usage = "$7.42"
 	}
-	return page{
+	p := page{
 		Theme:     user.Theme,
 		CSRF:      from(r).CSRF,
 		User:      user,
@@ -649,7 +669,9 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 			}
 			return "Last changed " + d
 		}(),
-	}, nil
+	}
+	s.attachSearch(r, &p)
+	return p, nil
 }
 
 func (p *page) markOn(id string) {
@@ -720,9 +742,17 @@ func presentMessages(msgs []store.Message, agent agentView, now time.Time, loc *
 	prev := ""
 	for _, m := range msgs {
 		day := dayLabel(m.CreatedAt, now, loc)
-		v := msgView{ID: m.ID, Author: m.AuthorKind, Body: m.Body, Stamp: clockLabel(m.CreatedAt, loc), Day: day, At: m.CreatedAt, Origin: m.Origin}
+		v := msgView{ID: m.ID, Author: m.AuthorKind, Body: m.Body, Text: m.Body, Stamp: clockLabel(m.CreatedAt, loc), Day: day, At: m.CreatedAt, Origin: m.Origin}
 		if m.Origin == "routine" && m.AuthorKind == "user" {
 			v.Prompt = true
+		}
+		if m.AuthorKind == "user" && !v.Prompt {
+			text, lines, names := splitUserBody(m.Body)
+			v.Text = text
+			v.PathLines = lines
+			for _, name := range names {
+				v.Chips = append(v.Chips, chipView{Name: name})
+			}
 		}
 		if m.AuthorKind == "system" {
 			if card, ok := cliCard(m.Body, m.ID); ok {

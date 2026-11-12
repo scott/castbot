@@ -228,11 +228,6 @@ func (s *Server) proxyGuest(w http.ResponseWriter, r *http.Request, g guest, gue
 		writeText(w, http.StatusBadGateway, "Error\n")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(res.Body, guestBodyCap+1))
-	if err != nil || len(body) > guestBodyCap {
-		writeText(w, http.StatusBadGateway, "Error\n")
-		return
-	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
@@ -243,7 +238,7 @@ func (s *Server) proxyGuest(w http.ResponseWriter, r *http.Request, g guest, gue
 		w.Header().Set("Content-Disposition", attachmentDisposition(filename))
 	}
 	w.WriteHeader(status)
-	_, _ = w.Write(body)
+	_, _ = io.Copy(w, io.LimitReader(res.Body, guestBodyCap))
 }
 
 func fileGuestPath(rel string) (string, bool) {
