@@ -35,6 +35,8 @@ type agentForm struct {
 	HasAvatar, Editing            bool
 	AgentID                       string
 	Back, Job, KeyLine, Size      string
+	Color, ColorErr, Letter       string
+	Colors                        []colorSwatch
 	Idle                          int
 	Advanced, Prefill             bool
 }
@@ -72,6 +74,11 @@ func (s *Server) blankForm(ctx context.Context, user store.User) (agentForm, err
 			}
 		}
 	}
+	color, err := s.store.NextAgentColor(ctx, user.ID)
+	if err != nil {
+		return agentForm{}, err
+	}
+	f.Color = color
 	return f, nil
 }
 
@@ -111,6 +118,15 @@ func (s *Server) formFromAgent(ctx context.Context, user store.User, agent store
 	f.SectionID = agent.SectionID
 	f.Model = agent.Model
 	f.HasAvatar = agent.AvatarPath != ""
+	if store.ValidAgentColor(agent.Color) {
+		f.Color = agent.Color
+	} else {
+		color, cerr := s.store.NextAgentColor(ctx, user.ID)
+		if cerr != nil {
+			return agentForm{}, cerr
+		}
+		f.Color = color
+	}
 	bundle, err := s.store.LatestBundle(ctx, user.ID, agent.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -220,6 +236,13 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 	base.Submit = "Create and start"
 	base.Back = "/new-agent"
 	base.Advanced = true
+	if doc, _, derr := s.loadDraft(r.Context(), user.ID); derr == nil && doc.Card != nil {
+		card := *doc.Card
+		s.refreshCard(r.Context(), user.ID, &card)
+		if store.ValidAgentColor(card.Color) {
+			base.Color = card.Color
+		}
+	}
 	f, spec, avatar, mime, good := s.readForm(r, base)
 	f.Job, _ = redactSecrets(strings.TrimSpace(r.FormValue("job")))
 	switch strings.TrimSpace(r.FormValue("size")) {
@@ -256,7 +279,7 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 		}
 	}
 	agent, _, err := s.store.CreateAgent(r.Context(), user.ID, store.AgentInput{
-		SectionID: f.SectionID, Name: f.Name, Title: f.Title, Description: f.Job, Model: f.Model, Status: "draft", Color: "c0",
+		SectionID: f.SectionID, Name: f.Name, Title: f.Title, Description: f.Job, Model: f.Model, Status: "draft", Color: f.Color,
 		IdleTimeout: f.Idle, Size: f.Size, PendingGreet: hosted,
 	})
 	if err != nil {
@@ -340,8 +363,13 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.SaveAgentFields(r.Context(), user.ID, agent.ID, store.AgentInput{
-		SectionID: f.SectionID, Name: f.Name, Title: f.Title, Model: f.Model,
+		SectionID: f.SectionID, Name: f.Name, Title: f.Title, Model: f.Model, Color: f.Color,
 	}); err != nil {
+		if errors.Is(err, store.ErrInvalid) {
+			f.ColorErr = colorRejectedCopy
+			s.showForm(w, r, user, f, http.StatusBadRequest)
+			return
+		}
 		if errors.Is(err, store.ErrConflict) {
 			f.NameErr = "Choose a name that is not already used."
 			s.showForm(w, r, user, f, http.StatusBadRequest)
@@ -640,6 +668,9 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 		f.InstructionsErr = "Instructions are too long."
 		good = false
 	}
+	if !applyPostedColor(r, &f) {
+		good = false
+	}
 	avatar, mime, avatarErr := readAvatar(r)
 	if avatarErr != "" {
 		f.AvatarErr = avatarErr
@@ -690,6 +721,20 @@ func readAvatar(r *http.Request) ([]byte, string, string) {
 	default:
 		return nil, "", "Use a PNG, JPEG, GIF, or WebP image."
 	}
+}
+
+func applyPostedColor(r *http.Request, f *agentForm) bool {
+	vals, ok := r.Form["color"]
+	if !ok || len(vals) == 0 {
+		return true
+	}
+	posted := strings.TrimSpace(vals[0])
+	if !store.ValidAgentColor(posted) {
+		f.ColorErr = colorRejectedCopy
+		return false
+	}
+	f.Color = posted
+	return true
 }
 
 func safeVersion(v string) string {
@@ -923,6 +968,8 @@ func (s *Server) showForm(w http.ResponseWriter, r *http.Request, user store.Use
 		p.Page = "new"
 		p.Title = "New agent"
 	}
+	f.Letter = letter(f.Name)
+	f.Colors = colorSwatches(f.Color)
 	p.AgentForm = f
 	s.render(w, status, "app", finish(p))
 }

@@ -466,6 +466,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV19(); err != nil {
 		return err
 	}
+	// Version 20 assigns a pickable avatar color. c0 stays a legacy default only.
+	if err := s.migrateV20(); err != nil {
+		return err
+	}
 	return nil
 }
 

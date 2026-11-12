@@ -43,16 +43,16 @@ type createTurn struct {
 }
 
 type setupView struct {
-	Name, Title, Instructions, Job, Schedule, Reason, Letter string
-	Model, ModelLabel, KeyLabel, SizeLabel                   string
-	Size                                                     string
-	Idle                                                     int
-	IdleLabel, HourCost, DayCost, Lead                       string
-	Auto, Stripped, Conflict, HasKey, Editing                bool
-	Alt, Block, Why                                          string
-	Models                                                   []modelChoice
-	Sizes                                                    []sizeChoice
-	Idles                                                    []idleChoice
+	Name, Title, Instructions, Job, Schedule, Reason, Letter, Color string
+	Model, ModelLabel, KeyLabel, SizeLabel                          string
+	Size                                                            string
+	Idle                                                            int
+	IdleLabel, HourCost, DayCost, Lead                              string
+	Auto, Stripped, Conflict, HasKey, Editing                       bool
+	Alt, Block, Why                                                 string
+	Models                                                          []modelChoice
+	Sizes                                                           []sizeChoice
+	Idles                                                           []idleChoice
 }
 
 type modelChoice struct {
@@ -85,12 +85,12 @@ type draftTurn struct {
 }
 
 type setupState struct {
-	Name, Title, Instructions, Job, Schedule, Reason string
-	Model, KeyLabel                                  string
-	Size                                             string
-	Idle                                             int
-	Auto, Stripped, Conflict, HasKey                 bool
-	Alt, Lead                                        string
+	Name, Title, Instructions, Job, Schedule, Reason, Color string
+	Model, KeyLabel                                         string
+	Size                                                    string
+	Idle                                                    int
+	Auto, Stripped, Conflict, HasKey                        bool
+	Alt, Lead                                               string
 }
 
 func exampleChips() []chipFill {
@@ -204,6 +204,11 @@ func (s *Server) refreshCard(ctx context.Context, userID string, card *setupStat
 		card.Conflict = false
 	}
 	card.Lead = leadFor(*card)
+	if !store.ValidAgentColor(card.Color) {
+		if next, err := s.store.NextAgentColor(ctx, userID); err == nil {
+			card.Color = next
+		}
+	}
 }
 
 // userModelKey is the caller's vault key for this model.
@@ -273,7 +278,7 @@ func presentSetup(card setupState, editing bool) setupView {
 		Size: card.Size, SizeLabel: machineLine(card.Size), Idle: card.Idle,
 		IdleLabel: pauseLine(card.Idle), HourCost: hour, DayCost: day, Lead: card.Lead,
 		Auto: card.Auto, Stripped: card.Stripped, Conflict: card.Conflict, HasKey: card.HasKey,
-		Alt: card.Alt, Editing: editing, Letter: letter(card.Name),
+		Alt: card.Alt, Editing: editing, Letter: letter(card.Name), Color: card.Color,
 	}
 	if v.Job == "" {
 		v.Job = ""
@@ -685,9 +690,13 @@ func (s *Server) materialize(ctx context.Context, user store.User, card setupSta
 	if title == "" {
 		title = titleFor(card.Job)
 	}
+	color := ""
+	if store.ValidAgentColor(card.Color) {
+		color = card.Color
+	}
 	agent, _, err := s.store.CreateAgent(ctx, user.ID, store.AgentInput{
 		SectionID: sec.ID, Name: card.Name, Title: title, Description: card.Job,
-		Model: card.Model, Status: "draft", Color: "c0", IdleTimeout: idle, Size: size,
+		Model: card.Model, Status: "draft", Color: color, IdleTimeout: idle, Size: size,
 		PendingGreet: pending,
 	})
 	if err != nil {
@@ -761,6 +770,9 @@ func (s *Server) advancedForm(w http.ResponseWriter, r *http.Request, user store
 		form.Model = card.Model
 		form.Size = card.Size
 		form.Idle = card.Idle
+		if store.ValidAgentColor(card.Color) {
+			form.Color = card.Color
+		}
 		if card.KeyLabel != "" {
 			form.KeyLine = "From your vault · " + card.KeyLabel
 		}

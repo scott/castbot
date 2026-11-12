@@ -369,7 +369,7 @@ func TestRetryDoesNotDuplicateTheUserMessage(t *testing.T) {
 		t.Fatalf("retry fragment %d %s", code, body)
 	}
 	page := h.poll(ip, "/agents/"+agent.ID, "You said: ping the echo")
-	if strings.Count(page, `class="m-user"`) != 1 || strings.Count(page, "You said:") != 1 {
+	if strings.Count(page, `class="m-user`) != 1 || strings.Count(page, "You said:") != 1 {
 		t.Fatalf("page: %s", page)
 	}
 	msgs, err := h.st.ListMessages(context.Background(), user.ID, threads[0].ID)
@@ -400,7 +400,6 @@ func (h *harness) newAgent(ip, name string) store.Agent {
 		Name:      name,
 		Title:     "Helper",
 		Status:    "draft",
-		Color:     "c0",
 	})
 	if err != nil {
 		h.t.Fatal(err)

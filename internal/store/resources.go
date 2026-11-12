@@ -290,9 +290,14 @@ func (s *Store) CreateAgent(ctx context.Context, userID string, in AgentInput) (
 	default:
 		return Agent{}, Thread{}, ErrInvalid
 	}
-	color := in.Color
+	color := strings.TrimSpace(in.Color)
 	if color == "" {
-		color = "c0"
+		color, err = s.NextAgentColor(ctx, userID)
+		if err != nil {
+			return Agent{}, Thread{}, err
+		}
+	} else if !ValidAgentColor(color) {
+		return Agent{}, Thread{}, ErrInvalid
 	}
 	size := in.Size
 	if size == "" {
@@ -389,6 +394,10 @@ func (s *Store) SaveAgentFields(ctx context.Context, userID, id string, in Agent
 	if name == "" || len(name) > 40 || len(title) > 80 || len(model) > 200 {
 		return ErrInvalid
 	}
+	color := strings.TrimSpace(in.Color)
+	if color != "" && !ValidAgentColor(color) {
+		return ErrInvalid
+	}
 	if _, err := s.GetAgent(ctx, userID, id); err != nil {
 		return err
 	}
@@ -402,7 +411,13 @@ func (s *Store) SaveAgentFields(ctx context.Context, userID, id string, in Agent
 	if n > 0 {
 		return ErrConflict
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE agents SET section_id = ?, name = ?, title = ?, model = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, in.SectionID, name, title, model, id, userID)
+	query := `UPDATE agents SET section_id = ?, name = ?, title = ?, model = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`
+	args := []any{in.SectionID, name, title, model, id, userID}
+	if color != "" {
+		query = `UPDATE agents SET section_id = ?, name = ?, title = ?, model = ?, avatar_color = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`
+		args = []any{in.SectionID, name, title, model, color, id, userID}
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}

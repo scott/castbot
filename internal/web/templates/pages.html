@@ -135,7 +135,7 @@
 {{end}}
 
 {{define "messages"}}
-{{range .Messages}}{{if not .Hide}}{{if .ShowDay}}<div class="day">{{.Day}}</div>{{end}}{{if .Sys}}<div class="sysline" id="m-{{.ID}}">{{.Body}}</div>{{else if .Marker}}<a class="rmark" href="{{.Href}}"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span><span class="grow"><span class="t1">{{.Body}}</span><span class="t2">{{.Sub}}</span></span><span class="rst {{.PillClass}}">{{.Pill}}</span><span class="open">Open thread</span></a>{{else if .HasCard}}{{template "approvalCard" .Card}}{{else if .Prompt}}<div class="rprompt" id="m-{{.ID}}"><span class="lab"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Routine prompt, sent by castbot</span>{{.Body}}</div>{{else if eq .Author "system"}}<div class="m-note" id="m-{{.ID}}">{{.Body}}</div>{{else if eq .Author "user"}}<div class="m-user{{if .Waiting}} waiting{{end}}" id="m-{{.ID}}">{{range .Chips}}<span class="fchip"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg><span class="fn">{{.Name}}</span></span>{{end}}{{.Text}}</div>{{if .Wait}}<div class="wait" id="wait-{{.ID}}">{{.Wait}}</div>{{end}}{{range .PathLines}}<div class="pathline"><span>{{.}}</span></div>{{end}}{{else}}<div class="m-agent" id="m-{{.ID}}"><span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span><div class="body"><p{{if .Pre}} class="pre"{{end}}>{{.Body}}</p>{{if .File}}<div class="facts"><a class="fout" href="{{.File.Open}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg><span class="grow"><span class="t1">{{.File.Name}}</span><span class="t2">{{.File.Meta}}</span></span></a><a class="ibtn line fdl" href="{{.File.Download}}" aria-label="Download {{.File.Name}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg></a></div>{{end}}{{if .Stamp}}<span class="stamp">{{.Stamp}}</span>{{end}}</div></div>{{end}}{{end}}{{end}}
+{{range .Messages}}{{if not .Hide}}{{if .ShowDay}}<div class="day">{{.Day}}</div>{{end}}{{if .Sys}}<div class="sysline" id="m-{{.ID}}">{{.Body}}</div>{{else if .Marker}}<a class="rmark" href="{{.Href}}"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span><span class="grow"><span class="t1">{{.Body}}</span><span class="t2">{{.Sub}}</span></span><span class="rst {{.PillClass}}">{{.Pill}}</span><span class="open">Open thread</span></a>{{else if .HasCard}}{{template "approvalCard" .Card}}{{else if .Prompt}}<div class="rprompt" id="m-{{.ID}}"><span class="lab"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Routine prompt, sent by castbot</span>{{.Body}}</div>{{else if eq .Author "system"}}<div class="m-note" id="m-{{.ID}}">{{.Body}}</div>{{else if eq .Author "user"}}<div class="m-user{{if .Color}} {{.Color}}{{end}}{{if .Waiting}} waiting{{end}}" id="m-{{.ID}}">{{range .Chips}}<span class="fchip"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg><span class="fn">{{.Name}}</span></span>{{end}}{{.Text}}</div>{{if .Wait}}<div class="wait" id="wait-{{.ID}}">{{.Wait}}</div>{{end}}{{range .PathLines}}<div class="pathline"><span>{{.}}</span></div>{{end}}{{else}}<div class="m-agent" id="m-{{.ID}}"><span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span><div class="body"><p{{if .Pre}} class="pre"{{end}}>{{.Body}}</p>{{if .File}}<div class="facts"><a class="fout" href="{{.File.Open}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg><span class="grow"><span class="t1">{{.File.Name}}</span><span class="t2">{{.File.Meta}}</span></span></a><a class="ibtn line fdl" href="{{.File.Download}}" aria-label="Download {{.File.Name}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg></a></div>{{end}}{{if .Stamp}}<span class="stamp">{{.Stamp}}</span>{{end}}</div></div>{{end}}{{end}}{{end}}
 {{end}}
 
 {{define "approvalCards"}}{{range .Cards}}{{template "approvalCard" .}}{{end}}{{end}}
@@ -298,6 +298,7 @@
 <div class="field"><span class="lab">Name</span><div class="inp{{if .AgentForm.NameErr}} bad{{end}}"><input name="name" maxlength="40" value="{{.AgentForm.Name}}" aria-label="Name"></div>{{if .AgentForm.NameErr}}<span class="err">{{.AgentForm.NameErr}}</span>{{end}}</div>
 <div class="field"><span class="lab">Title</span><div class="inp{{if .AgentForm.TitleErr}} bad{{end}}"><input name="title" maxlength="80" value="{{.AgentForm.Title}}" aria-label="Title"></div>{{if .AgentForm.TitleErr}}<span class="err">{{.AgentForm.TitleErr}}</span>{{end}}</div>
 </div>
+{{if or .AgentForm.Advanced .AgentForm.Editing}}{{template "colorPicker" .}}{{end}}
 <div class="field"><span class="lab">Section</span><div class="selwrap"><select class="sel" name="section" aria-label="Section">{{range .AgentForm.Sections}}<option value="{{.ID}}"{{if eq .ID $.AgentForm.SectionID}} selected{{end}}>{{.Name}}</option>{{end}}</select></div>{{if .AgentForm.SectionErr}}<span class="err">{{.AgentForm.SectionErr}}</span>{{end}}</div>
 <div class="field"><span class="lab">Avatar <span class="opt">optional</span></span><div class="file"><input type="file" name="avatar" accept="image/png,image/jpeg,image/gif,image/webp" aria-label="Avatar"></div>{{if .AgentForm.HasAvatar}}<p class="fineprint">An avatar is saved. A new file replaces it.</p>{{end}}{{if .AgentForm.AvatarErr}}<span class="err">{{.AgentForm.AvatarErr}}</span>{{end}}<p class="help">PNG, JPEG, GIF, or WebP. Up to 512 KB.</p></div>
 <div class="field"><span class="lab">Instructions</span><textarea class="ta" name="instructions" maxlength="200000" aria-label="Instructions">{{.AgentForm.Instructions}}</textarea>{{if .AgentForm.InstructionsErr}}<span class="err">{{.AgentForm.InstructionsErr}}</span>{{end}}</div>
@@ -318,12 +319,24 @@
 </div>
 <aside class="sum">
 <h3>Review</h3>
+{{if or .AgentForm.Advanced .AgentForm.Editing}}<span class="av lg {{.AgentForm.Color}}" id="color-preview" aria-hidden="true">{{.AgentForm.Letter}}</span>{{end}}
 {{if .AgentForm.HasAvatar}}<img class="av lg" src="/agents/{{.AgentForm.AgentID}}/avatar" alt="">{{end}}
 <div class="kv"><div class="k">Name</div><div>{{if .AgentForm.Name}}{{.AgentForm.Name}}{{else}}Not set{{end}}</div><div class="k">Title</div><div>{{if .AgentForm.Title}}{{.AgentForm.Title}}{{else}}Not set{{end}}</div><div class="k">Model</div><div>{{if .AgentForm.Model}}{{.AgentForm.Model}}{{else}}Not set{{end}}</div></div>
 {{if .AgentForm.KeptLines}}<div class="kept"><span class="lab">Kept from the agent file</span>{{range .AgentForm.KeptLines}}<p class="fineprint"><b>{{.Label}}.</b> {{.Value}}</p>{{end}}<p class="fineprint">These are read only. Saving keeps them.</p></div>{{end}}
 <p class="fineprint">Saving updates this account only. A running machine is reloaded. A paused machine stays paused.</p>
 </aside>
 </form>
+{{end}}
+
+{{define "colorPicker"}}
+<fieldset class="swatches">
+<legend>Color</legend>
+<div class="swatch-row">
+{{range .AgentForm.Colors}}<label class="swatch"><input type="radio" name="color" value="{{.Key}}"{{if .On}} checked{{end}} aria-label="Color: {{.Name}}"><span class="sq av {{.Key}}" aria-hidden="true"><svg class="i check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><span class="nm">{{.Name}}</span></label>{{end}}
+</div>
+{{if .AgentForm.Advanced}}<p class="help">Picked so no other agent shares it. You can change it any time.</p>{{end}}
+{{if .AgentForm.ColorErr}}<span class="err">{{.AgentForm.ColorErr}}</span>{{end}}
+</fieldset>
 {{end}}
 
 {{define "machinePanel"}}

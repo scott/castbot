@@ -190,6 +190,16 @@
       save.setAttribute("aria-disabled", bad ? "true" : "false");
     });
 
+    var swatches = document.querySelector(".swatches");
+    var preview = document.getElementById("color-preview");
+    if (swatches && preview) {
+      swatches.addEventListener("change", function () {
+        var on = swatches.querySelector('input[name="color"]:checked');
+        if (!on) return;
+        preview.className = "av lg " + on.value;
+      });
+    }
+
     var themeForm = document.getElementById("theme-form");
     if (themeForm) {
       themeForm.addEventListener("change", function () {

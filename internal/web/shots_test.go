@@ -215,6 +215,10 @@ func TestShots(t *testing.T) {
 	if err := os.MkdirAll(dir20, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	dir27 := filepath.Join("..", "..", "docs", "evidence", "S27")
+	if err := os.MkdirAll(dir27, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for _, theme := range []string{"dark", "light"} {
 		for _, vp := range []struct {
 			w, h int
@@ -242,6 +246,12 @@ func TestShots(t *testing.T) {
 				kind := kind
 				t.Run("s20-"+kind+"-"+theme+"-"+vp.name, func(t *testing.T) {
 					shootS20(t, browserCtx, dir20, vp.w, vp.h, theme, vp.name, kind)
+				})
+			}
+			for _, kind := range []string{"chat", "list", "advanced", "edit"} {
+				kind := kind
+				t.Run("s27-"+kind+"-"+theme+"-"+vp.name, func(t *testing.T) {
+					shootS27(t, browserCtx, dir27, vp.w, vp.h, theme, vp.name, kind)
 				})
 			}
 		}
