@@ -8,7 +8,7 @@ When a machine asks for secrets, the value is sent under the name Cast expects, 
 
 A key added or rotated after the machine is already running is picked up on the next message. The control plane compares a hash of the secret names and values with the last set the guest started with, and reloads Cast when they differ. The hash is not a secret. The values are still not logged.
 
-If a run needs a key and the variable is empty, the run fails at once with: No key for provider digitalocean. Ask the owner to add it. A keyless provider, such as ollama, does not need a variable.
+If a run needs a key and the variable is empty, the run fails at once with: No key for provider DigitalOcean. Ask the owner to add it. A keyless provider, such as ollama, does not need a variable.
 
 Settings lists every keyed provider. The newest vault row for that provider wins over the process environment. If the vault has no row, the process environment is still used, so an existing agent keeps working. See `docs/secrets.md`.
 

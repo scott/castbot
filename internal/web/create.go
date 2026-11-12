@@ -44,7 +44,7 @@ type createTurn struct {
 
 type setupView struct {
 	Name, Title, Instructions, Job, Schedule, Reason, Letter, Color string
-	Model, ModelLabel, KeyLabel, SizeLabel                          string
+	Model, ModelLabel, KeyLabel, KeyMiss, SizeLabel                 string
 	Size                                                            string
 	Idle                                                            int
 	IdleLabel, HourCost, DayCost, Lead                              string
@@ -274,7 +274,7 @@ func presentSetup(card setupState, editing bool) setupView {
 	v := setupView{
 		Name: card.Name, Title: card.Title, Instructions: card.Instructions, Job: card.Job,
 		Schedule: card.Schedule, Reason: card.Reason, Model: card.Model,
-		ModelLabel: modelLabel(card.Model), KeyLabel: card.KeyLabel,
+		ModelLabel: modelLabel(card.Model), KeyLabel: card.KeyLabel, KeyMiss: missingKeyRest(card.Model),
 		Size: card.Size, SizeLabel: machineLine(card.Size), Idle: card.Idle,
 		IdleLabel: pauseLine(card.Idle), HourCost: hour, DayCost: day, Lead: card.Lead,
 		Auto: card.Auto, Stripped: card.Stripped, Conflict: card.Conflict, HasKey: card.HasKey,
@@ -306,10 +306,16 @@ func presentSetup(card setupState, editing bool) setupView {
 }
 
 func modelLabel(id string) string {
-	if id != "" && id != defaultModelID() {
-		return "Provider A / model-small"
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
 	}
-	return "Provider A / model-large"
+	if inf, ok := castcfg.InferenceFor(id); ok {
+		if name := castcfg.ProviderName(inf.Key); name != "" {
+			return name + " / " + id
+		}
+	}
+	return id
 }
 
 func modelChoices(current string) []modelChoice {
@@ -318,9 +324,9 @@ func modelChoices(current string) []modelChoice {
 	if current == "" {
 		current = large
 	}
-	out := []modelChoice{{large, "Provider A / model-large", current == large}}
+	out := []modelChoice{{large, modelLabel(large), current == large}}
 	if small != "" && small != large {
-		out = append(out, modelChoice{small, "Provider A / model-small", current == small})
+		out = append(out, modelChoice{small, modelLabel(small), current == small})
 	}
 	if current != large && current != small {
 		out = append(out, modelChoice{current, modelLabel(current), true})

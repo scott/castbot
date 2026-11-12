@@ -164,7 +164,7 @@ func vaultPath(kind string, ids vaultIDs) (string, string) {
 	case "10e":
 		return "/settings/secrets/item/" + ids.github + "?watch=1", `(function(){return (document.body.innerText||"").indexOf("did not reload")>=0;})()`
 	case "10f":
-		return "/agents/" + ids.atlas + "?panel=secrets", `(function(){var t=document.body.innerText||"";var main=document.querySelector(".main");var shown=main&&getComputedStyle(main).display!=="none";var chat=!shown||(main.innerText||"").indexOf("Check docs/")>=0;return t.indexOf("GITHUB_TOKEN")>=0 && t.indexOf("Provider A key")>=0 && chat;})()`
+		return "/agents/" + ids.atlas + "?panel=secrets", `(function(){var t=document.body.innerText||"";var main=document.querySelector(".main");var shown=main&&getComputedStyle(main).display!=="none";var chat=!shown||(main.innerText||"").indexOf("Check docs/")>=0;return t.indexOf("GITHUB_TOKEN")>=0 && t.indexOf("OpenRouter key")>=0 && chat;})()`
 	case "10f2":
 		return "/agents/" + ids.atlas + "?panel=secrets&revoke=" + ids.github, `(function(){return (document.body.innerText||"").indexOf("Take GITHUB_TOKEN away from Atlas?")>=0;})()`
 	case "10f3":
@@ -236,7 +236,7 @@ func seedVaultCast(t *testing.T, st *store.Store, userID string, withSecrets boo
 		}
 		return agent.ID
 	}
-	model := "Provider A / model-large"
+	model := defaultModelID()
 	ids.atlas = mk(pinned.ID, "Atlas", "Docs helper", "c1", "ready", "", model)
 	ids.pip = mk(agents.ID, "Pip", "Inbox", "c2", "ready", "", model)
 	ids.juniper = mk(agents.ID, "Juniper", "Research", "c3", "provisioning", "Resuming", model)

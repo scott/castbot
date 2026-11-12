@@ -38,6 +38,8 @@ type vaultSummary struct {
 	KeyMeta     string
 	SecretLine  string
 	HasKey      bool
+	Letter      string
+	AddHref     string
 	ReplaceHref string
 }
 
@@ -163,7 +165,13 @@ func (s *Server) vaultSummary(ctx context.Context, user store.User) (vaultView, 
 	if len(rows) > 0 {
 		v.Summary.SecretLine = countPhrase(len(rows), "secret", "secrets") + ", given to " + countPhrase(len(granted), "agent", "agents")
 	}
-	for _, slot := range modelSlots() {
+	slots := modelSlots()
+	if len(slots) > 0 {
+		v.Summary.Letter = slots[0].Letter
+		v.Summary.KeyTitle = slots[0].Title
+		v.Summary.AddHref = "/settings/secrets/keys/" + slots[0].ID
+	}
+	for _, slot := range slots {
 		key, ok, err := s.slotKey(ctx, user.ID, slot)
 		if err != nil {
 			return vaultView{}, err
@@ -175,11 +183,12 @@ func (s *Server) vaultSummary(ctx context.Context, user store.User) (vaultView, 
 		if err != nil {
 			return vaultView{}, err
 		}
-		label := key.Label
+		label := strings.TrimSpace(key.Label)
 		if label == "" {
-			label = "From the server"
+			label = strings.TrimSpace(key.Name)
 		}
 		v.Summary.HasKey = true
+		v.Summary.Letter = slot.Letter
 		v.Summary.KeyTitle = slot.Title
 		v.Summary.KeySub = "Model key · " + label
 		v.Summary.KeyMeta = "Used by " + countPhrase(len(users), "agent", "agents")
@@ -216,7 +225,7 @@ func (s *Server) slotKey(ctx context.Context, userID string, slot keySlot) (stor
 		return *found, true, nil
 	}
 	if strings.TrimSpace(providerEnv(slot.Manifest)) != "" {
-		return store.Secret{Name: slot.Env, Label: "From the server", Provider: slot.ID}, true, nil
+		return store.Secret{Name: slot.Env, Label: serverKeyLabel, Provider: slot.ID}, true, nil
 	}
 	return store.Secret{}, false, nil
 }
@@ -340,7 +349,7 @@ func (s *Server) listView(r *http.Request, user store.User, form vaultForm, high
 			key.Label = label
 			key.When = "Added " + monthDay(sec.CreatedAt, loc)
 			if sec.ID == "" {
-				key.When = "From the server"
+				key.When = serverKeyLabel
 			}
 			key.Used = short
 			key.UsedLabel = full
@@ -871,9 +880,9 @@ func (s *Server) panelView(r *http.Request, user store.User, agent store.Agent) 
 			return vaultView{}, err
 		}
 		if have {
-			label := sec.Label
+			label := strings.TrimSpace(sec.Label)
 			if label == "" {
-				label = "From the server"
+				label = strings.TrimSpace(sec.Name)
 			}
 			v.Pane.Rows = append(v.Pane.Rows, vaultPaneRow{Title: slot.Title + " key", Sub: "Model key · " + label, Model: true})
 		}

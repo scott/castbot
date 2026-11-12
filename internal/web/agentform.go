@@ -273,7 +273,7 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 	hosted := h != nil && image != "" && publicURL != ""
 	if hosted {
 		if _, ok := s.userModelKey(r.Context(), user.ID, f.Model); !ok {
-			f.SaveErr = "Add a model key first. Agents run on your own Provider A key, and you have not added one yet."
+			f.SaveErr = missingModelKeyCopy(f.Model)
 			s.showForm(w, r, user, f, http.StatusBadRequest)
 			return
 		}

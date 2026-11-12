@@ -5,8 +5,17 @@ import (
 	"context"
 	"time"
 
+	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/store"
 )
+
+func demoModel() string {
+	models, err := castcfg.Models()
+	if err != nil || len(models) == 0 {
+		return ""
+	}
+	return models[0].ID
+}
 
 // Seed adds the sample agents, a chat, and two other sessions when the account has no agents yet.
 func Seed(ctx context.Context, st *store.Store, email string) error {
@@ -40,7 +49,7 @@ func Seed(ctx context.Context, st *store.Store, email string) error {
 		lines   [][2]string
 	}
 	rows := []spec{
-		{pinned.ID, store.AgentInput{Name: "Atlas", Title: "Docs helper", Color: "c1", Model: "Provider A / model-large", Status: "ready", Activity: "writing", Approvals: 1, CreatedAt: created}, [][2]string{
+		{pinned.ID, store.AgentInput{Name: "Atlas", Title: "Docs helper", Color: "c1", Model: demoModel(), Status: "ready", Activity: "writing", Approvals: 1, CreatedAt: created}, [][2]string{
 			{"user", "Update the FAQ in example-org/docs-bot with the new pricing tiers from pricing.md, then push a branch for review."},
 			{"agent", "On it. I will read the current FAQ and pricing.md first."},
 			{"user", "Also add a line about annual billing while you wait."},

@@ -178,7 +178,7 @@ func s20After(t *testing.T, ctx context.Context, kind string, gate *s20Gate, fak
 
 func s20ArriveStarting(t *testing.T, ctx context.Context, text string, withWait bool) {
 	t.Helper()
-	s20Send(t, ctx, text, s20Card("Create Scout", "Provider A / model-large"))
+	s20Send(t, ctx, text, s20Card("Create Scout", modelLabel(defaultModelID())))
 	s20Click(t, ctx, `document.querySelector('.cacts button.btn.pri').click()`, `(document.body.innerText||'').indexOf('is starting up')>=0 && (document.body.innerText||'').indexOf('You created Scout at')>=0`)
 	if withWait {
 		s20Chat(t, ctx, "Please start with docs/guides.")
@@ -234,7 +234,7 @@ func s20Wait(t *testing.T, ctx context.Context, needle string) {
 }
 
 func s20Card(a, b string) string {
-	return `(document.body.innerText||'').indexOf('` + a + `')>=0 && (document.body.innerText||'').indexOf('` + b + `')>=0 && (document.body.innerText||'').indexOf('Provider A / model-large')>=0`
+	return `(document.body.innerText||'').indexOf('` + a + `')>=0 && (document.body.innerText||'').indexOf('` + b + `')>=0 && (document.body.innerText||'').indexOf('` + modelLabel(defaultModelID()) + `')>=0`
 }
 
 func s20Token() string {
@@ -247,8 +247,6 @@ func s20CopyClean(t *testing.T, ctx context.Context, kind string) {
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.documentElement.outerHTML`), &html)); err != nil {
 		t.Fatal(err)
 	}
-	// Wide agent chats open the side panel, which shows the saved model id.
-	// The card and the chat column still must not name a provider.
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var root=document.body.cloneNode(true);var panel=root.querySelector('#agent-panel');if(panel)panel.remove();return root.innerText||'';})()`), &text)); err != nil {
 		t.Fatal(err)
 	}
@@ -258,8 +256,8 @@ func s20CopyClean(t *testing.T, ctx context.Context, kind string) {
 	if kind == "14j" && (strings.Contains(html, s20Token()) || strings.Contains(text, s20Token())) {
 		t.Fatal("shot page contains the pasted token")
 	}
-	if kind != "14e" && (strings.Contains(text, "DigitalOcean") || strings.Contains(text, "OpenRouter") || strings.Contains(text, "openrouter/") || strings.Contains(text, "openai/gpt")) {
-		t.Fatal("shot page names a provider")
+	if strings.Contains(html, "Provider A") || strings.Contains(text, "Provider A") {
+		t.Fatal("shot page still says Provider A")
 	}
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(document.body.innerText||'').indexOf('\u2014')<0 && (document.body.innerText||'').indexOf('\u2013')<0 ? 'ok' : 'dash'`), &dashesOK)); err != nil {
 		t.Fatal(err)

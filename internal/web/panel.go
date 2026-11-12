@@ -272,23 +272,24 @@ func (s *Server) modelLine(r *http.Request, userID, model string) (string, strin
 	sub := "Keys stay on your account."
 	if slot, ok := slotForModel(model); ok {
 		if sec, have, err := s.slotKey(r.Context(), userID, slot); err == nil && have {
-			label := sec.Label
+			label := strings.TrimSpace(sec.Label)
 			if label == "" {
-				label = sec.Name
+				label = strings.TrimSpace(sec.Name)
 			}
-			if label == "From the server" {
-				sub = "From the server"
+			if isServerKey(label) {
+				sub = serverKeyLabel
 			} else if label != "" {
 				sub = "From your vault · " + label
 			}
 		}
 	}
-	return model, sub
+	return modelLabel(model), sub
 }
 
 func (s *Server) secretGlance(r *http.Request, userID string, agent store.Agent) (string, string) {
 	n := 0
 	var names []string
+	server := false
 	if rows, err := s.store.GrantedMeta(r.Context(), userID, agent.ID); err == nil {
 		for _, row := range rows {
 			n++
@@ -300,12 +301,16 @@ func (s *Server) secretGlance(r *http.Request, userID string, agent store.Agent)
 	if slot, ok := slotForModel(agent.Model); ok {
 		if sec, have, err := s.slotKey(r.Context(), userID, slot); err == nil && have {
 			n++
-			label := sec.Label
-			if label == "" || label == "From the server" {
-				label = sec.Name
-			}
-			if label != "" && label != "From the server" {
-				names = append([]string{label}, names...)
+			if isServerKey(sec.Label) {
+				server = len(names) == 0
+			} else {
+				label := strings.TrimSpace(sec.Label)
+				if label == "" {
+					label = strings.TrimSpace(sec.Name)
+				}
+				if label != "" {
+					names = append([]string{label}, names...)
+				}
 			}
 		}
 	}
@@ -316,6 +321,9 @@ func (s *Server) secretGlance(r *http.Request, userID string, agent store.Agent)
 		title = fmt.Sprintf("%d secrets", n)
 	}
 	sub := "Values stay in your vault."
+	if len(names) == 0 && server {
+		sub = serverKeyLabel
+	}
 	switch len(names) {
 	case 0:
 	case 1:

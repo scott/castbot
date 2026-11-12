@@ -470,6 +470,11 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV20(); err != nil {
 		return err
 	}
+	// Version 21 rewrites mock model names onto real manifest ids.
+	// A model that already names a provider is left as it was saved.
+	if err := s.migrateV21(); err != nil {
+		return err
+	}
 	return nil
 }
 

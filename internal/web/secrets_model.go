@@ -16,8 +16,17 @@ func providerEnv(manifest string) string {
 	return strings.TrimSpace(os.Getenv(castcfg.ProviderKeyEnv(manifest)))
 }
 
-// keySlot is one model key row. The title is castbot copy. The manifest id
-// is only used to match an agent model and the process env fallback.
+// serverKeyLabel is the stand-in for a key set on the server, shared by every agent.
+// Adding a key in the vault overrides it.
+const serverKeyLabel = "Server key (set by the admin, shared by all agents). Add your own key to override it."
+
+func isServerKey(label string) bool {
+	return strings.TrimSpace(label) == serverKeyLabel
+}
+
+// keySlot is one model key row. Title and Letter are what the page shows.
+// ID stays a stable letter so saved vault rows and routes keep working.
+// Manifest is only used to match an agent model and the process env fallback.
 type keySlot struct {
 	ID       string
 	Title    string
@@ -30,9 +39,17 @@ func modelSlots() []keySlot {
 	keyed := castcfg.KeyedProviders()
 	var out []keySlot
 	for i, p := range keyed {
-		letter := providerLetter(i)
+		id := strings.ToLower(providerLetter(i))
+		mark := p.Mark
+		if mark == "" {
+			mark = strings.ToUpper(id)
+		}
+		title := p.Name
+		if title == "" {
+			title = p.Key
+		}
 		out = append(out, keySlot{
-			ID: strings.ToLower(letter), Title: "Provider " + letter, Letter: letter,
+			ID: id, Title: title, Letter: mark,
 			Manifest: p.Key, Env: p.EnvVar,
 		})
 	}
@@ -57,12 +74,6 @@ func slotByID(id string) (keySlot, bool) {
 
 func slotForModel(model string) (keySlot, bool) {
 	slots := modelSlots()
-	if strings.Contains(model, "Provider A") && len(slots) > 0 {
-		return slots[0], true
-	}
-	if strings.Contains(model, "Provider B") && len(slots) > 1 {
-		return slots[1], true
-	}
 	inf, ok := castcfg.InferenceFor(model)
 	if !ok || inf.Keyless || inf.EnvVar == "" {
 		return keySlot{}, false
@@ -116,6 +127,18 @@ func (s *Server) agentsUsingSlot(ctx context.Context, userID string, slot keySlo
 		}
 	}
 	return out, nil
+}
+
+func missingKeyRest(model string) string {
+	name := "model"
+	if slot, ok := slotForModel(model); ok && slot.Title != "" {
+		name = slot.Title
+	}
+	return "Agents run on your own " + name + " key, and you have not added one yet."
+}
+
+func missingModelKeyCopy(model string) string {
+	return "Add a model key first. " + missingKeyRest(model)
 }
 
 func labelToName(label string) string {
