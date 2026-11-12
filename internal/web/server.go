@@ -83,6 +83,8 @@ type Server struct {
 	sweeping    bool
 	deferMu     sync.Mutex
 	deferLogged map[string]string
+	vaultMu     sync.Mutex
+	vaultReload map[string]vaultNote
 	busyMu      sync.Mutex
 	busy        map[string]struct{}
 	denyMu      sync.Mutex
@@ -123,6 +125,9 @@ func New(st *store.Store, key []byte, client runtime.Client) *Server {
 	s.runs.SetAfterRun(func(job run.Job, status string) {
 		s.settleRoutine(job, status)
 		s.promoteAgent(context.Background(), job.UserID, job.AgentID)
+	})
+	s.runs.SetAfterRun(func(job run.Job, _ string) {
+		s.afterSecretRun(job)
 	})
 	s.runs.SetOnPermission(s.denyRoutinePermission)
 	go s.expireLoop()
@@ -308,6 +313,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /settings/email", s.stubEmail)
 	mux.HandleFunc("GET /settings/two-factor", s.stubTwoFactor)
 	mux.HandleFunc("GET /settings/keys", s.stubKeys)
+	mux.HandleFunc("GET /settings/secrets", s.vaultList)
+	mux.HandleFunc("GET /settings/secrets/new", s.vaultNew)
+	mux.HandleFunc("POST /settings/secrets", s.vaultCreate)
+	mux.HandleFunc("GET /settings/secrets/keys/{slot}", s.vaultKeyNew)
+	mux.HandleFunc("POST /settings/secrets/keys/{slot}", s.vaultKeyCreate)
+	mux.HandleFunc("GET /settings/secrets/item/{id}", s.vaultDetail)
+	mux.HandleFunc("GET /settings/secrets/item/{id}/live", s.vaultLive)
+	mux.HandleFunc("GET /settings/secrets/item/{id}/replace", s.vaultReplaceForm)
+	mux.HandleFunc("POST /settings/secrets/item/{id}/replace", s.vaultReplace)
+	mux.HandleFunc("GET /settings/secrets/item/{id}/delete", s.vaultDeleteForm)
+	mux.HandleFunc("POST /settings/secrets/item/{id}/delete", s.vaultDelete)
+	mux.HandleFunc("POST /settings/secrets/item/{id}/reload/{agent}", s.vaultReloadAgent)
+	mux.HandleFunc("POST /settings/secrets/item/{id}/grant", s.vaultGrantAgents)
 	mux.HandleFunc("GET /settings/sessions", s.sessionsConfirm)
 	mux.HandleFunc("POST /settings/sessions", s.sessionsEnd)
 
@@ -349,6 +367,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/castlet/agents/{id}/journal", s.machineJournal)
 	mux.HandleFunc("GET /agents/{id}/bundle", s.ownerBundle)
 	mux.HandleFunc("GET /agents/{id}/secrets", s.ownerSecrets)
+	mux.HandleFunc("POST /agents/{id}/secrets/grant", s.vaultGrant)
+	mux.HandleFunc("POST /agents/{id}/secrets/revoke", s.vaultRevoke)
 	mux.HandleFunc("GET /agents/{id}/workspace", s.ownerFiles)
 	mux.HandleFunc("GET /agents/{id}/workspace/{path...}", s.ownerFile)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/bootstrap", s.bootstrap)

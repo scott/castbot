@@ -37,7 +37,8 @@ func TestAdminReplaceSignalRollsBack(t *testing.T) {
 	dbPath := filepath.Join(dir, "t.db")
 	envPath := filepath.Join(dir, "castbot.env")
 	key := strings.Repeat("0123456789abcdef", 4)
-	if err := os.WriteFile(envPath, []byte("CASTBOT_SESSION_KEY="+key+"\n"), 0o600); err != nil {
+	secrets := strings.Repeat("abcdef0123456789", 4)
+	if err := os.WriteFile(envPath, []byte("CASTBOT_SESSION_KEY="+key+"\nCASTBOT_SECRETS_KEY="+secrets+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

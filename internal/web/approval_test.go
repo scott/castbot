@@ -1095,7 +1095,7 @@ func TestGuestRestartDeferralIsLogged(t *testing.T) {
 	user, _ := h.account("defer-log-s07b@example.com", "Demo User", "correct-horse-1")
 	agent := makeAgent(t, h.st, user.ID, "Atlas")
 	secret := "demo-secret-value-should-not-log"
-	sec, err := h.st.PutSecret(context.Background(), user.ID, "provider", secret)
+	sec, err := h.st.PutSecret(context.Background(), user.ID, "DEMO_TOKEN", secret)
 	if err != nil {
 		t.Fatal(err)
 	}

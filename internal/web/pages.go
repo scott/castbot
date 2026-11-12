@@ -189,6 +189,17 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	}
 	p.Title = agent.Name
 	p.StartMachine = machine.CanStart && !machine.CanRetry
+	if r.URL.Query().Get("panel") == "secrets" {
+		p.Vault.Panel = true
+		p.Pane = true
+		if err := s.fillAgentSecrets(r, user, agent, &p); err != nil {
+			if s.missing(w, err) {
+				return nil
+			}
+			http.Error(w, "Error", http.StatusInternalServerError)
+			return nil
+		}
+	}
 	s.attachReplace(r.Context(), user, agent, machine, &p)
 	if wantsConfirm(r) && p.Replace.CanReplace {
 		p.Replace.Confirm = true
@@ -308,6 +319,9 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	if n, ok := notices[r.URL.Query().Get("notice")]; ok {
 		p.Notice = n
 	}
+	if sum, err := s.vaultSummary(r.Context(), user); err == nil {
+		p.Vault = sum
+	}
 	s.render(w, http.StatusOK, "app", finish(p))
 }
 
@@ -410,7 +424,10 @@ func (s *Server) stubTwoFactor(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) stubKeys(w http.ResponseWriter, r *http.Request) {
-	s.stub(w, r, "Model keys", "Adding and replacing model keys arrives in a later update. The list on Settings is a placeholder, and nothing here is saved.")
+	if _, _, ok := s.requireUser(w, r); !ok {
+		return
+	}
+	http.Redirect(w, r, "/settings/secrets", http.StatusSeeOther)
 }
 
 func (s *Server) stub(w http.ResponseWriter, r *http.Request, title, body string) {

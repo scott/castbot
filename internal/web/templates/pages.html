@@ -212,6 +212,10 @@
 {{end}}
 {{end}}
 
+{{define "panelTabs"}}
+<nav class="ptabs" aria-label="{{.Agent.Name}} panel"><a data-panel-tab href="/agents/{{.Agent.ID}}?pane=1"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/></svg><span>Agent</span></a><a data-panel-tab href="/agents/{{.Agent.ID}}/machine"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12 15h5"/></svg><span>Machine</span></a><a data-panel-tab href="/agents/{{.Agent.ID}}?panel=secrets"{{if .Vault.Panel}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/></svg><span>Secrets</span></a><a data-panel-tab href="/approvals"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span>Approvals</span></a><a data-panel-tab href="/agents/{{.Agent.ID}}?panel=routines"{{if .Routines.On}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span>Routines</span></a><a data-panel-tab href="/agents/{{.Agent.ID}}/files"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.5h-17z"/></svg><span>Files</span></a></nav>
+{{end}}
+
 {{define "infoPane"}}
 <aside class="pane" aria-label="{{.Agent.Name}} info"><div class="grabber" aria-hidden="true"></div>
 <div class="pane-h"><span class="av {{.Agent.Color}} lg" aria-hidden="true">{{.Agent.Letter}}</span><div class="grow"><div class="nm">{{.Agent.Name}}</div><div class="sub">{{.Agent.Title}}{{if .Agent.Created}} · created {{.Agent.Created}}{{end}}</div></div><a class="ibtn" href="/agents/{{.Agent.ID}}" aria-label="Close info"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></a></div>
@@ -221,12 +225,12 @@
 <section class="psec"><div class="psec-h"><h4>Memory</h4></div><p class="fineprint">Memory arrives in a later update.</p></section>
 <section class="psec"><div class="psec-h"><h4>Routines</h4><a class="link" href="/agents/{{.Agent.ID}}?panel=routines">Open</a></div><p class="fineprint">Each run wakes the machine and gets its own thread.</p></section>
 <section class="psec"><div class="psec-h"><h4>Files</h4></div><p class="fineprint">Files arrive in a later update.</p></section>
+<section class="psec"><div class="psec-h"><h4>Secrets</h4><a class="link" href="/agents/{{.Agent.ID}}?panel=secrets">Open</a></div><p class="fineprint">Values stay in your vault. Nothing here shows a saved value.</p></section>
 </aside>
 {{end}}
 
 {{define "settingsMain"}}
-<header class="ph-top ph-only"><a class="ibtn" href="/" aria-label="Back">{{template "backsvg" .}}</a><span class="t">Settings</span></header>
-<div class="page-h"><div><h1 class="dt-only">Settings</h1><p class="sub">Your account. Other people on this castbot have their own.</p></div></div>
+{{template "settingsChrome" .}}
 <div class="page-b set-wrap">
 {{if .Notice}}<div class="banner ok" role="status"><span class="grow">{{.Notice}}</span></div>{{end}}
 {{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
@@ -237,11 +241,7 @@
 <div class="set-row"><div class="grow"><div class="k">Password</div><div class="v">{{.PasswordOn}}</div></div><a class="btn sm" href="/settings/password">Change password</a></div>
 <div class="set-row"><div class="grow"><div class="k">Two-factor</div><div class="v"><span class="chip run"><span class="pip"></span>On</span> Authenticator app</div><span class="t2">8 recovery codes left</span></div><a class="btn sm" href="/settings/two-factor">Manage</a></div>
 </section>
-<section class="card" aria-labelledby="s-keys"><div class="card-h"><h3 id="s-keys">Model keys</h3><span class="side">Yours only</span></div>
-<p class="muted small">Keys belong to your account. Only agents you own can use them, and other people on this castbot never see them.</p>
-<div class="key-row"><span class="pv">A</span><div class="grow"><div class="t1">Provider A</div><div class="t2 mono">provider-a-main · ends 7Q2F</div><div class="t2">Used by 4 agents · added Oct 28</div></div><a class="btn sm" href="/settings/keys">Replace</a></div>
-<div class="key-row"><span class="pv">B</span><div class="grow"><div class="t1">Provider B</div><div class="t2">Not added</div></div><a class="btn sm" href="/settings/keys">{{template "plus" .}}Add key</a></div>
-</section>
+{{template "secretsSummary" .}}
 <section class="card" aria-labelledby="s-app"><div class="card-h"><h3 id="s-app">Appearance</h3></div>
 <form id="theme-form" method="post" action="/settings/appearance"><input type="hidden" name="csrf" value="{{.CSRF}}">
 <div class="field"><span class="lab">Theme</span><div class="theme-grid">
@@ -421,19 +421,23 @@
 <main class="main">
 {{if eq .Page "home" "chat" "machine" "agent-routines" "agent-files"}}{{template "chatMain" .}}
 {{else if eq .Page "settings"}}{{template "settingsMain" .}}
+{{else if eq .Page "secrets"}}{{template "vaultMain" .}}
 {{else if eq .Page "first"}}{{template "firstMain" .}}
 {{else if eq .Page "password"}}{{template "passwordMain" .}}
 {{else if eq .Page "new" "edit"}}{{template "agentForm" .}}
 {{else}}{{template "stubMain" .}}{{end}}
 </main>
-{{if .Routines.On}}{{template "routinesPane" .}}{{else if .Pane}}{{template "infoPane" .}}{{end}}
+{{if .Routines.On}}{{template "routinesPane" .}}{{else if .Vault.Panel}}{{template "secretPanel" .}}{{else if .Pane}}{{template "infoPane" .}}{{end}}
 </div>
+{{if .Vault.Drawer}}{{template "vaultDrawer" .}}{{end}}
+{{if .Vault.ModalOpen}}{{template "vaultModal" .}}{{end}}
 {{if .ShowNav}}{{template "bnav" .}}{{end}}
 {{if .Replace.Confirm}}{{template "replaceModal" .}}{{end}}
 {{if .Routines.Delete.On}}{{template "routineDelete" .}}{{end}}
 <script src="/static/htmx.min.js"></script>
 <script src="/static/sse.js"></script>
 <script src="/static/stream.js"></script>
+<script src="/static/secrets.js"></script>
 </body>
 </html>
 {{end}}

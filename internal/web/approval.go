@@ -565,6 +565,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, allow bool) {
 		return
 	}
 	_ = s.store.ResumeAfterApproval(ctx, user.ID, runRow.ID)
+	go s.afterSecretRun(run.Job{UserID: user.ID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	next, err := s.store.GetApproval(ctx, user.ID, row.ID)
 	if err != nil {
 		s.runs.Hub.Notify(runRow.ID)

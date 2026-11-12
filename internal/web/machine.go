@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/bundle"
-	"github.com/scott/castbot/internal/castcfg"
 )
 
 const guestBodyCap = 32 << 20
@@ -154,7 +153,7 @@ func (s *Server) writeSecrets(w http.ResponseWriter, r *http.Request, userID str
 		out.Secrets = append(out.Secrets, item{Name: sec.Name, Value: sec.Value})
 	}
 	if agent, err := s.store.GetAgent(r.Context(), userID, r.PathValue("id")); err == nil {
-		if name, value, missing := castcfg.ProviderSecret(agent.Model); missing == "" && name != "" && value != "" {
+		if name, value, missing := s.effectiveModelSecret(r.Context(), userID, agent.Model); missing == "" && name != "" && value != "" {
 			out.Secrets = append(out.Secrets, item{Name: name, Value: value})
 		}
 		pairs := make([]secretPair, 0, len(out.Secrets))

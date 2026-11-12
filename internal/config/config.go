@@ -3,6 +3,7 @@ package config
 
 import (
 	"bufio"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ type Config struct {
 	DBPath           string
 	RuntimeURL       string
 	SessionKey       []byte
+	SecretsKey       []byte
 	MachineToken     string
 	Image            string
 	PublicURL        string
@@ -90,12 +92,23 @@ func LoadFile(path string) (Config, error) {
 	if allZero(key) {
 		return Config{}, errors.New("CASTBOT_SESSION_KEY must not be all zeros")
 	}
+	secrets, err := hex.DecodeString(vals["CASTBOT_SECRETS_KEY"])
+	if err != nil || len(secrets) != 32 {
+		return Config{}, errors.New("CASTBOT_SECRETS_KEY must be 64 hex characters")
+	}
+	if allZero(secrets) {
+		return Config{}, errors.New("CASTBOT_SECRETS_KEY must not be all zeros")
+	}
+	if subtle.ConstantTimeCompare(key, secrets) == 1 {
+		return Config{}, errors.New("CASTBOT_SECRETS_KEY must not match CASTBOT_SESSION_KEY")
+	}
 	cfg := Config{
 		EnvFile:          path,
 		Addr:             vals["CASTBOT_ADDR"],
 		DBPath:           vals["CASTBOT_DB"],
 		RuntimeURL:       vals["CASTBOT_RUNTIME_URL"],
 		SessionKey:       key,
+		SecretsKey:       secrets,
 		MachineToken:     vals["CASTBOT_DO_TOKEN"],
 		Image:            vals["CASTBOT_IMAGE"],
 		PublicURL:        vals["CASTBOT_PUBLIC_URL"],

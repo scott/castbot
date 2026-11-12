@@ -13,6 +13,10 @@ func fakeSessionKey() string {
 	return hex.EncodeToString(bytes.Repeat([]byte{0x5a}, 32))
 }
 
+func fakeSecretsKey() string {
+	return hex.EncodeToString(bytes.Repeat([]byte{0x3c}, 32))
+}
+
 func TestRejectsLoosePermissions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "castbot.env")
@@ -31,6 +35,7 @@ func TestLoadKey(t *testing.T) {
 	body := "" +
 		"# placeholder comment\n" +
 		"CASTBOT_SESSION_KEY=" + fakeSessionKey() + "\n" +
+		"CASTBOT_SECRETS_KEY=" + fakeSecretsKey() + "\n" +
 		"CASTBOT_ADDR=127.0.0.1:9\n" +
 		"CASTBOT_DB=" + filepath.Join(dir, "t.db") + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -56,7 +61,7 @@ func TestLoadKey(t *testing.T) {
 func TestIgnoresAmbientDigitalOceanToken(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "castbot.env")
-	body := "CASTBOT_SESSION_KEY=" + fakeSessionKey() + "\n"
+	body := "CASTBOT_SESSION_KEY=" + fakeSessionKey() + "\nCASTBOT_SECRETS_KEY=" + fakeSecretsKey() + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -120,5 +125,46 @@ func TestRejectsZeroKey(t *testing.T) {
 	}
 	if _, err := LoadFile(path); err == nil {
 		t.Fatal("expected zero key to be rejected")
+	}
+}
+
+func TestRejectsBadSecretsKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "castbot.env")
+	write := func(extra string) {
+		t.Helper()
+		body := "CASTBOT_SESSION_KEY=" + fakeSessionKey() + "\n" + extra
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("")
+	if _, err := LoadFile(path); err == nil {
+		t.Fatal("expected a missing secrets key to be rejected")
+	}
+	write("CASTBOT_SECRETS_KEY=abcd\n")
+	if _, err := LoadFile(path); err == nil {
+		t.Fatal("expected a short secrets key to be rejected")
+	}
+	write("CASTBOT_SECRETS_KEY=" + strings.Repeat("0", 64) + "\n")
+	if _, err := LoadFile(path); err == nil {
+		t.Fatal("expected an all-zero secrets key to be rejected")
+	}
+}
+
+func TestRejectsSecretsKeyMatchingSession(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "castbot.env")
+	same := fakeSessionKey()
+	body := "CASTBOT_SESSION_KEY=" + same + "\nCASTBOT_SECRETS_KEY=" + same + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("expected equal keys to be rejected")
+	}
+	if strings.Contains(err.Error(), same) {
+		t.Fatal("error included a key")
 	}
 }

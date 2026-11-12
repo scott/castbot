@@ -451,7 +451,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateReplace(); err != nil {
 		return err
 	}
-	// Version 16 is reserved for secrets. Version 17 is routines.
+	// Version 16 is the secrets vault. Version 17 is routines. Each version is its own row.
+	if err := s.migrateSecrets(); err != nil {
+		return err
+	}
 	if err := s.migrateV17(); err != nil {
 		return err
 	}

@@ -76,3 +76,39 @@ func ProviderSecret(model string) (castEnv, value, missing string) {
 	}
 	return inf.EnvVar, value, ""
 }
+
+// ProviderSecretFrom prefers a vault value when one is set. An empty vault
+// value keeps the process environment, so a deploy without a vault row still
+// runs. The vault value is not logged.
+func ProviderSecretFrom(model, vault string) (castEnv, value, missing string) {
+	inf, ok := InferenceFor(model)
+	if !ok || inf.Keyless || inf.EnvVar == "" {
+		return "", "", ""
+	}
+	if strings.TrimSpace(vault) != "" {
+		return inf.EnvVar, vault, ""
+	}
+	return ProviderSecret(model)
+}
+
+// KeyedProvider is one manifest provider that needs a key.
+type KeyedProvider struct {
+	Key    string
+	EnvVar string
+}
+
+// KeyedProviders returns manifest providers that need a key, in file order.
+func KeyedProviders() []KeyedProvider {
+	var list []provider
+	if err := json.Unmarshal(manifestJSON, &list); err != nil {
+		return nil
+	}
+	var out []KeyedProvider
+	for _, p := range list {
+		if p.Impl == "reserved" || p.Keyless || strings.TrimSpace(p.EnvVar) == "" || p.Key == "" {
+			continue
+		}
+		out = append(out, KeyedProvider{Key: p.Key, EnvVar: strings.TrimSpace(p.EnvVar)})
+	}
+	return out
+}

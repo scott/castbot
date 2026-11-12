@@ -106,6 +106,8 @@ type Runner struct {
 	mu     sync.Mutex
 	active map[string]string // run id to agent id
 	rng    *rand.Rand
+	// after runs when a reply reaches a terminal status.
+	// SetAfterRun chains, so a later slice adds work instead of replacing it.
 	after  func(Job, string)
 	onPerm func(Job, store.Approval)
 }
@@ -548,6 +550,12 @@ func (r *Runner) recordPermission(job Job, raw json.RawMessage, offset int) erro
 		fn(job, approval)
 	}
 	return nil
+}
+
+// Finish records a successful run and notifies after-run hooks.
+// The streaming path uses the same function.
+func (r *Runner) Finish(job Job, text string, offset int) error {
+	return r.finish(job, text, offset)
 }
 
 func (r *Runner) finish(job Job, text string, offset int) error {

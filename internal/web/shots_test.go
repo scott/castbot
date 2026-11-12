@@ -199,6 +199,10 @@ func TestShots(t *testing.T) {
 			}
 		}
 	}
+	dir08 := filepath.Join("..", "..", "docs", "evidence", "S08")
+	if err := os.MkdirAll(dir08, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	dir09 := filepath.Join("..", "..", "docs", "evidence", "S09")
 	if err := os.MkdirAll(dir09, 0o755); err != nil {
 		t.Fatal(err)
@@ -208,6 +212,12 @@ func TestShots(t *testing.T) {
 			w, h int
 			name string
 		}{{1280, 800, "1280"}, {390, 844, "390"}} {
+			for _, kind := range []string{"10a", "10a2", "10b", "10b2", "10b3", "10c", "10d", "10d2", "10d3", "10e", "10f", "10f2", "10f3", "10g", "10g2"} {
+				kind := kind
+				t.Run("s08-"+kind+"-"+theme+"-"+vp.name, func(t *testing.T) {
+					shootVault(t, browserCtx, dir08, vp.w, vp.h, theme, vp.name, kind)
+				})
+			}
 			for _, kind := range []string{"11a", "11a2", "11b", "11b2", "11c", "11d", "11d2", "11d3", "11d4", "11e", "11f", "11g"} {
 				kind := kind
 				t.Run("s09-"+kind+"-"+theme+"-"+vp.name, func(t *testing.T) {
