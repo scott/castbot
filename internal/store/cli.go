@@ -259,6 +259,51 @@ func (s *Store) JournalDecision(ctx context.Context, userID, agentID, requestID 
 	return decision, true, nil
 }
 
+// JournalDecisionBetween is a decision after minSeq and at or below maxSeq.
+// Recovery uses that window for an earlier attempt. A row written by the
+// attempt in progress is above the cursor captured before the post.
+func (s *Store) JournalDecisionBetween(ctx context.Context, userID, agentID, requestID string, minSeq, maxSeq int) (string, bool, error) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" || maxSeq < 1 || maxSeq <= minSeq {
+		return "", false, nil
+	}
+	key, err := s.agentVMKey(ctx, userID, agentID)
+	if err != nil {
+		return "", false, err
+	}
+	var decision string
+	err = s.db.QueryRowContext(ctx, `SELECT decision FROM journal_entries WHERE agent_vm_id = ? AND user_id = ? AND agent_id = ? AND request_id = ? AND kind = 'decision' AND decision != '' AND seq > ? AND seq <= ? ORDER BY seq DESC LIMIT 1`, key, userID, agentID, requestID, minSeq, maxSeq).Scan(&decision)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return decision, true, nil
+}
+
+// JournalDecisionBefore is JournalDecision limited to rows at or below maxSeq.
+// Recovery trusts only the journal it had seen before its own first re-post.
+func (s *Store) JournalDecisionBefore(ctx context.Context, userID, agentID, requestID string, maxSeq int) (string, bool, error) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" || maxSeq < 1 {
+		return "", false, nil
+	}
+	key, err := s.agentVMKey(ctx, userID, agentID)
+	if err != nil {
+		return "", false, err
+	}
+	var decision string
+	err = s.db.QueryRowContext(ctx, `SELECT decision FROM journal_entries WHERE agent_vm_id = ? AND user_id = ? AND agent_id = ? AND request_id = ? AND kind = 'decision' AND decision != '' AND seq <= ? ORDER BY seq DESC LIMIT 1`, key, userID, agentID, requestID, maxSeq).Scan(&decision)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return decision, true, nil
+}
+
 // JournalCursor is the last journal sequence stored for the caller's machine.
 func (s *Store) JournalCursor(ctx context.Context, userID, agentID string) (int, error) {
 	key, err := s.agentVMKey(ctx, userID, agentID)
@@ -381,13 +426,19 @@ func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmK
 			}
 		}
 		if session == "" {
-			session = "cli"
+			session = cliCatchAllSession
 		}
 		th, err := s.cliThreadTx(ctx, tx, agent, session)
 		if err != nil {
 			return err
 		}
-		return s.insertJournalMessage(ctx, tx, agent, th, e, body, "cli")
+		if err := s.insertJournalMessage(ctx, tx, agent, vmKey, th, e, body, "cli"); err != nil {
+			return err
+		}
+		if e.Kind == "reply" {
+			return s.placeOrphanDecisions(ctx, tx, agent, vmKey, e.Caller, e.Seq)
+		}
+		return nil
 	}
 	if e.Caller != "control_plane" {
 		return nil
@@ -397,7 +448,7 @@ func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmK
 		return err
 	}
 	if e.Kind == "request" || e.Kind == "reply" {
-		attached, err := s.attachJournalMessage(ctx, tx, agent, th.ID, e)
+		attached, err := s.attachJournalMessage(ctx, tx, agent, vmKey, th.ID, e)
 		if err != nil || attached {
 			return err
 		}
@@ -411,7 +462,7 @@ func (s *Store) journalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmK
 	if (e.Kind == "permission" || e.Kind == "decision") && th.Kind != "cli" {
 		return nil
 	}
-	return s.insertJournalMessage(ctx, tx, agent, th, e, body, "web")
+	return s.insertJournalMessage(ctx, tx, agent, vmKey, th, e, body, "web")
 }
 
 // backfillDecisionTool copies a permission's tool onto an earlier decision
@@ -464,16 +515,20 @@ func (s *Store) backfillDecisionTool(ctx context.Context, tx *sql.Tx, agent Agen
 			return err
 		}
 		var msgID, threadID string
-		err := tx.QueryRowContext(ctx, `SELECT id, thread_id FROM messages WHERE user_id = ? AND journal_seq = ? AND author_kind = 'system' ORDER BY rowid LIMIT 1`, agent.UserID, row.seq).Scan(&msgID, &threadID)
+		err := tx.QueryRowContext(ctx, `SELECT m.id, m.thread_id FROM messages m
+JOIN threads t ON t.id = m.thread_id AND t.user_id = m.user_id AND t.agent_id = ?
+WHERE m.user_id = ? AND m.journal_seq = ? AND m.author_kind = 'system'
+AND (m.agent_vm_id = ? OR m.agent_vm_id = '')
+ORDER BY CASE WHEN m.agent_vm_id = ? THEN 0 ELSE 1 END, m.rowid LIMIT 1`, agent.ID, agent.UserID, row.seq, vmKey, vmKey).Scan(&msgID, &threadID)
 		if err == sql.ErrNoRows {
 			if th.ID == "" {
 				continue
 			}
 			placed := JournalEntry{Seq: row.seq, Kind: "decision", Tool: e.Tool, Decision: row.decision, At: follow}
-			if err := s.insertJournalMessage(ctx, tx, agent, th, placed, body, "cli"); err != nil {
+			if err := s.insertJournalMessage(ctx, tx, agent, vmKey, th, placed, body, "cli"); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE messages SET created_at = ? WHERE user_id = ? AND thread_id = ? AND journal_seq = ?`, follow, agent.UserID, th.ID, row.seq); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET created_at = ? WHERE user_id = ? AND thread_id = ? AND journal_seq = ? AND agent_vm_id = ?`, follow, agent.UserID, th.ID, row.seq, vmKey); err != nil {
 				return err
 			}
 			continue
@@ -494,10 +549,10 @@ func (s *Store) backfillDecisionTool(ctx context.Context, tx *sql.Tx, agent Agen
 	return nil
 }
 
-func (s *Store) attachJournalMessage(ctx context.Context, tx *sql.Tx, agent Agent, threadID string, e JournalEntry) (bool, error) {
+func (s *Store) attachJournalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmKey, threadID string, e JournalEntry) (bool, error) {
 	if e.Kind == "request" && e.MessageID != "" {
-		res, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = ? WHERE id = ? AND user_id = ? AND thread_id = ? AND author_kind = 'user' AND journal_seq IS NULL`,
-			e.Seq, e.MessageID, agent.UserID, threadID)
+		res, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = ?, agent_vm_id = ? WHERE id = ? AND user_id = ? AND thread_id = ? AND author_kind = 'user' AND journal_seq IS NULL`,
+			e.Seq, vmKey, e.MessageID, agent.UserID, threadID)
 		if err != nil {
 			return false, err
 		}
@@ -505,8 +560,8 @@ func (s *Store) attachJournalMessage(ctx context.Context, tx *sql.Tx, agent Agen
 		return n == 1, err
 	}
 	if e.Kind == "reply" && e.StreamID != "" {
-		res, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = ? WHERE user_id = ? AND thread_id = ? AND author_kind = 'agent' AND run_id = ? AND journal_seq IS NULL`,
-			e.Seq, agent.UserID, threadID, e.StreamID)
+		res, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = ?, agent_vm_id = ? WHERE user_id = ? AND thread_id = ? AND author_kind = 'agent' AND run_id = ? AND journal_seq IS NULL`,
+			e.Seq, vmKey, agent.UserID, threadID, e.StreamID)
 		if err != nil {
 			return false, err
 		}
@@ -516,7 +571,7 @@ func (s *Store) attachJournalMessage(ctx context.Context, tx *sql.Tx, agent Agen
 	return false, nil
 }
 
-func (s *Store) insertJournalMessage(ctx context.Context, tx *sql.Tx, agent Agent, th Thread, e JournalEntry, body, origin string) error {
+func (s *Store) insertJournalMessage(ctx context.Context, tx *sql.Tx, agent Agent, vmKey string, th Thread, e JournalEntry, body, origin string) error {
 	author := "system"
 	switch e.Kind {
 	case "request":
@@ -528,11 +583,13 @@ func (s *Store) insertJournalMessage(ctx context.Context, tx *sql.Tx, agent Agen
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, origin, journal_seq, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, agent.WorkspaceID, agent.UserID, th.ID, author, agent.ID, body, origin, e.Seq, entryStamp(s, e.At))
-	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
-		return nil
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, origin, journal_seq, agent_vm_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, agent.WorkspaceID, agent.UserID, th.ID, author, agent.ID, body, origin, e.Seq, vmKey, entryStamp(s, e.At))
+	if err != nil && !strings.Contains(err.Error(), "UNIQUE") {
+		return err
 	}
+	// placed is per machine journal row. A later machine reuses sequence numbers.
+	_, err = tx.ExecContext(ctx, `UPDATE journal_entries SET placed = 1 WHERE agent_vm_id = ? AND seq = ? AND user_id = ?`, vmKey, e.Seq, agent.UserID)
 	return err
 }
 
@@ -590,6 +647,128 @@ func (s *Store) cliThreadTx(ctx context.Context, tx *sql.Tx, agent Agent, sessio
 	}
 	t = Thread{ID: id, WorkspaceID: agent.WorkspaceID, UserID: agent.UserID, Kind: "cli", AgentID: agent.ID, Title: "Cast CLI", CastSessionID: session, CreatedAt: stamp}
 	return t, nil
+}
+
+const (
+	// cliCatchAllSession is the Cast CLI thread used when a turn has no session.
+	cliCatchAllSession = "cli"
+	// orphanDecisionWait is how long a CLI decision with no permission row
+	// waits for the turn's reply before it is filed on the catch-all thread.
+	orphanDecisionWait = 5 * time.Minute
+)
+
+// placeOrphanDecisions files CLI decisions that never got a permission row.
+// They land on the catch-all Cast CLI thread once this turn's reply arrives.
+func (s *Store) placeOrphanDecisions(ctx context.Context, tx *sql.Tx, agent Agent, vmKey, caller string, beforeSeq int) error {
+	if _, ok := cliCaller(caller); !ok || beforeSeq < 1 {
+		return nil
+	}
+	found, err := orphanDecisions(ctx, tx, `SELECT seq, tool, decision, at FROM journal_entries
+WHERE agent_vm_id = ? AND user_id = ? AND kind = 'decision' AND caller = ? AND seq < ? AND placed = 0
+ORDER BY seq`, vmKey, agent.UserID, caller, beforeSeq)
+	if err != nil || len(found) == 0 {
+		return err
+	}
+	th, err := s.cliThreadTx(ctx, tx, agent, cliCatchAllSession)
+	if err != nil {
+		return err
+	}
+	for _, row := range found {
+		body := journalBody(JournalEntry{Kind: "decision", Tool: row.tool, Decision: row.decision})
+		placed := JournalEntry{Seq: row.seq, Kind: "decision", Tool: row.tool, Decision: row.decision, At: row.at}
+		if err := s.insertJournalMessage(ctx, tx, agent, vmKey, th, placed, body, "cli"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type orphanDecision struct {
+	seq      int
+	tool     string
+	decision string
+	at       string
+}
+
+func orphanDecisions(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, query string, args ...any) ([]orphanDecision, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []orphanDecision
+	for rows.Next() {
+		var row orphanDecision
+		if err := rows.Scan(&row.seq, &row.tool, &row.decision, &row.at); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// SweepOrphanCLIDecisions files CLI decisions that still have no thread
+// five minutes after they were journaled. The sweep is the control plane.
+func (s *Store) SweepOrphanCLIDecisions(ctx context.Context) (int, error) {
+	cutoff := s.stamp(s.Now().Add(-orphanDecisionWait))
+	rows, err := s.db.QueryContext(ctx, `SELECT agent_vm_id, workspace_id, user_id, agent_id, seq, tool, decision, at FROM journal_entries
+WHERE kind = 'decision' AND caller LIKE 'cli:%' AND at <= ? AND placed = 0
+ORDER BY user_id, agent_id, seq`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	type item struct {
+		agent Agent
+		vmKey string
+		row   orphanDecision
+	}
+	var pending []item
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.vmKey, &it.agent.WorkspaceID, &it.agent.UserID, &it.agent.ID, &it.row.seq, &it.row.tool, &it.row.decision, &it.row.at); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		pending = append(pending, it)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	if len(pending) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	n := 0
+	var th Thread
+	var thAgent string
+	for _, it := range pending {
+		var err error
+		if thAgent != it.agent.ID {
+			th, err = s.cliThreadTx(ctx, tx, it.agent, cliCatchAllSession)
+			if err != nil {
+				return 0, err
+			}
+			thAgent = it.agent.ID
+		}
+		body := journalBody(JournalEntry{Kind: "decision", Tool: it.row.tool, Decision: it.row.decision})
+		placed := JournalEntry{Seq: it.row.seq, Kind: "decision", Tool: it.row.tool, Decision: it.row.decision, At: it.row.at}
+		if err := s.insertJournalMessage(ctx, tx, it.agent, it.vmKey, th, placed, body, "cli"); err != nil {
+			return 0, err
+		}
+		n++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func (s *Store) agentVMKey(ctx context.Context, userID, agentID string) (string, error) {

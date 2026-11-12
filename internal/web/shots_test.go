@@ -179,6 +179,20 @@ func TestShots(t *testing.T) {
 			shootDecisionBar(t, browserCtx, vp.w, vp.h, 12)
 		})
 	}
+	dir07c := filepath.Join("..", "..", "docs", "evidence", "S07c")
+	if err := os.MkdirAll(dir07c, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, theme := range []string{"dark", "light"} {
+		for _, vp := range []struct {
+			w, h int
+			name string
+		}{{1280, 800, "1280"}, {390, 844, "390"}} {
+			t.Run("s07c-nomachine-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootNoMachineComposer(t, browserCtx, dir07c, vp.w, vp.h, theme, vp.name)
+			})
+		}
+	}
 }
 
 // shootDecisionBar clicks Approve on a live card and checks the waiting bar

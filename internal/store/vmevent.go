@@ -77,7 +77,7 @@ FROM vm_events WHERE user_id = ? AND agent_id = ? ORDER BY id`, userID, agentID)
 // RunningVMs returns machines this database still calls running.
 // The reconciler uses it. It does not return tokens.
 func (s *Store) RunningVMs(ctx context.Context) ([]VM, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure, COALESCE(last_wake_at, ''), created_at, COALESCE(created_running_at, '')
+	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure, COALESCE(last_wake_at, ''), created_at, COALESCE(created_running_at, ''), state_gen
 FROM agent_vms WHERE deleted_at IS NULL AND state = 'running' AND microvm_id != '' AND microvm_id != 'pending'`)
 	if err != nil {
 		return nil, err
@@ -86,7 +86,7 @@ FROM agent_vms WHERE deleted_at IS NULL AND state = 'running' AND microvm_id != 
 	var out []VM
 	for rows.Next() {
 		var vm VM
-		if err := rows.Scan(&vm.ID, &vm.Workspace, &vm.UserID, &vm.AgentID, &vm.MicroVMID, &vm.Name, &vm.Endpoint, &vm.Image, &vm.State, &vm.Failure, &vm.LastWake, &vm.CreatedAt, &vm.CreatedRunning); err != nil {
+		if err := rows.Scan(&vm.ID, &vm.Workspace, &vm.UserID, &vm.AgentID, &vm.MicroVMID, &vm.Name, &vm.Endpoint, &vm.Image, &vm.State, &vm.Failure, &vm.LastWake, &vm.CreatedAt, &vm.CreatedRunning, &vm.StateGen); err != nil {
 			return nil, err
 		}
 		out = append(out, vm)

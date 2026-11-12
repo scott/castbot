@@ -200,7 +200,7 @@
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="thread" value="{{.ThreadID}}">
 <textarea class="ph" name="body" maxlength="8000" rows="1" placeholder="Message {{.Agent.Name}}" aria-label="Message {{.Agent.Name}}"></textarea>
-<div class="row"><span class="hint">Enter to send · Shift+Enter for a new line</span>{{if not .StartMachine}}<button class="btn pri sm" type="submit">Send</button>{{end}}</div>
+<div class="row">{{if not .StartMachine}}<span class="hint">Enter to send · Shift+Enter for a new line</span><button class="btn pri sm" type="submit">Send</button>{{end}}</div>
 </form>
 {{if .StartMachine}}<form class="start-form" method="post" action="/agents/{{.Agent.ID}}/machine" hx-boost="false"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">Start</button></form>{{end}}</div>
 {{else if eq .Tab "machine"}}

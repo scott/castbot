@@ -2,9 +2,11 @@ package web
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"hash"
 	"log"
 	"net/http"
 	"net/url"
@@ -86,7 +88,7 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 					}
 					s.clearGuestDeferIfIdle(ctx, job.UserID, job.AgentID)
 				}
-				s.pullJournal(ctx, job.UserID, job.AgentID, endpoint, token)
+				_ = s.pullJournal(ctx, job.UserID, job.AgentID, endpoint, token)
 				return h.Stream(ctx, endpoint, token, req)
 			}
 			if endpoint == "" && state != "creating" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
@@ -566,7 +568,7 @@ func (s *Server) applyPendingExcept(ctx context.Context, userID, agentID, except
 	if err := h.Reload(rctx, endpoint, token); err != nil {
 		return err
 	}
-	s.pullJournal(rctx, userID, agentID, endpoint, token)
+	_ = s.pullJournal(rctx, userID, agentID, endpoint, token)
 	if err := s.store.ClearPendingBundle(ctx, userID, agentID, version); err != nil {
 		return err
 	}
@@ -776,29 +778,98 @@ func (s *Server) refreshSecrets(ctx context.Context, userID string, agent store.
 	return s.store.SetSecretFP(ctx, userID, agent.ID, fp)
 }
 
-func (s *Server) secretFingerprint(ctx context.Context, userID string, agent store.Agent) (string, error) {
+type secretPair struct {
+	name  string
+	value string
+}
+
+func (s *Server) secretPairs(ctx context.Context, userID string, agent store.Agent) ([]secretPair, error) {
 	secrets, err := s.store.GrantedSecrets(ctx, userID, agent.ID)
+	if err != nil {
+		return nil, err
+	}
+	pairs := make([]secretPair, 0, len(secrets)+1)
+	for _, sec := range secrets {
+		pairs = append(pairs, secretPair{name: sec.Name, value: sec.Value})
+	}
+	if name, value, missing := castcfg.ProviderSecret(agent.Model); missing == "" && name != "" && value != "" {
+		pairs = append(pairs, secretPair{name: name, value: value})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
+	return pairs, nil
+}
+
+// secretFPKey is an HMAC key derived from the session key. The session key
+// itself is not the fingerprint key.
+func (s *Server) secretFPKey() []byte {
+	mac := hmac.New(sha256.New, s.key)
+	mac.Write([]byte("castbot-secret-fp-v1"))
+	return mac.Sum(nil)
+}
+
+func hashSecretPairs(h hash.Hash, pairs []secretPair) string {
+	for _, p := range pairs {
+		h.Write([]byte(p.name))
+		h.Write([]byte{0})
+		h.Write([]byte(p.value))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (s *Server) secretFingerprint(ctx context.Context, userID string, agent store.Agent) (string, error) {
+	pairs, err := s.secretPairs(ctx, userID, agent)
 	if err != nil {
 		return "", err
 	}
-	type pair struct {
-		name  string
-		value string
+	return hashSecretPairs(hmac.New(sha256.New, s.secretFPKey()), pairs), nil
+}
+
+// plainSecretFP is the pre-S07c sha256 fingerprint. Startup rewrites a stored
+// value that still matches it so the switch does not reload Cast.
+func (s *Server) plainSecretFP(ctx context.Context, userID string, agent store.Agent) (string, error) {
+	pairs, err := s.secretPairs(ctx, userID, agent)
+	if err != nil {
+		return "", err
 	}
-	pairs := make([]pair, 0, len(secrets)+1)
-	for _, sec := range secrets {
-		pairs = append(pairs, pair{name: sec.Name, value: sec.Value})
+	return hashSecretPairs(sha256.New(), pairs), nil
+}
+
+// RewriteLegacySecretFP replaces a stored plain sha256 with the HMAC of the
+// same secret set. A value that already differs is left for the normal reload.
+func (s *Server) RewriteLegacySecretFP(ctx context.Context) error {
+	rows, err := s.store.ListSecretFPs(ctx)
+	if err != nil {
+		return err
 	}
-	if name, value, missing := castcfg.ProviderSecret(agent.Model); missing == "" && name != "" && value != "" {
-		pairs = append(pairs, pair{name: name, value: value})
+	for _, row := range rows {
+		if row.FP == "" {
+			continue
+		}
+		agent, err := s.store.GetAgent(ctx, row.UserID, row.AgentID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			return err
+		}
+		plain, err := s.plainSecretFP(ctx, row.UserID, agent)
+		if err != nil {
+			return err
+		}
+		if row.FP != plain {
+			continue
+		}
+		next, err := s.secretFingerprint(ctx, row.UserID, agent)
+		if err != nil {
+			return err
+		}
+		if next == row.FP {
+			continue
+		}
+		if err := s.store.SetSecretFP(ctx, row.UserID, row.AgentID, next); err != nil {
+			return err
+		}
 	}
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
-	sum := sha256.New()
-	for _, p := range pairs {
-		sum.Write([]byte(p.name))
-		sum.Write([]byte{0})
-		sum.Write([]byte(p.value))
-		sum.Write([]byte{0})
-	}
-	return hex.EncodeToString(sum.Sum(nil)), nil
+	return nil
 }

@@ -255,7 +255,7 @@ func TestDraftStartAndNoEchoWithoutTheFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID, "", ip, nil)
-	if code != 200 || strings.Count(body, "No machine yet. Start it to chat.") != 1 || !strings.Contains(body, ">Start<") || !strings.Contains(body, "Enter to send") {
+	if code != 200 || strings.Count(body, "No machine yet. Start it to chat.") != 1 || !strings.Contains(body, ">Start<") || strings.Contains(body, "Enter to send") {
 		t.Fatalf("start state %d", code)
 	}
 	comp := strings.Index(body, `id="composer"`)

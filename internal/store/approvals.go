@@ -30,6 +30,10 @@ type Approval struct {
 	ExpiresAt   string
 	CreatedAt   string
 	Sent        bool
+	// RecoverSeq is the journal max sequence seen before the first recovery
+	// post. RecoverSet is false until that snapshot is stored.
+	RecoverSeq int
+	RecoverSet bool
 }
 
 // Audit is one approval record. Detail has no secret values.
@@ -61,7 +65,8 @@ func (s *Store) migrateApprovals() error {
   decided_at TEXT,
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  sent INTEGER NOT NULL DEFAULT 0
+  sent INTEGER NOT NULL DEFAULT 0,
+  recover_seq INTEGER
 )`); err != nil {
 		return err
 	}
@@ -525,7 +530,7 @@ func (s *Store) ListAudit(ctx context.Context, userID string) ([]Audit, error) {
 	return out, rows.Err()
 }
 
-const approvalSelect = `SELECT a.id, a.workspace_id, a.user_id, a.run_id, r.agent_id, a.request_id, a.tool, a.arguments_json, a.redacted_json, a.status, a.origin, a.decided_by, COALESCE(a.decided_at, ''), a.expires_at, a.created_at, a.sent FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id`
+const approvalSelect = `SELECT a.id, a.workspace_id, a.user_id, a.run_id, r.agent_id, a.request_id, a.tool, a.arguments_json, a.redacted_json, a.status, a.origin, a.decided_by, COALESCE(a.decided_at, ''), a.expires_at, a.created_at, a.sent, a.recover_seq FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id`
 
 func (s *Store) listApprovals(ctx context.Context, query string, args ...any) ([]Approval, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -551,12 +556,82 @@ type scanRow interface {
 func scanApproval(row scanRow) (Approval, error) {
 	var a Approval
 	var sent int
-	err := row.Scan(&a.ID, &a.WorkspaceID, &a.UserID, &a.RunID, &a.AgentID, &a.RequestID, &a.Tool, &a.Arguments, &a.Redacted, &a.Status, &a.Origin, &a.DecidedBy, &a.DecidedAt, &a.ExpiresAt, &a.CreatedAt, &sent)
+	var seq sql.NullInt64
+	err := row.Scan(&a.ID, &a.WorkspaceID, &a.UserID, &a.RunID, &a.AgentID, &a.RequestID, &a.Tool, &a.Arguments, &a.Redacted, &a.Status, &a.Origin, &a.DecidedBy, &a.DecidedAt, &a.ExpiresAt, &a.CreatedAt, &sent, &seq)
 	if err != nil {
 		return Approval{}, scanErr(err)
 	}
 	a.Sent = sent == 1
+	if seq.Valid {
+		a.RecoverSeq = int(seq.Int64)
+		a.RecoverSet = true
+	}
 	return a, nil
+}
+
+// SnapshotRecoverSeq stores the journal max sequence seen before the first
+// recovery post. A later call leaves the first snapshot in place.
+func (s *Store) SnapshotRecoverSeq(ctx context.Context, userID, id string, seq int) error {
+	if seq < 0 {
+		return ErrInvalid
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE approvals SET recover_seq = ? WHERE id = ? AND user_id = ? AND recover_seq IS NULL`, seq, id, userID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 1 {
+		return nil
+	}
+	row, err := s.GetApproval(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if row.RecoverSet {
+		return nil
+	}
+	return ErrNotFound
+}
+
+// MarkNoMachine stops retries for an approval whose agent has no live machine.
+// The audit actor is system:no_machine.
+func (s *Store) MarkNoMachine(ctx context.Context, userID, id string) (Approval, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Approval{}, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'inactive', decided_by = 'system:no_machine', decided_at = ?, sent = 1
+WHERE id = ? AND user_id = ? AND origin = 'web' AND (
+  status IN ('pending', 'approved', 'denied', 'expired')
+  OR (status = 'inactive' AND sent = 0)
+)`, s.stamp(s.Now()), id, userID)
+	if err != nil {
+		return Approval{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return Approval{}, err
+	}
+	row, err := scanApproval(tx.QueryRowContext(ctx, approvalSelect+` WHERE a.user_id = ? AND a.id = ?`, userID, id))
+	if err != nil {
+		return Approval{}, err
+	}
+	if n == 1 {
+		if err := s.insertAudit(ctx, tx, row.WorkspaceID, userID, "system", "system:no_machine", "approval.inactive", "approval:"+row.ID, auditDetail(row.Tool, row.RequestID, json.RawMessage(row.Arguments), decodeList(row.Redacted))); err != nil {
+			return Approval{}, err
+		}
+		if err := s.syncApprovalCount(ctx, tx, userID, row.AgentID); err != nil {
+			return Approval{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Approval{}, err
+	}
+	return row, nil
 }
 
 func (s *Store) lockRun(ctx context.Context, tx *sql.Tx, userID, runID string) (Run, error) {

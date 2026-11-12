@@ -28,6 +28,9 @@ type VM struct {
 	CreatedAt      string
 	CreatedRunning string
 	Workspace      string
+	// StateGen bumps on every machine state write. Pause compares it so two
+	// wakes in the same second cannot be mistaken for one.
+	StateGen int64
 }
 
 // BeginVM reserves a machine slot for one of the caller's agents.
@@ -72,8 +75,8 @@ func (s *Store) BeginVM(ctx context.Context, userID, agentID, name, image string
 		return VM{}, err
 	}
 	stamp := s.stamp(s.Now())
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_vms(id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure, created_at, observe_boot)
-VALUES (?, ?, ?, ?, 'pending', ?, '', ?, 'creating', '', ?, 1)`, id, agent.WorkspaceID, userID, agentID, name, image, stamp); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_vms(id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure, created_at, observe_boot, state_gen)
+VALUES (?, ?, ?, ?, 'pending', ?, '', ?, 'creating', '', ?, 1, 1)`, id, agent.WorkspaceID, userID, agentID, name, image, stamp); err != nil {
 		return VM{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE agents SET status = 'provisioning', activity = 'Starting' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID); err != nil {
@@ -93,7 +96,7 @@ func (s *Store) FinishVM(ctx context.Context, userID, agentID, microID, endpoint
 	if strings.TrimSpace(microID) == "" || microID == "pending" {
 		return ErrInvalid
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE agent_vms SET microvm_id = ?, endpoint = ?, state = ?, failure = ? WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`,
+	res, err := s.db.ExecContext(ctx, `UPDATE agent_vms SET microvm_id = ?, endpoint = ?, state = ?, failure = ?, state_gen = state_gen + 1 WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`,
 		microID, endpoint, state, failure, userID, agentID)
 	if err != nil {
 		return err
@@ -105,9 +108,10 @@ func (s *Store) FinishVM(ctx context.Context, userID, agentID, microID, endpoint
 }
 
 // MarkPausedIfUnchanged sets paused only when the row is still running and
-// its last wake stamp is the one the caller observed. A wake in between
-// changes that stamp, so a stale list does not overwrite it.
-func (s *Store) MarkPausedIfUnchanged(ctx context.Context, userID, agentID, microID, lastWake, endpoint string) (bool, error) {
+// its state generation is the one the caller observed. A wake in between
+// bumps that generation, including two wakes in the same second, so a stale
+// list does not overwrite it.
+func (s *Store) MarkPausedIfUnchanged(ctx context.Context, userID, agentID, microID string, stateGen int64, endpoint string) (bool, error) {
 	agent, err := s.GetAgent(ctx, userID, agentID)
 	if err != nil {
 		return false, err
@@ -121,11 +125,11 @@ func (s *Store) MarkPausedIfUnchanged(ctx context.Context, userID, agentID, micr
 		return false, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = 'paused',
+	res, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = 'paused', state_gen = state_gen + 1,
 endpoint = CASE WHEN ? != '' THEN ? ELSE endpoint END
 WHERE user_id = ? AND agent_id = ? AND microvm_id = ? AND state = 'running'
-AND COALESCE(last_wake_at, '') = ? AND deleted_at IS NULL`,
-		endpoint, endpoint, userID, agentID, microID, lastWake)
+AND state_gen = ? AND deleted_at IS NULL`,
+		endpoint, endpoint, userID, agentID, microID, stateGen)
 	if err != nil {
 		return false, err
 	}
@@ -154,6 +158,32 @@ func (s *Store) SecretFP(ctx context.Context, userID, agentID string) (string, e
 	var fp string
 	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(secret_fp, '') FROM agents WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID).Scan(&fp)
 	return fp, err
+}
+
+// SecretFPRow is one stored fingerprint. Startup uses it to rewrite the
+// plain sha256 form. It is not a user handler.
+type SecretFPRow struct {
+	UserID  string
+	AgentID string
+	FP      string
+}
+
+// ListSecretFPs returns stored fingerprints for agents that still exist.
+func (s *Store) ListSecretFPs(ctx context.Context) ([]SecretFPRow, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id, id, COALESCE(secret_fp, '') FROM agents WHERE deleted_at IS NULL AND COALESCE(secret_fp, '') != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SecretFPRow
+	for rows.Next() {
+		var row SecretFPRow
+		if err := rows.Scan(&row.UserID, &row.AgentID, &row.FP); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 // SetSecretFP records a secrets fingerprint. The value is a hash, not a secret.
@@ -190,7 +220,7 @@ func (s *Store) ApplyVMState(ctx context.Context, userID, agentID, state, endpoi
 		wake = s.stamp(s.Now())
 		runningAt = wake
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = ?, failure = ?,
+	res, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = ?, failure = ?, state_gen = state_gen + 1,
 endpoint = CASE WHEN ? != '' THEN ? ELSE endpoint END,
 last_wake_at = CASE WHEN ? != '' THEN ? ELSE last_wake_at END,
 created_running_at = CASE WHEN ? = 'running' AND observe_boot = 1 AND COALESCE(created_running_at, '') = '' THEN ? ELSE created_running_at END
@@ -214,7 +244,7 @@ func (s *Store) ReleaseVM(ctx context.Context, userID, agentID string) error {
 		return err
 	}
 	stamp := s.stamp(s.Now())
-	if _, err := s.db.ExecContext(ctx, `UPDATE agent_vms SET state = 'failed', deleted_at = ? WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, stamp, userID, agentID); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE agent_vms SET state = 'failed', deleted_at = ?, state_gen = state_gen + 1 WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, stamp, userID, agentID); err != nil {
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE agents SET status = 'failed', activity = '' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID)
@@ -255,7 +285,7 @@ WHERE deleted_at IS NULL AND id IN (
 )`, cutoff); err != nil {
 		return 0, err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = 'failed', deleted_at = ?
+	res, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = 'failed', deleted_at = ?, state_gen = state_gen + 1
 WHERE deleted_at IS NULL AND state = 'creating' AND microvm_id = 'pending' AND created_at < ?`, stamp, cutoff)
 	if err != nil {
 		return 0, err
@@ -325,7 +355,7 @@ func (s *Store) MarkVMDeleted(ctx context.Context, userID, agentID string) error
 		return err
 	}
 	stamp := s.stamp(s.Now())
-	res, err := s.db.ExecContext(ctx, `UPDATE agent_vms SET state = 'deleted', deleted_at = ? WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, stamp, userID, agentID)
+	res, err := s.db.ExecContext(ctx, `UPDATE agent_vms SET state = 'deleted', deleted_at = ?, state_gen = state_gen + 1 WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, stamp, userID, agentID)
 	if err != nil {
 		return err
 	}
@@ -339,9 +369,9 @@ func (s *Store) LiveVM(ctx context.Context, userID, agentID string) (VM, error) 
 	}
 	var vm VM
 	var wake sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure, COALESCE(last_wake_at, ''), created_at, COALESCE(created_running_at, '')
+	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure, COALESCE(last_wake_at, ''), created_at, COALESCE(created_running_at, ''), state_gen
 FROM agent_vms WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, userID, agentID).
-		Scan(&vm.ID, &vm.Workspace, &vm.UserID, &vm.AgentID, &vm.MicroVMID, &vm.Name, &vm.Endpoint, &vm.Image, &vm.State, &vm.Failure, &wake, &vm.CreatedAt, &vm.CreatedRunning)
+		Scan(&vm.ID, &vm.Workspace, &vm.UserID, &vm.AgentID, &vm.MicroVMID, &vm.Name, &vm.Endpoint, &vm.Image, &vm.State, &vm.Failure, &wake, &vm.CreatedAt, &vm.CreatedRunning, &vm.StateGen)
 	if err != nil {
 		return VM{}, scanErr(err)
 	}

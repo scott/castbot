@@ -34,15 +34,15 @@ func TestMarkPausedIfUnchanged(t *testing.T) {
 	if err != nil || vm.LastWake == "" {
 		t.Fatal(err)
 	}
-	first := vm.LastWake
+	first := vm.StateGen
 	now = now.Add(time.Minute)
 	s.SetNow(func() time.Time { return now })
 	if err := s.ApplyVMState(ctx, owner.ID, agent.ID, "running", vm.Endpoint, ""); err != nil {
 		t.Fatal(err)
 	}
 	vm, err = s.LiveVM(ctx, owner.ID, agent.ID)
-	if err != nil || vm.LastWake == first {
-		t.Fatal("wake stamp did not move")
+	if err != nil || vm.StateGen == first {
+		t.Fatal("state generation did not move")
 	}
 	changed, err := s.MarkPausedIfUnchanged(ctx, owner.ID, agent.ID, vm.MicroVMID, first, "")
 	if err != nil || changed {
@@ -52,7 +52,7 @@ func TestMarkPausedIfUnchanged(t *testing.T) {
 	if err != nil || vm.State != "running" {
 		t.Fatalf("%+v %v", vm, err)
 	}
-	changed, err = s.MarkPausedIfUnchanged(ctx, owner.ID, agent.ID, vm.MicroVMID, vm.LastWake, "https://vm.example")
+	changed, err = s.MarkPausedIfUnchanged(ctx, owner.ID, agent.ID, vm.MicroVMID, vm.StateGen, "https://vm.example")
 	if err != nil || !changed {
 		t.Fatalf("fresh update %v %v", changed, err)
 	}

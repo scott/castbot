@@ -672,7 +672,7 @@ func TestSecretArgNamesStayHidden(t *testing.T) {
 		"jwt": "hid-jwt", "pat": "hid-pat", "bearer": "hid-bearerkey",
 		"basic_auth": "hid-basic", "auth_header": "hid-authh",
 		"max_secret": "hid-maxsec", "secret_count": "hid-seccount",
-		"note":     "Bearer hid-token",
+		"note":     "Bearer sk-live-1234567890abcd",
 		"APIToken": "hid-apitok", "DBPassword": "hid-dbpw", "PGPassword": "hid-pgpw",
 		"JWTToken": "hid-jwttok", "apiKeys": "hid-apikeys", "api_keys": "hid-apikeys2",
 		"password2": "hid-pw2", "db_pass": "hid-dbpass", "DB_PASS": "hid-dbpassup",

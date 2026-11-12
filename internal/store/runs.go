@@ -176,6 +176,10 @@ func (s *Store) FinishRun(ctx context.Context, userID, runID, body string, offse
 	if err != nil {
 		return Message{}, RunEvent{}, err
 	}
+	vmKey, err := s.agentVMKey(ctx, userID, run.AgentID)
+	if err != nil {
+		return Message{}, RunEvent{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Message{}, RunEvent{}, err
@@ -184,10 +188,10 @@ func (s *Store) FinishRun(ctx context.Context, userID, runID, body string, offse
 	stamp := s.stamp(s.Now())
 	var msgID string
 	err = tx.QueryRowContext(ctx, `SELECT m.id FROM messages m
-JOIN journal_entries j ON j.user_id = m.user_id AND j.agent_id = ? AND j.seq = m.journal_seq AND j.kind = 'reply' AND j.stream_id = ?
+JOIN journal_entries j ON j.user_id = m.user_id AND j.agent_id = ? AND j.agent_vm_id = ? AND j.seq = m.journal_seq AND j.agent_vm_id = m.agent_vm_id AND j.kind = 'reply' AND j.stream_id = ?
 WHERE m.user_id = ? AND m.thread_id = ? AND m.author_kind = 'agent' AND m.journal_seq IS NOT NULL AND m.run_id IS NULL
 ORDER BY m.journal_seq LIMIT 1`,
-		run.AgentID, run.ID, userID, run.ThreadID).Scan(&msgID)
+		run.AgentID, vmKey, run.ID, userID, run.ThreadID).Scan(&msgID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Message{}, RunEvent{}, err
 	}
@@ -211,14 +215,19 @@ ORDER BY m.journal_seq LIMIT 1`,
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE messages SET journal_seq = (
   SELECT j.seq FROM journal_entries j
-  WHERE j.user_id = ? AND j.agent_id = ? AND j.kind = 'reply' AND j.stream_id = ?
-    AND NOT EXISTS (SELECT 1 FROM messages other WHERE other.user_id = j.user_id AND other.thread_id = ? AND other.journal_seq = j.seq)
+  WHERE j.user_id = ? AND j.agent_id = ? AND j.agent_vm_id = ? AND j.kind = 'reply' AND j.stream_id = ?
+    AND NOT EXISTS (SELECT 1 FROM messages other WHERE other.user_id = j.user_id AND other.thread_id = ? AND other.journal_seq = j.seq AND other.agent_vm_id = j.agent_vm_id)
+  ORDER BY j.seq LIMIT 1
+), agent_vm_id = (
+  SELECT j.agent_vm_id FROM journal_entries j
+  WHERE j.user_id = ? AND j.agent_id = ? AND j.agent_vm_id = ? AND j.kind = 'reply' AND j.stream_id = ?
+    AND NOT EXISTS (SELECT 1 FROM messages other WHERE other.user_id = j.user_id AND other.thread_id = ? AND other.journal_seq = j.seq AND other.agent_vm_id = j.agent_vm_id)
   ORDER BY j.seq LIMIT 1
 ) WHERE id = ? AND user_id = ? AND journal_seq IS NULL AND EXISTS (
   SELECT 1 FROM journal_entries j
-  WHERE j.user_id = ? AND j.agent_id = ? AND j.kind = 'reply' AND j.stream_id = ?
-    AND NOT EXISTS (SELECT 1 FROM messages other WHERE other.user_id = j.user_id AND other.thread_id = ? AND other.journal_seq = j.seq)
-)`, userID, run.AgentID, run.ID, run.ThreadID, msgID, userID, userID, run.AgentID, run.ID, run.ThreadID); err != nil {
+  WHERE j.user_id = ? AND j.agent_id = ? AND j.agent_vm_id = ? AND j.kind = 'reply' AND j.stream_id = ?
+    AND NOT EXISTS (SELECT 1 FROM messages other WHERE other.user_id = j.user_id AND other.thread_id = ? AND other.journal_seq = j.seq AND other.agent_vm_id = j.agent_vm_id)
+)`, userID, run.AgentID, vmKey, run.ID, run.ThreadID, userID, run.AgentID, vmKey, run.ID, run.ThreadID, msgID, userID, userID, run.AgentID, vmKey, run.ID, run.ThreadID); err != nil {
 		return Message{}, RunEvent{}, err
 	}
 	var seq int

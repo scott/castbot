@@ -1,12 +1,15 @@
 package web
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -151,6 +154,13 @@ func (s *Server) writeSecrets(w http.ResponseWriter, r *http.Request, userID str
 		if name, value, missing := castcfg.ProviderSecret(agent.Model); missing == "" && name != "" && value != "" {
 			out.Secrets = append(out.Secrets, item{Name: name, Value: value})
 		}
+		pairs := make([]secretPair, 0, len(out.Secrets))
+		for _, sec := range out.Secrets {
+			pairs = append(pairs, secretPair{name: sec.Name, value: sec.Value})
+		}
+		sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
+		fp := hashSecretPairs(hmac.New(sha256.New, s.secretFPKey()), pairs)
+		_ = s.store.SetSecretFP(r.Context(), userID, agent.ID, fp)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
