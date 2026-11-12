@@ -110,6 +110,20 @@ func TestShots(t *testing.T) {
 	t.Run("agentform-return-1280", func(t *testing.T) {
 		shootEditReturn(t, browserCtx, 1280, 800)
 	})
+	dir42 := filepath.Join("..", "..", "docs", "evidence", "issue42")
+	if err := os.MkdirAll(dir42, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, theme := range []string{"dark", "light"} {
+		for _, vp := range []struct {
+			w, h int
+			name string
+		}{{1280, 800, "1280"}, {390, 844, "390"}} {
+			t.Run("resume-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootPausedOpen(t, browserCtx, dir42, vp.w, vp.h, theme, vp.name)
+			})
+		}
+	}
 	dir06 := filepath.Join("..", "..", "docs", "evidence", "S06")
 	if err := os.MkdirAll(dir06, 0o755); err != nil {
 		t.Fatal(err)
@@ -800,8 +814,14 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 	if err := h.st.SaveVMToken(context.Background(), agent.ID, guest); err != nil {
 		t.Fatal(err)
 	}
+	if err := chromedp.Run(ctx, chromedp.Navigate(ts.URL+"/agents/"+agent.ID+"/edit")); err != nil && !containsNav(err) {
+		t.Fatal(err)
+	}
+	waitVisibleClose(t, ctx)
+	assertEditClose(t, ctx)
+	scrollTop(t, ctx)
+	shotPage(t, ctx, filepath.Join(dir, "editform-"+theme+"-"+name+".png"))
 	if err := chromedp.Run(ctx, chromedp.Tasks{
-		chromedp.Navigate(ts.URL + "/agents/" + agent.ID + "/edit"),
 		chromedp.WaitVisible(`input[name="title"]`, chromedp.ByQuery),
 		chromedp.SetValue(`form.na input[name="title"]`, "Reloaded helper", chromedp.ByQuery),
 	}); err != nil {

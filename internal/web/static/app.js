@@ -549,6 +549,14 @@ function onEscape(ev) {
     ev.preventDefault();
     return;
   }
+  var closes = document.querySelectorAll("a.sclose[href]");
+  for (var i = 0; i < closes.length; i++) {
+    if (closes[i].offsetParent !== null) {
+      ev.preventDefault();
+      location.assign(closes[i].getAttribute("href"));
+      return;
+    }
+  }
   if (document.body.classList.contains("p-set") || document.querySelector("[data-sclose]")) {
     if (location.pathname === "/settings" || location.pathname.indexOf("/settings/") === 0) {
       ev.preventDefault();

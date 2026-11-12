@@ -58,7 +58,7 @@ func TestAgentFormRoundTrip(t *testing.T) {
 		t.Fatal(loc)
 	}
 	code, body, _ = h.do(http.MethodGet, loc+"/edit", "", ip, nil)
-	if code != 200 || !strings.Contains(body, "Be concise.") || !strings.Contains(body, `value="Atlas"`) || !strings.Contains(body, `href="`+loc+`">Cancel</a>`) {
+	if code != 200 || !strings.Contains(body, "Be concise.") || !strings.Contains(body, `value="Atlas"`) || strings.Contains(body, ">Cancel</a>") || strings.Count(body, `class="ibtn sclose"`) != 2 || strings.Count(body, `aria-label="Close"`) != 2 || strings.Count(body, `title="Close (Esc)"`) != 2 || strings.Count(body, `href="`+loc+`"`) < 2 || !strings.Contains(body, `M6 6l12 12M18 6L6 18`) {
 		t.Fatalf("saved page %d", code)
 	}
 	agent := onlyAgent(t, h, user.ID)

@@ -97,6 +97,8 @@ type Server struct {
 	wakeFor     time.Duration
 	gateMu      sync.Mutex
 	gates       map[string]*sync.Mutex
+	wakeMu      sync.Mutex
+	wakeGates   map[string]*sync.Mutex
 
 	// File uploads. Hooks are append-only so another slice can register too.
 	fileMu     sync.Mutex
@@ -175,6 +177,25 @@ func (s *Server) withAgent(id string, fn func()) {
 		s.gates[id] = mu
 	}
 	s.gateMu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
+	fn()
+}
+
+// withWake runs fn while this agent has the resume lock.
+// A second resume, from another tab or a double click, waits and then
+// sees the machine is no longer paused, so Wake runs once.
+func (s *Server) withWake(id string, fn func()) {
+	s.wakeMu.Lock()
+	if s.wakeGates == nil {
+		s.wakeGates = map[string]*sync.Mutex{}
+	}
+	mu := s.wakeGates[id]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		s.wakeGates[id] = mu
+	}
+	s.wakeMu.Unlock()
 	mu.Lock()
 	defer mu.Unlock()
 	fn()
@@ -361,6 +382,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}/machine", s.provisionMachine)
 	mux.HandleFunc("POST /agents/{id}/machine/pause", s.pauseMachine)
 	mux.HandleFunc("POST /agents/{id}/machine/wake", s.wakeMachine)
+	mux.HandleFunc("POST /agents/{id}/resume", s.resumeChat)
 	mux.HandleFunc("POST /agents/{id}/machine/delete", s.deleteMachine)
 	mux.HandleFunc("POST /agents/{id}/delete", s.deleteAgent)
 	mux.HandleFunc("GET /agents/{id}/boot", s.bootFragment)

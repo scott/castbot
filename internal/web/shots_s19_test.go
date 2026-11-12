@@ -106,7 +106,7 @@ func s19TapTargets(t *testing.T, ctx context.Context) {
 	t.Helper()
 	var bad string
 	err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){
-		var nodes=document.querySelectorAll('.ptabs a,.pclose-ph,.apill,.ptoggle,.peek,.glance,[data-sclose],.s19toast .btn,.s19toast .ibtn');
+		var nodes=document.querySelectorAll('.ptabs a,.pclose-ph,.apill,.ptoggle,.peek,.glance,[data-sclose],.s19toast .btn,.s19toast .ibtn,.inchat');
 		var bad=[];
 		for(var i=0;i<nodes.length;i++){
 			var b=nodes[i].getBoundingClientRect();

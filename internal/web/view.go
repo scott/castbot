@@ -185,6 +185,10 @@ type page struct {
 	Create           createView
 	Boot             bootView
 	AskJob           bool
+	AutoResume       bool
+	ResumeAct        template.HTML
+	ResumeErr        string
+	ResumePoll       bool
 }
 
 func finish(p page) page {

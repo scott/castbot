@@ -407,6 +407,10 @@ func (s *Server) machineAction(w http.ResponseWriter, r *http.Request, kind stri
 	if s.refuseReplacing(w, r, user.ID, agent.ID) {
 		return
 	}
+	if kind != "pause" {
+		s.finishWake(w, r, user, agent)
+		return
+	}
 	vm, err := s.store.LiveVM(r.Context(), user.ID, agent.ID)
 	if s.missing(w, err) {
 		return
@@ -416,16 +420,9 @@ func (s *Server) machineAction(w http.ResponseWriter, r *http.Request, kind stri
 		s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusBadRequest, "This agent has no machine yet.")
 		return
 	}
-	var got host.Machine
+	s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventPauseRequested, 0)
 	actionAt := time.Now()
-	switch kind {
-	case "pause":
-		s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventPauseRequested, 0)
-		got, err = h.Pause(r.Context(), vm.MicroVMID)
-	default:
-		s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventWakeRequested, 0)
-		got, err = h.Wake(r.Context(), vm.MicroVMID)
-	}
+	got, err := h.Pause(r.Context(), vm.MicroVMID)
 	if err != nil {
 		s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusBadGateway, "The machine did not change.")
 		return
@@ -434,28 +431,14 @@ func (s *Server) machineAction(w http.ResponseWriter, r *http.Request, kind stri
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	if kind == "pause" {
-		s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventPauseObserved, time.Since(actionAt))
-	}
-	if kind != "pause" && got.State == "running" {
-		s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventWakeRunning, time.Since(actionAt))
-		endpoint, token, credErr := s.store.VMCredentials(r.Context(), user.ID, agent.ID)
-		if credErr == nil && endpoint != "" && token != "" {
-			if perr := h.Probe(r.Context(), endpoint, token); perr == nil {
-				s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventWakeReady, time.Since(actionAt))
-			}
-		}
-	}
-	if kind != "pause" && got.State == "running" {
-		s.fireAfterRun(r.Context(), user.ID, agent.ID)
-		if err := s.runReload(r.Context(), user.ID, agent.ID); err != nil {
-			s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusBadGateway, "The machine woke, but the saved agent could not be reloaded.")
-			return
-		}
-	}
-	target := "/agents/" + url.PathEscape(agent.ID) + "/machine"
+	s.noteVM(r.Context(), user.ID, agent.ID, vm.MicroVMID, store.EventPauseObserved, time.Since(actionAt))
+	s.redirectMachine(w, r, agent.ID)
+}
+
+func (s *Server) redirectMachine(w http.ResponseWriter, r *http.Request, agentID string) {
+	target := "/agents/" + url.PathEscape(agentID) + "/machine"
 	if r.FormValue("next") == "files" {
-		target = "/agents/" + url.PathEscape(agent.ID) + "?panel=files"
+		target = "/agents/" + url.PathEscape(agentID) + "?panel=files"
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }

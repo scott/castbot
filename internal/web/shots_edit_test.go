@@ -32,21 +32,31 @@ func shootEditReturn(t *testing.T, browser context.Context, width, height int) {
 	}
 	ts := httptest.NewTLSServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
-	ctx := tab(t, browser)
+	ctx := longTab(t, browser, 2*time.Minute)
 	edit := ts.URL + "/agents/" + agent.ID + "/edit"
 	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), edit, width, height)...); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`(document.body.innerText||'').indexOf('Edit agent')>=0 && !!document.querySelector('form.na a.btn') && document.querySelector('form.na input[name="name"]').value==='Atlas'`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, chromedp.Poll(js(`(document.body.innerText||'').indexOf('Edit agent')>=0 && !!document.querySelector('a.sclose[href]') && (document.body.innerText||'').indexOf('Cancel')<0 && document.querySelector('form.na input[name="name"]').value==='Atlas'`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
 		t.Fatal(err)
 	}
+	assertEditClose(t, ctx)
 	if err := chromedp.Run(ctx, chromedp.SetValue(`form.na input[name="name"]`, "Not saved", chromedp.ByQuery)); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Click(`form.na a.btn`, chromedp.ByQuery)); err != nil && !containsNav(err) {
+	clickVisibleClose(t, ctx)
+	editWait(t, ctx, "cancel", `location.pathname==='/agents/`+agent.ID+`' && (document.querySelector('.who-btn .nm')||{}).textContent==='Atlas' && pageText().indexOf('Not saved')<0 && pageText().indexOf('Edit agent')<0`)
+	if err := chromedp.Run(ctx, chromedp.Navigate(edit)); err != nil && !containsNav(err) {
 		t.Fatal(err)
 	}
-	editWait(t, ctx, "cancel", `location.pathname==='/agents/`+agent.ID+`' && (document.querySelector('.who-btn .nm')||{}).textContent==='Atlas' && pageText().indexOf('Not saved')<0 && pageText().indexOf('Edit agent')<0`)
+	editWait(t, ctx, "reopen esc", `pageText().indexOf('Edit agent')>=0 && !!document.querySelector('a.sclose[href]') && document.querySelector('form.na input[name="name"]').value==='Atlas'`)
+	if err := chromedp.Run(ctx, chromedp.SetValue(`form.na input[name="name"]`, "Escaped", chromedp.ByQuery)); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`), nil)); err != nil && !containsNav(err) {
+		t.Fatal(err)
+	}
+	editWait(t, ctx, "escape", `location.pathname==='/agents/`+agent.ID+`' && (document.querySelector('.who-btn .nm')||{}).textContent==='Atlas' && pageText().indexOf('Escaped')<0 && pageText().indexOf('Edit agent')<0`)
 	if err := chromedp.Run(ctx, chromedp.Navigate(edit)); err != nil && !containsNav(err) {
 		t.Fatal(err)
 	}
@@ -65,6 +75,68 @@ func shootEditReturn(t *testing.T, browser context.Context, width, height int) {
 		t.Fatal(err)
 	}
 	editWait(t, ctx, "save", `location.pathname==='/agents/`+agent.ID+`' && (document.querySelector('.who-btn .nm')||{}).textContent==='Harbor' && pageText().indexOf('Edit agent')<0 && pageText().indexOf('Not saved')<0`)
+}
+
+func waitVisibleClose(t *testing.T, ctx context.Context) {
+	t.Helper()
+	err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){
+		var links=document.querySelectorAll('a.sclose[href]');
+		for (var i=0;i<links.length;i++){
+			var r=links[i].getBoundingClientRect();
+			if(r.width>1 && r.height>1) return true;
+		}
+		return false;
+	})()`), nil, chromedp.WithPollingTimeout(8*time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func clickVisibleClose(t *testing.T, ctx context.Context) {
+	t.Helper()
+	var ok bool
+	err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){
+		var links=document.querySelectorAll('a.sclose[href]');
+		for (var i=0;i<links.length;i++){
+			var r=links[i].getBoundingClientRect();
+			if(r.width>1 && r.height>1){ links[i].click(); return true; }
+		}
+		return false;
+	})()`), &ok))
+	if err != nil && !containsNav(err) {
+		t.Fatal(err)
+	}
+	if err == nil && !ok {
+		t.Fatal("close control")
+	}
+}
+
+func assertEditClose(t *testing.T, ctx context.Context) {
+	t.Helper()
+	var got string
+	err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){
+		function box(sel){
+			var el=document.querySelector(sel);
+			if(!el) return null;
+			var r=el.getBoundingClientRect();
+			return {w:r.width,h:r.height,top:r.top};
+		}
+		var desk=box('.page-h a.sclose');
+		var phone=box('.ph-top a.sclose');
+		if(window.innerWidth<=400){
+			if(!phone||phone.w<44||phone.h<44) return 'phone';
+			return 'ok';
+		}
+		if(!desk||desk.w<1||desk.h<1||desk.top>80) return 'desk';
+		if(phone&&phone.w>1) return 'phone shown';
+		return 'ok';
+	})()`), &got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ok" {
+		t.Fatalf("close control %s", got)
+	}
 }
 
 func editWait(t *testing.T, ctx context.Context, label, expr string) {
