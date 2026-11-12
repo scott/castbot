@@ -116,7 +116,31 @@ type AgentHost interface {
 	PushCLI(ctx context.Context, endpoint, agentToken string, body []byte) error
 	// PullJournal reads journal entries after a sequence number from a running guest.
 	PullJournal(ctx context.Context, endpoint, agentToken string, after int) ([]byte, error)
+	// Health reads /castlet/health. The version is the guest bundle version.
+	// A hard failure is ErrGuest. A boot that is still coming up is ErrGuestWait.
+	Health(ctx context.Context, endpoint, agentToken string) (version string, err error)
+	// ExportMemory and ImportMemory stream the memory tar. The caller's context
+	// is the deadline. These do not use the short edge client.
+	ExportMemory(ctx context.Context, endpoint, agentToken string) (io.ReadCloser, error)
+	ImportMemory(ctx context.Context, endpoint, agentToken string, body io.Reader) error
+	// ListWorkspace, ReadWorkspace, and WriteWorkspace move workspace files.
+	ListWorkspace(ctx context.Context, endpoint, agentToken string) ([]WorkspaceFile, error)
+	ReadWorkspace(ctx context.Context, endpoint, agentToken, name string) (io.ReadCloser, error)
+	WriteWorkspace(ctx context.Context, endpoint, agentToken, name string, body io.Reader) error
 }
+
+// WorkspaceFile is one guest workspace path and its size. It has no contents.
+type WorkspaceFile struct {
+	Name string
+	Size int64
+}
+
+var (
+	// ErrGuest is a hard guest failure. Replace does not retry it.
+	ErrGuest = errors.New("guest failed")
+	// ErrGuestWait means the guest is not ready yet.
+	ErrGuestWait = errors.New("guest is not ready")
+)
 
 // ConfirmName accepts a delete only when the typed text is the agent name.
 func ConfirmName(typed, name string) error {
@@ -125,6 +149,11 @@ func ConfirmName(typed, name string) error {
 		return ErrName
 	}
 	return nil
+}
+
+// ReplaceTag marks a machine created for one replacement.
+func ReplaceTag(id string) string {
+	return "castbot-replace:" + strings.TrimSpace(id)
 }
 
 // MachineName is the API name for one agent. It is lowercase and fits the

@@ -191,6 +191,12 @@ func TestShots(t *testing.T) {
 			t.Run("s07c-nomachine-"+theme+"-"+vp.name, func(t *testing.T) {
 				shootNoMachineComposer(t, browserCtx, dir07c, vp.w, vp.h, theme, vp.name)
 			})
+			for _, kind := range []string{"09a", "09a2", "09b", "09c", "09c2", "09d", "09d2", "09e", "09f", "09f2", "09f3", "09f4", "09g"} {
+				kind := kind
+				t.Run("s07c-"+kind+"-"+theme+"-"+vp.name, func(t *testing.T) {
+					shootReplace(t, browserCtx, dir07c, vp.w, vp.h, theme, vp.name, kind)
+				})
+			}
 		}
 	}
 }

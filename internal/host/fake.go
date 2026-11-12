@@ -1,6 +1,8 @@
 package host
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -47,6 +49,27 @@ type Fake struct {
 	Approvals []ApprovalCall
 	// ApproveErr is returned from Approve after the call is recorded.
 	ApproveErr error
+	// OnCreate runs after a machine is stored. Tests exchange the bootstrap here.
+	// The spec carries the bootstrap token. Do not log it.
+	OnCreate func(CreateSpec)
+	// FailClass makes one replace step fail. create, boot, read_old, copy, verify.
+	FailClass string
+	// DeleteErr makes the next Delete fail and is then cleared.
+	DeleteErr error
+	// HealthVersion is the bundle version Health returns.
+	HealthVersion string
+	// Disks holds memory tars and workspace files keyed by endpoint.
+	Disks map[string]*GuestDisk
+	// createdEndpoint is the address of the latest Create.
+	createdEndpoint string
+	healthCalls     map[string]int
+}
+
+// GuestDisk is one fake guest's memory tar and workspace files.
+type GuestDisk struct {
+	Memory   []byte
+	Files    map[string][]byte
+	Reloaded bool
 }
 
 // ApprovalCall is one permission/respond the fake observed.
@@ -86,6 +109,25 @@ func (f *Fake) edge() {
 	f.mu.Unlock()
 }
 
+// resume models the edge: a request to a paused machine starts it again.
+func (f *Fake) resume(endpoint string) {
+	f.mu.Lock()
+	f.resumeLocked(endpoint)
+	f.mu.Unlock()
+}
+
+func (f *Fake) resumeLocked(endpoint string) {
+	if endpoint == "" {
+		return
+	}
+	for id, m := range f.Machines {
+		if m.Endpoint == endpoint && m.State == "paused" {
+			m.State = "running"
+			f.Machines[id] = m
+		}
+	}
+}
+
 // Create records the spec and returns a running machine.
 func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 	f.mu.Lock()
@@ -118,9 +160,20 @@ func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 	if len(f.Creates) > 1 {
 		id = "vm-test-" + spec.AgentID
 	}
+	if f.FailClass == "create" {
+		f.mu.Unlock()
+		return Machine{}, ErrGuest
+	}
 	endpoint := "https://vm.example"
 	if f.BlankEndpoint || f.RejectAddress {
 		endpoint = ""
+	} else {
+		for _, existing := range f.Machines {
+			if existing.Endpoint == endpoint {
+				endpoint = "https://" + id + ".example"
+				break
+			}
+		}
 	}
 	tags := []string{"castbot", "agent:" + spec.AgentID}
 	seen := map[string]bool{"castbot": true, "agent:" + spec.AgentID: true}
@@ -140,10 +193,21 @@ func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 		m.State = f.ForceState
 	}
 	f.Machines[id] = m
+	f.createdEndpoint = endpoint
+	if f.Disks == nil {
+		f.Disks = map[string]*GuestDisk{}
+	}
+	if _, ok := f.Disks[endpoint]; !ok && endpoint != "" {
+		f.Disks[endpoint] = &GuestDisk{Files: map[string][]byte{}}
+	}
 	accepted := spec.Accepted
+	onCreate := f.OnCreate
 	f.mu.Unlock()
 	if accepted != nil {
 		accepted(Machine{ID: m.ID, Name: m.Name, State: "new"})
+	}
+	if onCreate != nil {
+		onCreate(spec)
 	}
 	return m, nil
 }
@@ -220,20 +284,41 @@ func (f *Fake) Delete(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, "delete")
+	if f.DeleteErr != nil {
+		err := f.DeleteErr
+		f.DeleteErr = nil
+		return err
+	}
 	f.Deletes = append(f.Deletes, id)
 	delete(f.Machines, id)
 	return nil
 }
 
+// SeedDisk stores a memory tar and workspace files for one endpoint.
+func (f *Fake) SeedDisk(endpoint string, memory []byte, files map[string][]byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Disks == nil {
+		f.Disks = map[string]*GuestDisk{}
+	}
+	cp := map[string][]byte{}
+	for name, body := range files {
+		cp[name] = append([]byte(nil), body...)
+	}
+	f.Disks[endpoint] = &GuestDisk{Memory: append([]byte(nil), memory...), Files: cp}
+}
+
 // Probe counts an edge call and succeeds.
-func (f *Fake) Probe(context.Context, string, string) error {
+func (f *Fake) Probe(_ context.Context, endpoint, _ string) error {
+	f.resume(endpoint)
 	f.edge()
 	f.note("probe")
 	return nil
 }
 
 // Stream counts an edge call and returns the scripted frames, then [DONE].
-func (f *Fake) Stream(context.Context, string, string, runtime.Send) (runtime.Stream, error) {
+func (f *Fake) Stream(_ context.Context, endpoint, _ string, _ runtime.Send) (runtime.Stream, error) {
+	f.resume(endpoint)
 	f.edge()
 	f.mu.Lock()
 	frames := append([]runtime.Frame(nil), f.Frames...)
@@ -251,7 +336,8 @@ func (f *Fake) Decisions() (calls []string, approvals []ApprovalCall) {
 }
 
 // Approve counts an edge call and records the decision.
-func (f *Fake) Approve(_ context.Context, _, _, requestID string, allow bool) error {
+func (f *Fake) Approve(_ context.Context, endpoint, _, requestID string, allow bool) error {
+	f.resume(endpoint)
 	f.edge()
 	f.mu.Lock()
 	f.Calls = append(f.Calls, "approve")
@@ -268,21 +354,23 @@ func (f *Fake) Cancel(context.Context, string, string, string) error {
 }
 
 // PutFile counts an edge call.
-func (f *Fake) PutFile(context.Context, string, string, string, io.Reader) error {
+func (f *Fake) PutFile(_ context.Context, endpoint, _, _ string, _ io.Reader) error {
+	f.resume(endpoint)
 	f.edge()
 	f.note("put")
 	return nil
 }
 
 // GetFile counts an edge call.
-func (f *Fake) GetFile(context.Context, string, string, string) (io.ReadCloser, error) {
+func (f *Fake) GetFile(_ context.Context, endpoint, _, _ string) (io.ReadCloser, error) {
+	f.resume(endpoint)
 	f.edge()
 	f.note("get")
 	return io.NopCloser(strings.NewReader("ok")), nil
 }
 
 // Reload counts an edge call. A test can hold it in ReloadWait.
-func (f *Fake) Reload(ctx context.Context, _, _ string) error {
+func (f *Fake) Reload(ctx context.Context, endpoint, _ string) error {
 	f.mu.Lock()
 	wait := f.ReloadWait
 	started := f.ReloadStarted
@@ -302,13 +390,20 @@ func (f *Fake) Reload(ctx context.Context, _, _ string) error {
 			return ctx.Err()
 		}
 	}
+	f.resume(endpoint)
 	f.edge()
 	f.note("reload")
+	f.mu.Lock()
+	if d := f.Disks[endpoint]; d != nil {
+		d.Reloaded = reloadErr == nil
+	}
+	f.mu.Unlock()
 	return reloadErr
 }
 
 // PushCLI records a token-hash push. It counts as an edge call.
-func (f *Fake) PushCLI(_ context.Context, _, _ string, body []byte) error {
+func (f *Fake) PushCLI(_ context.Context, endpoint, _ string, body []byte) error {
+	f.resume(endpoint)
 	f.edge()
 	f.mu.Lock()
 	f.Pushed = append(f.Pushed, append([]byte(nil), body...))
@@ -318,7 +413,8 @@ func (f *Fake) PushCLI(_ context.Context, _, _ string, body []byte) error {
 }
 
 // PullJournal returns the scripted journal. It counts as an edge call.
-func (f *Fake) PullJournal(context.Context, string, string, int) ([]byte, error) {
+func (f *Fake) PullJournal(_ context.Context, endpoint, _ string, _ int) ([]byte, error) {
+	f.resume(endpoint)
 	f.edge()
 	f.mu.Lock()
 	body := append([]byte(nil), f.Journal...)
@@ -328,6 +424,138 @@ func (f *Fake) PullJournal(context.Context, string, string, int) ([]byte, error)
 		body = []byte(`{"entries":[]}`)
 	}
 	return body, nil
+}
+
+// Health returns the scripted bundle version.
+func (f *Fake) Health(_ context.Context, endpoint, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
+	f.Calls = append(f.Calls, "health")
+	if f.healthCalls == nil {
+		f.healthCalls = map[string]int{}
+	}
+	n := f.healthCalls[endpoint]
+	f.healthCalls[endpoint] = n + 1
+	if f.FailClass == "boot" && endpoint == f.createdEndpoint && n == 0 {
+		return "", ErrGuest
+	}
+	if f.FailClass == "verify" && endpoint == f.createdEndpoint && n > 0 {
+		return "", ErrGuest
+	}
+	return f.HealthVersion, nil
+}
+
+// ExportMemory returns the seeded memory tar.
+func (f *Fake) ExportMemory(_ context.Context, endpoint, _ string) (io.ReadCloser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
+	f.Calls = append(f.Calls, "export-memory")
+	if f.FailClass == "read_old" && endpoint != f.createdEndpoint {
+		return nil, ErrGuest
+	}
+	d := f.diskLocked(endpoint)
+	body := append([]byte(nil), d.Memory...)
+	if len(body) == 0 {
+		body = emptyTar()
+	}
+	return io.NopCloser(strings.NewReader(string(body))), nil
+}
+
+// ImportMemory stores a memory tar on the endpoint.
+func (f *Fake) ImportMemory(_ context.Context, endpoint, _ string, body io.Reader) error {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
+	f.Calls = append(f.Calls, "import-memory")
+	if f.FailClass == "copy" {
+		return ErrGuest
+	}
+	d := f.diskLocked(endpoint)
+	d.Memory = raw
+	return nil
+}
+
+// ListWorkspace returns the seeded file names and sizes.
+func (f *Fake) ListWorkspace(_ context.Context, endpoint, _ string) ([]WorkspaceFile, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
+	f.Calls = append(f.Calls, "list-files")
+	if f.FailClass == "read_old" && endpoint != f.createdEndpoint {
+		return nil, ErrGuest
+	}
+	d := f.diskLocked(endpoint)
+	out := make([]WorkspaceFile, 0, len(d.Files))
+	for name, body := range d.Files {
+		out = append(out, WorkspaceFile{Name: name, Size: int64(len(body))})
+	}
+	return out, nil
+}
+
+// ReadWorkspace returns one seeded file.
+func (f *Fake) ReadWorkspace(_ context.Context, endpoint, _, name string) (io.ReadCloser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
+	f.Calls = append(f.Calls, "read-file")
+	if f.FailClass == "read_old" && endpoint != f.createdEndpoint {
+		return nil, ErrGuest
+	}
+	d := f.diskLocked(endpoint)
+	body, ok := d.Files[name]
+	if !ok {
+		return nil, ErrNotSupported
+	}
+	return io.NopCloser(strings.NewReader(string(body))), nil
+}
+
+// WriteWorkspace stores one file.
+func (f *Fake) WriteWorkspace(_ context.Context, endpoint, _, name string, body io.Reader) error {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumeLocked(endpoint)
+	f.Calls = append(f.Calls, "write-file")
+	if f.FailClass == "copy" {
+		return ErrGuest
+	}
+	d := f.diskLocked(endpoint)
+	if d.Files == nil {
+		d.Files = map[string][]byte{}
+	}
+	d.Files[name] = raw
+	return nil
+}
+
+func (f *Fake) diskLocked(endpoint string) *GuestDisk {
+	if f.Disks == nil {
+		f.Disks = map[string]*GuestDisk{}
+	}
+	d, ok := f.Disks[endpoint]
+	if !ok {
+		d = &GuestDisk{Files: map[string][]byte{}}
+		f.Disks[endpoint] = d
+	}
+	if d.Files == nil {
+		d.Files = map[string][]byte{}
+	}
+	return d
+}
+
+func emptyTar() []byte {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.Close()
+	return buf.Bytes()
 }
 
 // SetListErr makes the next List calls fail. A nil error clears it.

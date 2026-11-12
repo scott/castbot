@@ -851,3 +851,63 @@ textarea.ph::placeholder { color: var(--tx3); }
 @media (max-width: 760px) {
   .machine { padding-bottom: 88px; }
 }
+.meta-grid .v.upd { color: var(--acc); }
+.btn[disabled], .btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+.rsteps { list-style: none; margin: 0; padding: 0; }
+.rsteps .step { align-items: flex-start; flex-direction: row; gap: 10px; }
+.rsteps .grow { display: grid; gap: 2px; }
+.rsteps .ssub { display: block; font-size: 12.5px; font-weight: 500; color: var(--tx3); }
+.rhint { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--acc-line); background: var(--acc-soft); font-size: 14px; }
+.rhint.quiet { border-color: var(--line); background: var(--bg2); color: var(--tx2); }
+.rhint b { color: var(--tx); }
+.reason, .lockline { font-size: 13.5px; color: var(--tx2); margin: 0; }
+.bline.warnl { color: var(--warn); font-size: 13.5px; }
+.hist { display: grid; gap: 8px; }
+.hist h3 { margin: 0; font-size: 14px; }
+.hist .evs { list-style: none; margin: 0; padding: 0; }
+.hist .evs li { display: grid; gap: 2px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.hist .evs li:first-child { border-top: 0; padding-top: 0; }
+.hist .evs .t { font-size: 12px; color: var(--tx3); }
+.nomach p { font-size: 13.5px; margin: 2px 0 0; color: var(--tx2); }
+.rmodal { position: fixed; z-index: 30; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 700px; max-width: calc(100vw - 24px); background: var(--bg2); border: 1px solid var(--line2); border-top: 3px solid var(--acc); border-radius: 18px; box-shadow: var(--shadow); padding: 22px; display: grid; gap: 16px; }
+.rmodal .grabber { display: none; }
+.rm-h { display: flex; gap: 14px; align-items: flex-start; }
+.rm-h .ico { width: 40px; height: 40px; border-radius: 11px; background: var(--acc-soft); color: var(--acc); display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.rm-h h2 { font-size: 20px; margin: 0 0 4px; }
+.rm-h p { font-size: 14px; line-height: 1.55; margin: 0; }
+.rimg { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 12px; background: var(--surf); border: 1px solid var(--line); }
+.rimg > div { display: grid; gap: 2px; }
+.rimg .k { font-size: 12px; color: var(--tx3); }
+.rimg .v { font-size: 15px; font-weight: 600; }
+.rimg-to { font-size: 12.5px; color: var(--tx3); font-weight: 600; }
+.tag-new { justify-self: start; font: 700 10.5px var(--ui); letter-spacing: .06em; text-transform: uppercase; color: var(--ok); }
+.rlists { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.rlist { border-radius: 12px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surf); }
+.rlist h3 { font: 700 11.5px var(--ui); letter-spacing: .08em; text-transform: uppercase; margin: 0 0 8px; }
+.rlist.kept h3 { color: var(--ok); }
+.rlist.lost h3 { color: var(--warn); }
+.rlist ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; font-size: 13.5px; }
+.rlist li { display: flex; gap: 8px; align-items: flex-start; }
+.rlist.kept .i { color: var(--ok); }
+.rlist.lost .i { color: var(--warn); }
+.promise { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; color: var(--tx2); margin: 0; }
+.promise .i { color: var(--ok); }
+.promise b { color: var(--tx); }
+.rm-f { display: flex; justify-content: flex-end; gap: 10px; }
+.comp.locked { background: var(--bg2); border-style: dashed; }
+.comp.locked .ph { color: var(--tx2); margin: 0; }
+.scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 20; }
+@media (max-width: 760px) {
+  .racts { display: grid; grid-template-columns: 1fr 1fr; }
+  .racts .btn, .racts a.btn { min-height: 44px; }
+  .rhint { flex-wrap: wrap; }
+  .rhint .btn { width: 100%; }
+  .nomach .btn { width: 100%; }
+  .p-confirm .app, .p-confirm .scrim { display: none; }
+  .p-confirm { background: var(--scrim); }
+  .rmodal { position: static; transform: none; width: auto; max-width: none; border-radius: 20px 20px 0 0; border-top-width: 1px; min-height: 100vh; }
+  .rlists { grid-template-columns: 1fr; }
+  .rm-f { position: sticky; bottom: 0; background: var(--bg2); padding: 10px 0 14px; }
+  .rm-f .btn { flex: 1; min-height: 44px; }
+  .comp.locked { display: block; padding: 12px 14px; }
+}

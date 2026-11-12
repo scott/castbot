@@ -42,8 +42,10 @@ func main() {
 		createUser(args)
 	case "seed-demo":
 		seedDemo(args)
+	case "admin":
+		os.Exit(adminCmd(args))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo]")
+		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo|admin]")
 		os.Exit(2)
 	}
 }
@@ -69,11 +71,16 @@ func serve(args []string) {
 		log.Fatal(err)
 	}
 	app.SetDevEcho(cfg.DevEcho)
+	app.SetDataDir(filepath.Dir(cfg.DBPath))
 	if cfg.RuntimeURL != "" {
 		app.SetExplicitRuntime(true)
 	}
 	app.RunReconciler(ctx, time.Minute)
 	attachMachine(app, cfg)
+	recoverCtx, recoverCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	app.RecoverReplacements(recoverCtx)
+	recoverCancel()
+	go app.RetryReplaceDeletes(ctx)
 	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	app.SweepMachines(sweepCtx)
 	sweepCancel()

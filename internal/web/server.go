@@ -58,6 +58,7 @@ type Server struct {
 	machine   host.AgentHost
 	image     string
 	publicURL string
+	dataDir   string
 	trusted   []*net.IPNet
 	base      context.Context
 	prov      sync.WaitGroup
@@ -276,6 +277,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}/import", s.importAgent)
 	mux.HandleFunc("GET /agents/{id}/avatar", s.agentAvatar)
 	mux.HandleFunc("GET /agents/{id}/machine", s.agentTab)
+	mux.HandleFunc("GET /agents/{id}/machine/card", s.machineCard)
+	mux.HandleFunc("GET /agents/{id}/machine/replace", s.confirmReplace)
+	mux.HandleFunc("POST /agents/{id}/machine/replace", s.postReplace)
 	mux.HandleFunc("GET /agents/{id}/routines", s.agentTab)
 	mux.HandleFunc("GET /agents/{id}/files", s.agentTab)
 	mux.HandleFunc("POST /agents/{id}", s.updateAgent)

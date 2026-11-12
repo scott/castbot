@@ -24,6 +24,9 @@ import (
 const stalePending = 10 * time.Minute
 
 func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (runtime.Stream, error) {
+	if s.replacing(ctx, job.UserID, job.AgentID) {
+		return nil, &run.Notice{Text: replaceSentence}
+	}
 	s.mu.Lock()
 	h := s.machine
 	client := s.client
@@ -113,6 +116,9 @@ func (s *Server) provisionMachine(w http.ResponseWriter, r *http.Request) {
 	}
 	agent, err := s.store.GetAgent(r.Context(), user.ID, r.PathValue("id"))
 	if s.missing(w, err) {
+		return
+	}
+	if s.refuseReplacing(w, r, user.ID, agent.ID) {
 		return
 	}
 	h, image, publicURL := s.hostConfig()
@@ -400,6 +406,9 @@ func (s *Server) machineAction(w http.ResponseWriter, r *http.Request, kind stri
 	if s.missing(w, err) {
 		return
 	}
+	if s.refuseReplacing(w, r, user.ID, agent.ID) {
+		return
+	}
 	vm, err := s.store.LiveVM(r.Context(), user.ID, agent.ID)
 	if s.missing(w, err) {
 		return
@@ -455,6 +464,9 @@ func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request) {
 	}
 	agent, err := s.store.GetAgent(r.Context(), user.ID, r.PathValue("id"))
 	if s.missing(w, err) {
+		return
+	}
+	if s.refuseReplacing(w, r, user.ID, agent.ID) {
 		return
 	}
 	if err := host.ConfirmName(r.FormValue("confirm"), agent.Name); err != nil {

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -18,6 +19,12 @@ const (
 	EventWakeReady       = "wake_ready"
 	EventDelete          = "delete"
 	EventEdgeResume      = "edge_resume"
+	EventReplaceRequest  = "replace_requested"
+	EventReplaceSwitch   = "replace_switched"
+	EventReplaceFailed   = "replace_failed"
+	EventReplaceNoCopy   = "replace_no_copy"
+	EventReplaceDelete   = "replace_delete_pending"
+	EventReplaceCleanup  = "replace_cleanup_stopped"
 )
 
 // VMEvent is one durable machine timing row.
@@ -38,12 +45,27 @@ func (s *Store) AddVMEvent(ctx context.Context, userID, agentID, kind string, du
 	if err != nil {
 		return err
 	}
+	return s.AddVMEventFor(ctx, userID, agentID, vm.ID, kind, duration)
+}
+
+// AddVMEventFor stores one timing on an explicit machine row.
+// A replacement uses it so events for the new machine are not filed on the live row.
+func (s *Store) AddVMEventFor(ctx context.Context, userID, agentID, agentVMID, kind string, duration time.Duration) error {
+	agent, err := s.GetAgent(ctx, userID, agentID)
+	if err != nil {
+		return err
+	}
+	agentVMID = strings.TrimSpace(agentVMID)
+	kind = strings.TrimSpace(kind)
+	if agentVMID == "" || kind == "" {
+		return ErrInvalid
+	}
 	if duration < 0 {
 		duration = 0
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO vm_events(agent_vm_id, workspace_id, user_id, agent_id, kind, at, duration_ms)
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		vm.ID, vm.Workspace, vm.UserID, vm.AgentID, kind, s.stamp(s.Now()), duration.Milliseconds())
+		agentVMID, agent.WorkspaceID, userID, agentID, kind, s.stamp(s.Now()), duration.Milliseconds())
 	return err
 }
 

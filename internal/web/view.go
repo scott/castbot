@@ -125,6 +125,7 @@ type page struct {
 	FormError    string
 	AgentForm    agentForm
 	Machine      machineView
+	Replace      replaceView
 	StartMachine bool
 	CLIBlob      string
 	CLINote      string
@@ -157,6 +158,9 @@ func finish(p page) page {
 		p.Tab = "chat"
 	case "machine", "agent-routines", "agent-files":
 		p.BodyClass = "p-chat"
+		if p.Replace.Confirm {
+			p.BodyClass += " p-confirm"
+		}
 	case "settings", "password", "stub", "new", "edit":
 		p.BodyClass = "p-main no-bnav"
 	case "approvals", "routines", "files", "usage":

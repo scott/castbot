@@ -672,3 +672,118 @@ func TestStatusIsCachedBriefly(t *testing.T) {
 		t.Fatalf("status calls %d", api.getN)
 	}
 }
+
+func TestGuestCallsUseEdgeAuth(t *testing.T) {
+	const machine = "do-token"
+	const agent = "agent-token"
+	var mu sync.Mutex
+	var hits [][3]string
+	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, [3]string{r.Method + " " + r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("X-Cast-Authorization")})
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/castlet/health":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"ready":true,"version":"v"}`)
+		case "/castlet/memory":
+			if r.Method == http.MethodGet {
+				w.Header().Set("Content-Type", "application/x-tar")
+			}
+			w.WriteHeader(http.StatusOK)
+		case "/castlet/files":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `[]`)
+		case "/":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{}`)
+		default:
+			if strings.Contains(r.URL.Path, "/journal") {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `[]`)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	t.Cleanup(edge.Close)
+	m := newTestClient(t, newScriptAPI(t, ""), machine)
+	ctx := context.Background()
+	if _, err := m.Health(ctx, edge.URL, agent); err != nil {
+		t.Fatal(err)
+	}
+	body, err := m.ExportMemory(ctx, edge.URL, agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body.Close()
+	if err := m.ImportMemory(ctx, edge.URL, agent, strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.ListWorkspace(ctx, edge.URL, agent); err != nil {
+		t.Fatal(err)
+	}
+	rc, err := m.ReadWorkspace(ctx, edge.URL, agent, "notes.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.Close()
+	if err := m.WriteWorkspace(ctx, edge.URL, agent, "notes.txt", strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reload(ctx, edge.URL, agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PushCLI(ctx, edge.URL, agent, []byte(`{"tokens":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.PullJournal(ctx, edge.URL, agent, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PutFile(ctx, edge.URL, agent, "notes.txt", strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	rc, err = m.GetFile(ctx, edge.URL, agent, "notes.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.Close()
+	if err := m.Approve(ctx, edge.URL, agent, "req-1", true); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := m.Stream(ctx, edge.URL, agent, runtime.Send{Text: "hi", StreamID: "run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream.Close()
+	if err := m.Probe(ctx, edge.URL, agent); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"GET /castlet/health",
+		"GET /castlet/memory",
+		"PUT /castlet/memory",
+		"GET /castlet/files",
+		"GET /castlet/files/notes.txt",
+		"PUT /castlet/files/notes.txt",
+		"POST /castlet/reload",
+		"POST /castlet/cli-tokens",
+		"GET /castlet/journal",
+		"POST /",
+	}
+	seen := map[string]bool{}
+	if len(hits) == 0 {
+		t.Fatal("no guest calls")
+	}
+	for _, hit := range hits {
+		seen[hit[0]] = true
+		if hit[1] != "Bearer "+machine || hit[2] != "Bearer "+agent {
+			t.Errorf("%s Authorization %q X-Cast-Authorization %q", hit[0], hit[1], hit[2])
+		}
+	}
+	for _, key := range want {
+		if !seen[key] {
+			t.Errorf("missing %s", key)
+		}
+	}
+}
