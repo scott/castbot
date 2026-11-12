@@ -2,7 +2,7 @@
 
 New agent opens a chat with castbot. One description becomes a setup card. Create on that card saves the agent, starts its machine, and lands in the agent's chat. There is no separate machine step and no create button outside the card.
 
-The describe step calls the server's provider with the server key. Tests and screenshots inject a fake client and do not call a provider. The agent's own key stays in the user's vault. castbot does not copy a server key into the agent.
+The describe step calls the server's provider with the server key. Tests and screenshots inject a fake client and do not call a provider. A server key is enough to create an agent. The value is not copied into the agent. The machine resolves it when it starts, the same way an existing agent does. A vault key still wins.
 
 ## What the tests show
 
@@ -14,7 +14,7 @@ The describe step calls the server's provider with the server key. Tests and scr
 
 `TestGreetOnce` greets once across a reload. `TestGreetingWithAJob` starts the job in that same turn and mentions a message that was waiting. `TestGreetingWithoutAJob` asks for a job and offers three replies. `TestBootFailureAndTryAgain` shows the 4 minute failure with Try again and Machine details, and Try again makes a new machine without a second hello.
 
-`TestNoSecretsInInstructionsOrLogs` strips a pasted token before the client sees it, stores the redacted text, and keeps it out of instructions and logs. `TestNoServerKeyLent` blocks Create until the user adds a vault key. `TestRepromptUnclear` answers "hi" with examples and no card. `TestDraftExpiresAfter24Hours` drops a draft after a day. `TestCreateAuthzAndCSRF` returns 404 for another user's draft and 403 for a bad CSRF token.
+`TestNoSecretsInInstructionsOrLogs` strips a pasted token before the client sees it, stores the redacted text, and keeps it out of instructions and logs. `TestCreateUsesServerKey` lets the setup card and the advanced form create when only the server key is set, still blocks both when no key exists, and prefers a vault key over the server key. The Secrets row shows the server-key note once. `TestRepromptUnclear` answers "hi" with examples and no card. `TestDraftExpiresAfter24Hours` drops a draft after a day. `TestCreateAuthzAndCSRF` returns 404 for another user's draft and 403 for a bad CSRF token.
 
 ## Live
 

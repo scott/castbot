@@ -64,6 +64,7 @@ func (g *s20Gate) release() {
 
 func s20Lab(t *testing.T, theme, kind string) (*harness, *host.Fake, *s20Gate) {
 	t.Helper()
+	clearServerProviderKeys(t)
 	h := newHarness(t)
 	when := mst(2026, 11, 11, 13, 21)
 	h.st.SetNow(func() time.Time { return when })

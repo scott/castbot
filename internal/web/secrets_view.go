@@ -349,6 +349,7 @@ func (s *Server) listView(r *http.Request, user store.User, form vaultForm, high
 			key.Label = label
 			key.When = "Added " + monthDay(sec.CreatedAt, loc)
 			if sec.ID == "" {
+				key.Label = serverKeyShort
 				key.When = serverKeyLabel
 			}
 			key.Used = short

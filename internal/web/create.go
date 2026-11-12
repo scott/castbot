@@ -44,11 +44,11 @@ type createTurn struct {
 
 type setupView struct {
 	Name, Title, Instructions, Job, Schedule, Reason, Letter, Color string
-	Model, ModelLabel, KeyLabel, KeyMiss, SizeLabel                 string
+	Model, ModelLabel, KeyLabel, KeyLine, KeyMiss, SizeLabel        string
 	Size                                                            string
 	Idle                                                            int
 	IdleLabel, HourCost, DayCost, Lead                              string
-	Auto, Stripped, Conflict, HasKey, Editing                       bool
+	Auto, Stripped, Conflict, HasKey, Editing, ServerKey            bool
 	Alt, Block, Why                                                 string
 	Models                                                          []modelChoice
 	Sizes                                                           []sizeChoice
@@ -211,18 +211,26 @@ func (s *Server) refreshCard(ctx context.Context, userID string, card *setupStat
 	}
 }
 
-// userModelKey is the caller's vault key for this model.
-// The server provider key is not a substitute and is never copied onto the agent.
+// userModelKey is the label for the key this model will run with.
+// A vault row wins. A non-empty server provider key still counts as available
+// and is labeled serverKeyShort. The server value is not copied onto the agent.
+// Launch resolves it the same way an existing agent does.
 func (s *Server) userModelKey(ctx context.Context, userID, model string) (string, bool) {
 	slot, ok := slotForModel(model)
 	if !ok {
 		return "", false
 	}
 	rows, err := s.store.ProviderSecrets(ctx, userID, []string{slot.ID, slot.Manifest})
-	if err != nil || len(rows) == 0 || strings.TrimSpace(rows[0].Value) == "" {
+	if err != nil {
 		return "", false
 	}
-	return strings.TrimSpace(rows[0].Label), true
+	if len(rows) > 0 && strings.TrimSpace(rows[0].Value) != "" {
+		return strings.TrimSpace(rows[0].Label), true
+	}
+	if strings.TrimSpace(providerEnv(slot.Manifest)) != "" {
+		return serverKeyShort, true
+	}
+	return "", false
 }
 
 func (s *Server) usedNames(ctx context.Context, userID string) map[string]bool {
@@ -274,10 +282,10 @@ func presentSetup(card setupState, editing bool) setupView {
 	v := setupView{
 		Name: card.Name, Title: card.Title, Instructions: card.Instructions, Job: card.Job,
 		Schedule: card.Schedule, Reason: card.Reason, Model: card.Model,
-		ModelLabel: modelLabel(card.Model), KeyLabel: card.KeyLabel, KeyMiss: missingKeyRest(card.Model),
+		ModelLabel: modelLabel(card.Model), KeyLabel: card.KeyLabel, KeyLine: modelKeyLine(card.KeyLabel), KeyMiss: missingKeyRest(card.Model),
 		Size: card.Size, SizeLabel: machineLine(card.Size), Idle: card.Idle,
 		IdleLabel: pauseLine(card.Idle), HourCost: hour, DayCost: day, Lead: card.Lead,
-		Auto: card.Auto, Stripped: card.Stripped, Conflict: card.Conflict, HasKey: card.HasKey,
+		Auto: card.Auto, Stripped: card.Stripped, Conflict: card.Conflict, HasKey: card.HasKey, ServerKey: card.KeyLabel == serverKeyShort,
 		Alt: card.Alt, Editing: editing, Letter: letter(card.Name), Color: card.Color,
 	}
 	if v.Job == "" {
@@ -316,6 +324,17 @@ func modelLabel(id string) string {
 		}
 	}
 	return id
+}
+
+func modelKeyLine(label string) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return ""
+	}
+	if label == serverKeyShort {
+		return serverKeyShort
+	}
+	return "From your vault · " + label
 }
 
 func modelChoices(current string) []modelChoice {
@@ -780,8 +799,8 @@ func (s *Server) advancedForm(w http.ResponseWriter, r *http.Request, user store
 		if store.ValidAgentColor(card.Color) {
 			form.Color = card.Color
 		}
-		if card.KeyLabel != "" {
-			form.KeyLine = "From your vault · " + card.KeyLabel
+		if line := modelKeyLine(card.KeyLabel); line != "" {
+			form.KeyLine = line
 		}
 	}
 	s.showForm(w, r, user, form, http.StatusOK)
