@@ -441,7 +441,11 @@ WHERE id = ? AND user_id = ? AND state = 'running' AND step NOT IN ('switched', 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM vm_replacement_tokens WHERE replacement_id = ? AND user_id = ?`, id, userID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.noteReplaceDone(userID, row.AgentID)
+	return nil
 }
 
 // MarkCleanupPending records a failed replace whose new machine still needs to be deleted.
@@ -477,7 +481,11 @@ WHERE id = ? AND user_id = ? AND state = 'running'`,
 	if _, err := tx.ExecContext(ctx, `DELETE FROM vm_replacement_tokens WHERE replacement_id = ? AND user_id = ?`, id, userID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.noteReplaceDone(userID, row.AgentID)
+	return nil
 }
 
 // ClearCleanup marks a leftover machine as gone.
@@ -692,7 +700,15 @@ WHERE id = ? AND user_id = ? AND state = 'running'`,
 	if err != nil {
 		return err
 	}
-	return rowsAffected(res)
+	if err := rowsAffected(res); err != nil {
+		return err
+	}
+	var agentID string
+	if err := s.db.QueryRowContext(ctx, `SELECT agent_id FROM vm_replacements WHERE id = ? AND user_id = ?`, id, userID).Scan(&agentID); err != nil {
+		return err
+	}
+	s.noteReplaceDone(userID, agentID)
+	return nil
 }
 
 // ClearDeletePending clears the retry mark after the old machine is gone.

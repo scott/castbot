@@ -35,9 +35,12 @@ type sectionView struct {
 
 type msgView struct {
 	ID, Author, Body, Color, Letter, Stamp, Day, At string
+	Origin                                          string
 	ShowDay                                         bool
 	HasCard                                         bool
 	Card                                            cardView
+	Prompt, Marker, Hide                            bool
+	Href, Pill, PillClass, Sub                      string
 }
 
 type threadView struct {
@@ -58,6 +61,7 @@ type liveView struct {
 
 type cardView struct {
 	ID, RunID, Tool, Line, CSRF, When, At string
+	Extra, From                           string
 	Args                                  []argView
 	Pending, ReadOnly, Approved           bool
 }
@@ -137,6 +141,9 @@ type page struct {
 	Text         string
 	RoleLine     string
 	PasswordOn   string
+	Routines     routinePanel
+	Run          runBar
+	PendingTool  string
 }
 
 func finish(p page) page {
@@ -169,6 +176,14 @@ func finish(p page) page {
 		p.Nav = p.Page
 	case "auth":
 		p.BodyClass = "p-auth"
+	}
+	if p.Routines.On {
+		p.BodyClass = "p-chat panel-routines"
+		if p.Run.On {
+			p.BodyClass += " p-run"
+		} else {
+			p.BodyClass += " p-slide"
+		}
 	}
 	if p.Theme == "" {
 		p.Theme = "system"

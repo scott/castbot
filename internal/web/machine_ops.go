@@ -48,28 +48,34 @@ func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (ru
 				return nil, &run.Notice{Text: missing}
 			}
 			state, endpoint := s.observedMachine(ctx, job.UserID, job.AgentID, vm)
-			if state == "paused" && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
-				s.noteVM(ctx, job.UserID, job.AgentID, vm.MicroVMID, store.EventWakeRequested, 0)
-				wakeAt := time.Now()
-				got, werr := h.Wake(ctx, vm.MicroVMID)
-				if werr != nil {
-					return nil, &run.Notice{Text: "The machine is paused."}
+			routineID := ""
+			if row, rerr := s.store.GetRun(ctx, job.UserID, job.RunID); rerr == nil {
+				routineID = row.RoutineRunID
+			}
+			facts, werr := s.wakeForWork(ctx, h, job.UserID, job.AgentID, vm, endpoint, token, state, routineID != "")
+			if werr != nil {
+				if routineID != "" {
+					return nil, werr
 				}
-				if err := s.store.ApplyVMState(ctx, job.UserID, job.AgentID, got.State, got.Endpoint, ""); err != nil {
-					return nil, err
+				var note *run.Notice
+				if errors.As(werr, &note) {
+					return nil, note
 				}
-				if got.State == "running" {
-					s.noteVM(ctx, job.UserID, job.AgentID, vm.MicroVMID, store.EventWakeRunning, time.Since(wakeAt))
+				return nil, &run.Notice{Text: "The machine is paused."}
+			}
+			if facts.State != "" {
+				state = facts.State
+			}
+			if facts.Endpoint != "" {
+				endpoint = facts.Endpoint
+			}
+			if routineID != "" {
+				pausedMS, wakeMS := -1, -1
+				if facts.WasPaused {
+					pausedMS = int(facts.PausedFor / time.Millisecond)
+					wakeMS = int(facts.WakeFor / time.Millisecond)
 				}
-				state = got.State
-				if got.Endpoint != "" {
-					endpoint = got.Endpoint
-				}
-				if token != "" && endpoint != "" {
-					if perr := h.Probe(ctx, endpoint, token); perr == nil {
-						s.noteVM(ctx, job.UserID, job.AgentID, vm.MicroVMID, store.EventWakeReady, time.Since(wakeAt))
-					}
-				}
+				_ = s.store.NoteRoutineWake(ctx, job.UserID, routineID, pausedMS, wakeMS)
 			}
 			deferRestart, err := s.guestRestart(ctx, job.UserID, job.AgentID, job.RunID)
 			if err != nil {

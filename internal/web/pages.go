@@ -169,6 +169,7 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		p.CLIBlob = flash.blob
 		p.CLINote = flash.note
 	}
+	s.attachRoutines(r, user, agent, current, &p)
 	switch tab {
 	case "home":
 		p.Page = "home"
@@ -203,7 +204,7 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 func tabCopy(tab string) (string, string) {
 	switch tab {
 	case "agent-routines":
-		return "Routines", "Routines arrive in a later update. Nothing here runs on a schedule yet."
+		return "Routines", "Open the Routines tab in the agent panel. Each run wakes the machine and gets its own thread."
 	case "agent-files":
 		return "Files", "Files arrive in a later update."
 	default:
@@ -232,19 +233,29 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	if s.bad(w, err) {
 		return
 	}
-	run, err := s.store.CreateRun(r.Context(), user.ID, thread.ID, agent.ID)
-	if err != nil {
+	var run store.Run
+	s.withAgent(agent.ID, func() {
+		busy, _ := s.store.AgentBusy(r.Context(), user.ID, agent.ID)
+		created, cerr := s.store.CreateRun(r.Context(), user.ID, thread.ID, agent.ID)
+		if cerr != nil {
+			return
+		}
+		if cerr = s.store.SetMessageRun(r.Context(), user.ID, msg.ID, created.ID); cerr != nil {
+			return
+		}
+		run = created
+		if busy {
+			return
+		}
+		// Start runs before this response names the run. The row stays queued
+		// until the goroutine marks it streaming, and the event handler does
+		// not fail a queued run, so a reader in that gap cannot interrupt it.
+		s.runs.Start(runJob(user.ID, thread.ID, agent.ID, run.ID, msg.ID, msg.Body, thread.CastSessionID, s.priorTurns(r.Context(), user.ID, thread.ID, msg.ID)))
+	})
+	if run.ID == "" {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	if err := s.store.SetMessageRun(r.Context(), user.ID, msg.ID, run.ID); err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	// Start runs before this response names the run. The row stays queued
-	// until the goroutine marks it streaming, and the event handler does
-	// not fail a queued run, so a reader in that gap cannot interrupt it.
-	s.runs.Start(runJob(user.ID, thread.ID, agent.ID, run.ID, msg.ID, msg.Body, thread.CastSessionID, s.priorTurns(r.Context(), user.ID, thread.ID, msg.ID)))
 	if r.Header.Get("HX-Request") == "true" {
 		av := presentAgent(agent, true, userLocation(user.Timezone))
 		loc := userLocation(user.Timezone)
@@ -687,7 +698,10 @@ func presentMessages(msgs []store.Message, agent agentView, now time.Time, loc *
 	prev := ""
 	for _, m := range msgs {
 		day := dayLabel(m.CreatedAt, now, loc)
-		v := msgView{ID: m.ID, Author: m.AuthorKind, Body: m.Body, Stamp: clockLabel(m.CreatedAt, loc), Day: day, At: m.CreatedAt}
+		v := msgView{ID: m.ID, Author: m.AuthorKind, Body: m.Body, Stamp: clockLabel(m.CreatedAt, loc), Day: day, At: m.CreatedAt, Origin: m.Origin}
+		if m.Origin == "routine" && m.AuthorKind == "user" {
+			v.Prompt = true
+		}
 		if m.AuthorKind == "system" {
 			if card, ok := cliCard(m.Body, m.ID); ok {
 				v.HasCard = true

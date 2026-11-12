@@ -685,6 +685,9 @@ func (s *Server) presentApproval(row store.Approval, user store.User, csrf strin
 		}
 	case "denied":
 		view.Line = "Denied"
+		if row.DecidedBy == "routine" {
+			view.Line = "Denied by the routine setting"
+		}
 		if when := clockLabel(row.DecidedAt, loc); when != "" {
 			view.When = when
 		}
@@ -700,6 +703,7 @@ func (s *Server) presentApproval(row store.Approval, user store.User, csrf strin
 		}
 	}
 	view.At = row.CreatedAt
+	view.Extra, view.From = s.routineCardExtra(row, user)
 	return view
 }
 

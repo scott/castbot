@@ -45,6 +45,12 @@ type Fake struct {
 	ListErr error
 	// WakeWait blocks Wake until it is closed or the context ends.
 	WakeWait <-chan struct{}
+	// WakeErr is returned from Wake after WakeWait. The text is not stored.
+	WakeErr error
+	// ProbeErr is returned from Probe. The text is not stored.
+	ProbeErr error
+	// HealthErr is returned from Health. The text is not stored.
+	HealthErr error
 	// Approvals records permission/respond calls.
 	Approvals []ApprovalCall
 	// ApproveErr is returned from Approve after the call is recorded.
@@ -239,6 +245,13 @@ func (f *Fake) Wake(ctx context.Context, id string) (Machine, error) {
 			return Machine{}, ctx.Err()
 		}
 	}
+	f.mu.Lock()
+	wakeErr := f.WakeErr
+	f.mu.Unlock()
+	if wakeErr != nil {
+		f.note("wake")
+		return Machine{}, wakeErr
+	}
 	return f.set(id, "wake", "running")
 }
 
@@ -313,7 +326,10 @@ func (f *Fake) Probe(_ context.Context, endpoint, _ string) error {
 	f.resume(endpoint)
 	f.edge()
 	f.note("probe")
-	return nil
+	f.mu.Lock()
+	err := f.ProbeErr
+	f.mu.Unlock()
+	return err
 }
 
 // Stream counts an edge call and returns the scripted frames, then [DONE].
@@ -432,6 +448,9 @@ func (f *Fake) Health(_ context.Context, endpoint, _ string) (string, error) {
 	defer f.mu.Unlock()
 	f.resumeLocked(endpoint)
 	f.Calls = append(f.Calls, "health")
+	if f.HealthErr != nil {
+		return "", f.HealthErr
+	}
 	if f.healthCalls == nil {
 		f.healthCalls = map[string]int{}
 	}

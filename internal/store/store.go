@@ -57,6 +57,11 @@ type Store struct {
 	// process starts the wait again. Cleared once the reload is no longer wanted.
 	restartMu     sync.Mutex
 	restartWanted map[string]time.Time
+
+	// replaceDone releases work that waited on a machine replacement.
+	// Routines register it. Other slices can chain it.
+	replaceMu   sync.Mutex
+	replaceDone func(userID, agentID string)
 }
 
 // Options tunes a store. Zero values use the production defaults.
