@@ -54,7 +54,7 @@ func shootS07Start(t *testing.T, browser context.Context, dir string, width, hei
 	var ok bool
 	var last error
 	for time.Now().Before(deadline) {
-		last = chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){return location.pathname.indexOf("/machine")>=0&&document.querySelectorAll(".app").length===1&&document.querySelectorAll("header.ch-h").length===1&&(document.body.innerText||"").indexOf("Starting")>=0;})()`), &ok))
+		last = chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){return (location.pathname.indexOf("/machine")>=0||location.search.indexOf("panel=machine")>=0)&&document.querySelectorAll(".app").length===1&&document.querySelectorAll("header.ch-h").length===1&&(document.body.innerText||"").indexOf("Starting")>=0;})()`), &ok))
 		if last == nil && ok {
 			break
 		}

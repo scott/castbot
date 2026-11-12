@@ -238,6 +238,15 @@ func (s *Store) ListThreadApprovals(ctx context.Context, userID, threadID string
 	return s.listApprovals(ctx, approvalSelect+` WHERE a.user_id = ? AND r.thread_id = ? ORDER BY a.created_at, a.id`, userID, threadID)
 }
 
+// ListAgentApprovals returns the caller's approvals for one agent, oldest first.
+// A caller who does not own the agent gets ErrNotFound.
+func (s *Store) ListAgentApprovals(ctx context.Context, userID, agentID string) ([]Approval, error) {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return nil, err
+	}
+	return s.listApprovals(ctx, approvalSelect+` WHERE a.user_id = ? AND r.agent_id = ? ORDER BY a.created_at, a.id`, userID, agentID)
+}
+
 // ListPendingApprovals returns the caller's web prompts that are still open.
 func (s *Store) ListPendingApprovals(ctx context.Context, userID string) ([]Approval, error) {
 	if _, err := s.GetUser(ctx, userID); err != nil {

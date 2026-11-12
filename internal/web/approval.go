@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -456,19 +457,15 @@ func (s *Server) getApproval(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if r.PathValue("id") == "live" {
+		s.approvalsLive(w, r)
+		return
+	}
 	row, err := s.store.GetApproval(r.Context(), user.ID, r.PathValue("id"))
 	if s.missing(w, err) {
 		return
 	}
-	body, err := execTemplate("approvalCard", s.presentApproval(row, user, from(r).CSRF))
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(body))
+	http.Redirect(w, r, "/agents/"+url.PathEscape(row.AgentID)+"?panel=approvals#appr-"+row.ID, http.StatusFound)
 }
 
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, allow bool) {

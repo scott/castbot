@@ -66,7 +66,7 @@ func TestExportShowsTheTokenOnce(t *testing.T) {
 	if !strings.Contains(body, "CLI name") || !strings.Contains(body, ">atlas<") || !strings.Contains(body, "display_name") {
 		t.Fatal("cli name was not shown")
 	}
-	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if code != http.StatusOK || strings.Contains(body, token) {
 		t.Fatal("token leaked on a later page")
 	}
@@ -89,7 +89,7 @@ func TestExportShowsTheTokenOnce(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, "Revoked") || strings.Contains(body, token) {
 		t.Fatalf("revoke %d", code)
 	}
-	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/machine", "", ip, nil)
+	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if !strings.Contains(body, "Revoked") || strings.Contains(body, token) {
 		t.Fatal("revoke page")
 	}

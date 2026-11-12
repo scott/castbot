@@ -594,7 +594,7 @@ func (s *Server) runBar(r *http.Request, user store.User, agent store.Agent, row
 		On:      true,
 		Back:    "/agents/" + url.PathEscape(agent.ID),
 		Name:    name,
-		Machine: "/agents/" + url.PathEscape(agent.ID) + "/machine",
+		Machine: "/agents/" + url.PathEscape(agent.ID) + "?panel=machine",
 		RunNow:  "/agents/" + url.PathEscape(agent.ID) + "/routines/" + url.PathEscape(routine.ID) + "/run",
 	}
 	when := rowWhen(row, now, loc)

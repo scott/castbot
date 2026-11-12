@@ -1,9 +1,10 @@
 {{define "filesPane"}}
 <aside class="pane files s19pane" id="agent-panel" aria-label="{{.Agent.Name}} panel" role="complementary" data-low="{{if .LowSpace}}1{{end}}">
-<div class="pane-h s19ph"><a class="btn ghost pclose-ph ph-only" href="/agents/{{.Agent.ID}}" aria-label="Back to chat"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>Chat</a><span class="av {{.Agent.Color}} lg dt-only" aria-hidden="true">{{.Agent.Letter}}</span><div class="grow"><div class="nm">{{.Agent.Name}}</div><div class="sub">{{.Agent.Title}}{{if .Agent.Created}} · created {{.Agent.Created}}{{end}}</div></div><a class="btn ghost sm pclose dt-only" href="/agents/{{.Agent.ID}}" aria-label="Close agent panel (Esc)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>Close</a></div>
+<div class="pane-h s19ph"><a class="btn ghost pclose-ph ph-only" href="/agents/{{.Agent.ID}}" data-close-panel aria-label="Back to chat"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>Chat</a><span class="av {{.Agent.Color}} lg dt-only" aria-hidden="true">{{.Agent.Letter}}</span><div class="grow"><div class="nm">{{.Agent.Name}}</div><div class="sub">{{.Agent.Title}}{{if .Agent.Created}} · created {{.Agent.Created}}{{end}}</div></div><a class="btn ghost sm pclose dt-only" href="/agents/{{.Agent.ID}}" data-close-panel aria-label="Close agent panel (Esc)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>Close</a></div>
 {{template "panelTabs" .}}
 <div class="pbody" id="files-root" data-upload="/agents/{{.Agent.ID}}/uploads" data-agent="{{.Agent.Name}}" data-thread="{{.ThreadID}}" data-low="{{if .LowSpace}}1{{end}}">
 {{if .Files.Detail}}{{template "fileDetail" .}}{{else}}{{template "fileList" .}}{{end}}
+<p class="fineprint">Only {{.Agent.Name}}'s files.</p>
 <div class="fdrop" id="fdrop" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V9M7 13.5l5-5 5 5M5 4.5h14"/></svg><b>Drop to upload to {{.Agent.Name}}</b><span>Up to 32 MB per file. Goes to workspace/uploads.</span></div>
 </div>
 </aside>

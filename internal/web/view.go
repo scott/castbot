@@ -99,98 +99,114 @@ type sessView struct {
 }
 
 type page struct {
-	Title        string
-	Theme        string
-	CSRF         string
-	BodyClass    string
-	Page         string
-	Nav          string
-	ShowNav      bool
-	Pane         bool
-	Empty        bool
-	User         store.User
-	HasUser      bool
-	Initials     string
-	Sections     []sectionView
-	Approvals    int
-	Usage        string
-	Agent        agentView
-	HasAgent     bool
-	Messages     []msgView
-	Lives        []liveView
-	Tab          string
-	Notice       string
-	EditName     bool
-	Sessions     sessView
-	Email        string
-	Remember     bool
-	Code         string
-	Cells        []cellView
-	OTPBad       bool
-	Banner       bool
-	BannerLead   string
-	BannerRest   string
-	BannerIcon   string
-	Hint         string
-	Locked       bool
-	LockRFC      string
-	LockLabel    string
-	StubTitle    string
-	StubBody     string
-	FormError    string
-	AgentForm    agentForm
-	Machine      machineView
-	Replace      replaceView
-	StartMachine bool
-	CLIBlob      string
-	CLINote      string
-	CLIName      string
-	CLITokens    []cliTokView
-	Threads      []threadView
-	ThreadID     string
-	Cards        []cardView
-	Text         string
-	RoleLine     string
-	PasswordOn   string
-	Routines     routinePanel
-	Run          runBar
-	PendingTool  string
-	Vault        vaultView
-	Panel        string
-	LowSpace     bool
-	Files        filesPanel
-	SearchQuery  string
-	SearchAgents []agentView
-	FileHits     []fileHitView
+	Title            string
+	Theme            string
+	CSRF             string
+	BodyClass        string
+	Page             string
+	Nav              string
+	ShowNav          bool
+	Pane             bool
+	Empty            bool
+	User             store.User
+	HasUser          bool
+	Initials         string
+	Sections         []sectionView
+	Approvals        int
+	OtherApprovals   int
+	AgentCount       int
+	Usage            string
+	Glance           []glanceRow
+	ModelTitle       string
+	ModelSub         string
+	ApprovalsWaiting []cardView
+	ApprovalsEarlier []earlierRow
+	Toasts           []toastView
+	Agent            agentView
+	HasAgent         bool
+	Messages         []msgView
+	Lives            []liveView
+	Tab              string
+	Notice           string
+	EditName         bool
+	Sessions         sessView
+	Email            string
+	Remember         bool
+	Code             string
+	Cells            []cellView
+	OTPBad           bool
+	Banner           bool
+	BannerLead       string
+	BannerRest       string
+	BannerIcon       string
+	Hint             string
+	Locked           bool
+	LockRFC          string
+	LockLabel        string
+	StubTitle        string
+	StubBody         string
+	FormError        string
+	AgentForm        agentForm
+	Machine          machineView
+	Replace          replaceView
+	StartMachine     bool
+	CLIBlob          string
+	CLINote          string
+	CLIName          string
+	CLITokens        []cliTokView
+	Threads          []threadView
+	ThreadID         string
+	Cards            []cardView
+	Text             string
+	RoleLine         string
+	PasswordOn       string
+	Routines         routinePanel
+	Run              runBar
+	PendingTool      string
+	Vault            vaultView
+	Panel            string
+	LowSpace         bool
+	Files            filesPanel
+	SearchQuery      string
+	SearchAgents     []agentView
+	FileHits         []fileHitView
 }
 
 func finish(p page) page {
 	switch p.Page {
 	case "home":
-		p.BodyClass = "p-list"
-		p.ShowNav = true
-		p.Nav = "agents"
+		p.BodyClass = "p-list no-bnav"
+		p.ShowNav = false
+		p.Nav = ""
 	case "first":
 		p.BodyClass = "p-main"
 		p.ShowNav = true
 		p.Nav = "agents"
 	case "chat":
-		if p.Panel == "files" {
-			p.BodyClass = "p-chat p-files"
-			p.Pane = true
-		} else if p.Pane || p.Vault.Panel {
-			p.BodyClass = "p-pane"
-			if p.Vault.Panel {
-				p.BodyClass += " vault-open p-slide"
+		p.BodyClass = "p-chat"
+		if (p.Pane || p.Panel != "" || p.Vault.Panel) && !p.Run.On {
+			p.BodyClass += " p-slide"
+		}
+		if p.Panel == "files" || p.Files.View != "" {
+			p.BodyClass += " p-files"
+			if p.Files.Detail != nil {
+				p.BodyClass += " p-file"
 			}
-		} else {
-			p.BodyClass = "p-chat"
+		}
+		if p.Vault.Panel {
+			p.BodyClass += " vault-open"
+		}
+		if p.Run.On {
+			p.BodyClass += " p-run"
 		}
 		if p.Vault.Drawer {
 			p.BodyClass += " p-drawer"
 		}
 		if p.Vault.ModalOpen {
 			p.BodyClass += " p-modal"
+		}
+		if p.Replace.Confirm {
+			p.BodyClass += " p-confirm"
 		}
 		p.Tab = "chat"
 	case "secrets":
@@ -216,10 +232,17 @@ func finish(p page) page {
 		p.BodyClass = "p-auth"
 	}
 	if p.Routines.On {
-		p.BodyClass = "p-chat panel-routines"
+		if !strings.Contains(p.BodyClass, "p-chat") {
+			p.BodyClass = "p-chat " + p.BodyClass
+		}
+		if !strings.Contains(p.BodyClass, "panel-routines") {
+			p.BodyClass += " panel-routines"
+		}
 		if p.Run.On {
-			p.BodyClass += " p-run"
-		} else {
+			if !strings.Contains(p.BodyClass, "p-run") {
+				p.BodyClass += " p-run"
+			}
+		} else if !strings.Contains(p.BodyClass, "p-slide") {
 			p.BodyClass += " p-slide"
 		}
 	}
