@@ -168,6 +168,42 @@
       }
     });
 
+    document.addEventListener("change", function (ev) {
+      var t = ev.target;
+      if (t && t.name === "on" && t.form && t.form.querySelector(".tog")) {
+        t.form.submit();
+        return;
+      }
+      if (!t || t.name !== "preset" || !t.form) {
+        return;
+      }
+      var cron = t.form.querySelector("[name=cron]");
+      if (cron && t.getAttribute("data-cron")) {
+        cron.value = t.getAttribute("data-cron");
+        cron.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
+    document.addEventListener("input", function (ev) {
+      var t = ev.target;
+      if (!t || t.name !== "cron" || !t.form) {
+        return;
+      }
+      var custom = t.form.querySelector("[name=preset][value=custom]");
+      if (custom) {
+        custom.checked = true;
+      }
+    });
+    document.body.addEventListener("htmx:afterSwap", function () {
+      var prev = document.getElementById("routine-preview");
+      var save = document.getElementById("routine-save");
+      if (!prev || !save) {
+        return;
+      }
+      var bad = prev.classList.contains("dim");
+      save.disabled = bad;
+      save.setAttribute("aria-disabled", bad ? "true" : "false");
+    });
+
     var themeForm = document.getElementById("theme-form");
     if (themeForm) {
       themeForm.addEventListener("change", function () {

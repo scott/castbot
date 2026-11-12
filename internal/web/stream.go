@@ -393,9 +393,12 @@ func (s *Server) loadLives(r *http.Request, user store.User, threadID string, ag
 		}
 		switch row.Status {
 		case "queued", "streaming", "waiting_approval":
+			if row.RoutineRunID != "" && row.Status != "waiting_approval" {
+				view.Status = "Working"
+			}
 			out = append(out, view)
 		case "failed":
-			if row.ID != last.ID {
+			if row.ID != last.ID || row.RoutineRunID != "" {
 				continue
 			}
 			view.Failed = true

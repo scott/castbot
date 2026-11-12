@@ -334,7 +334,7 @@ func (s *Server) pickThread(r *http.Request, userID, agentID string) (store.Thre
 		if want != "" && t.ID == want {
 			return t, nil
 		}
-		if t.Kind != "cli" && dm.ID == "" {
+		if t.Kind == "dm" && dm.ID == "" {
 			dm = t
 		}
 	}

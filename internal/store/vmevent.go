@@ -25,6 +25,16 @@ const (
 	EventReplaceNoCopy   = "replace_no_copy"
 	EventReplaceDelete   = "replace_delete_pending"
 	EventReplaceCleanup  = "replace_cleanup_stopped"
+	// EventWakeFailed records a wake that did not reach a ready machine.
+	// The code is one of WAKE_TIMEOUT, PROVIDER_ERROR, or HEALTH_FAILED.
+	EventWakeFailed = "wake_failed"
+)
+
+// Wake failure codes. They are the only text stored for a wake_failed row.
+const (
+	WakeTimeout  = "WAKE_TIMEOUT"
+	WakeProvider = "PROVIDER_ERROR"
+	WakeHealth   = "HEALTH_FAILED"
 )
 
 // VMEvent is one durable machine timing row.
@@ -34,6 +44,7 @@ type VMEvent struct {
 	UserID     string
 	AgentID    string
 	Kind       string
+	Code       string
 	At         string
 	DurationMS int64
 }
@@ -63,9 +74,37 @@ func (s *Store) AddVMEventFor(ctx context.Context, userID, agentID, agentVMID, k
 	if duration < 0 {
 		duration = 0
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO vm_events(agent_vm_id, workspace_id, user_id, agent_id, kind, at, duration_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	_, err = s.db.ExecContext(ctx, `INSERT INTO vm_events(agent_vm_id, workspace_id, user_id, agent_id, kind, at, duration_ms, code)
+VALUES (?, ?, ?, ?, ?, ?, ?, '')`,
 		agentVMID, agent.WorkspaceID, userID, agentID, kind, s.stamp(s.Now()), duration.Milliseconds())
+	return err
+}
+
+// AddVMEventCode stores one wake_failed row with a short reason code.
+// The code is one of the wake constants. The provider's own text is not stored.
+func (s *Store) AddVMEventCode(ctx context.Context, userID, agentID, kind, code string, duration time.Duration) error {
+	switch code {
+	case WakeTimeout, WakeProvider, WakeHealth:
+	default:
+		return ErrInvalid
+	}
+	if kind != EventWakeFailed {
+		return ErrInvalid
+	}
+	vm, err := s.LiveVM(ctx, userID, agentID)
+	if err != nil {
+		return err
+	}
+	agent, err := s.GetAgent(ctx, userID, agentID)
+	if err != nil {
+		return err
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO vm_events(agent_vm_id, workspace_id, user_id, agent_id, kind, at, duration_ms, code)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		vm.ID, agent.WorkspaceID, userID, agentID, kind, s.stamp(s.Now()), duration.Milliseconds(), code)
 	return err
 }
 
@@ -79,7 +118,7 @@ func (s *Store) ListVMEvents(ctx context.Context, userID, agentID string) ([]VME
 	if n == 0 {
 		return nil, ErrNotFound
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, agent_vm_id, user_id, agent_id, kind, at, duration_ms
+	rows, err := s.db.QueryContext(ctx, `SELECT id, agent_vm_id, user_id, agent_id, kind, COALESCE(code, ''), at, duration_ms
 FROM vm_events WHERE user_id = ? AND agent_id = ? ORDER BY id`, userID, agentID)
 	if err != nil {
 		return nil, err
@@ -88,7 +127,7 @@ FROM vm_events WHERE user_id = ? AND agent_id = ? ORDER BY id`, userID, agentID)
 	var out []VMEvent
 	for rows.Next() {
 		var ev VMEvent
-		if err := rows.Scan(&ev.ID, &ev.AgentVMID, &ev.UserID, &ev.AgentID, &ev.Kind, &ev.At, &ev.DurationMS); err != nil {
+		if err := rows.Scan(&ev.ID, &ev.AgentVMID, &ev.UserID, &ev.AgentID, &ev.Kind, &ev.Code, &ev.At, &ev.DurationMS); err != nil {
 			return nil, err
 		}
 		out = append(out, ev)

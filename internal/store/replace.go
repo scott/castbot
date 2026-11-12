@@ -441,7 +441,11 @@ WHERE id = ? AND user_id = ? AND state = 'running' AND step NOT IN ('switched', 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM vm_replacement_tokens WHERE replacement_id = ? AND user_id = ?`, id, userID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.noteReplaceDone(userID, row.AgentID)
+	return nil
 }
 
 // MarkCleanupPending records a failed replace whose new machine still needs to be deleted.
@@ -477,7 +481,11 @@ WHERE id = ? AND user_id = ? AND state = 'running'`,
 	if _, err := tx.ExecContext(ctx, `DELETE FROM vm_replacement_tokens WHERE replacement_id = ? AND user_id = ?`, id, userID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.noteReplaceDone(userID, row.AgentID)
+	return nil
 }
 
 // ClearCleanup marks a leftover machine as gone.
@@ -680,19 +688,36 @@ VALUES (?, ?, ?, ?, ?, ?, 0)`,
 }
 
 // FinishReplacement marks the replace succeeded. deletePending stays set when the old machine is still up.
+// The agent id is read before the commit. A failed read leaves the lock in place, and the hook runs only after the commit.
 func (s *Store) FinishReplacement(ctx context.Context, userID, id string, deletePending bool) error {
 	pending := 0
 	if deletePending {
 		pending = 1
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var agentID string
+	if err := tx.QueryRowContext(ctx, `SELECT agent_id FROM vm_replacements WHERE id = ? AND user_id = ? AND state = 'running'`, id, userID).Scan(&agentID); err != nil {
+		return scanErr(err)
+	}
 	stamp := s.stamp(s.Now())
-	res, err := s.db.ExecContext(ctx, `UPDATE vm_replacements SET state = 'succeeded', step = 'done', delete_pending = ?, finished_at = ?, updated_at = ?
+	res, err := tx.ExecContext(ctx, `UPDATE vm_replacements SET state = 'succeeded', step = 'done', delete_pending = ?, finished_at = ?, updated_at = ?
 WHERE id = ? AND user_id = ? AND state = 'running'`,
 		pending, stamp, stamp, id, userID)
 	if err != nil {
 		return err
 	}
-	return rowsAffected(res)
+	if err := rowsAffected(res); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.noteReplaceDone(userID, agentID)
+	return nil
 }
 
 // ClearDeletePending clears the retry mark after the old machine is gone.

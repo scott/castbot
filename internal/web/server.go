@@ -93,6 +93,9 @@ type Server struct {
 	pauseMu     sync.Mutex
 	pauseGen    map[string]int64
 	sweepPause  atomic.Bool
+	wakeFor     time.Duration
+	gateMu      sync.Mutex
+	gates       map[string]*sync.Mutex
 }
 
 // pauseSweeps stops the background approval ticker. Tests call the follow-up
@@ -114,8 +117,53 @@ func New(st *store.Store, key []byte, client runtime.Client) *Server {
 	s := &Server{store: st, key: key, client: client, runs: run.New(ctx, st, client), cancel: cancel, base: ctx, approvalFor: approvalWaitFromEnv()}
 	s.runs.SetOpen(s.openRun)
 	s.runs.SetApprovalTimeout(s.approvalFor)
+	s.store.SetReplaceDone(func(userID, agentID string) {
+		s.promoteAgent(context.Background(), userID, agentID)
+	})
+	s.runs.SetAfterRun(func(job run.Job, status string) {
+		s.settleRoutine(job, status)
+		s.promoteAgent(context.Background(), job.UserID, job.AgentID)
+	})
+	s.runs.SetOnPermission(s.denyRoutinePermission)
 	go s.expireLoop()
+	go s.schedulerLoop()
 	return s
+}
+
+// SetWakeBudget caps how long a routine waits for Wake and Probe.
+// Tests use a short budget. The page still says 90 s.
+func (s *Server) SetWakeBudget(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.wakeFor = d
+	s.mu.Unlock()
+}
+
+func (s *Server) wakeBudget() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.wakeFor > 0 {
+		return s.wakeFor
+	}
+	return 90 * time.Second
+}
+
+func (s *Server) withAgent(id string, fn func()) {
+	s.gateMu.Lock()
+	if s.gates == nil {
+		s.gates = map[string]*sync.Mutex{}
+	}
+	mu := s.gates[id]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		s.gates[id] = mu
+	}
+	s.gateMu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
+	fn()
 }
 
 // SetHost attaches a machine host. image is the one shared runtime image.
@@ -267,7 +315,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /new-agent", s.createAgent)
 	mux.HandleFunc("POST /new-agent/import", s.importNew)
 	mux.HandleFunc("GET /approvals", s.workspacePage)
-	mux.HandleFunc("GET /routines", s.workspacePage)
+	mux.HandleFunc("GET /routines", s.routinesHome)
 	mux.HandleFunc("GET /files", s.workspacePage)
 	mux.HandleFunc("GET /usage", s.workspacePage)
 
@@ -280,7 +328,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /agents/{id}/machine/card", s.machineCard)
 	mux.HandleFunc("GET /agents/{id}/machine/replace", s.confirmReplace)
 	mux.HandleFunc("POST /agents/{id}/machine/replace", s.postReplace)
-	mux.HandleFunc("GET /agents/{id}/routines", s.agentTab)
+	mux.HandleFunc("GET /agents/{id}/routines", s.routinesRedirect)
+	mux.HandleFunc("GET /agents/{id}/routines/preview", s.routinePreview)
+	mux.HandleFunc("POST /agents/{id}/routines", s.saveRoutine)
+	mux.HandleFunc("POST /agents/{id}/routines/{routine}/toggle", s.toggleRoutine)
+	mux.HandleFunc("POST /agents/{id}/routines/{routine}/run", s.runRoutine)
+	mux.HandleFunc("POST /agents/{id}/routines/{routine}/delete", s.deleteRoutine)
 	mux.HandleFunc("GET /agents/{id}/files", s.agentTab)
 	mux.HandleFunc("POST /agents/{id}", s.updateAgent)
 	mux.HandleFunc("POST /agents/{id}/machine", s.provisionMachine)

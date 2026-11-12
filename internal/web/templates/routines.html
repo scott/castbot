@@ -1,0 +1,66 @@
+{{define "routinesPane"}}
+<aside class="pane routines" aria-label="{{.Agent.Name}} routines"><div class="grabber" aria-hidden="true"></div>
+<div class="pane-h"><span class="av {{.Agent.Color}} lg" aria-hidden="true">{{.Agent.Letter}}</span><div class="grow"><div class="nm">{{.Agent.Name}}</div><div class="sub">{{.Agent.Title}}{{if .Agent.Created}} · created {{.Agent.Created}}{{end}}</div></div><a class="btn ghost sm pclose dt-only" href="/agents/{{.Agent.ID}}" aria-label="Close agent panel (Esc)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>Close</a></div>
+<nav class="ptabs" aria-label="{{.Agent.Name}} panel"><a href="/agents/{{.Agent.ID}}?pane=1"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/></svg><span>Agent</span></a><a href="/agents/{{.Agent.ID}}/machine"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12 15h5"/></svg><span>Machine</span></a><a href="#secrets"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/></svg><span>Secrets</span></a><a href="/approvals"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span>Approvals</span></a><a href="/agents/{{.Agent.ID}}?panel=routines" class="on" aria-current="page"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span>Routines</span></a><a href="/agents/{{.Agent.ID}}/files"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.5h-17z"/></svg><span>Files</span></a></nav>
+<div class="pbody">
+{{if eq .Routines.Mode "edit"}}{{template "routineEditor" .}}{{else if eq .Routines.Mode "detail"}}{{template "routineDetail" .}}{{else if eq .Routines.Mode "empty"}}{{template "routineEmpty" .}}{{else}}{{template "routineList" .}}{{end}}
+</div>
+{{if eq .Routines.Mode "edit"}}<div class="pfoot"><span class="note">Each run wakes {{.Agent.Name}}'s machine if it is paused.</span><a class="btn" href="{{.Routines.Editor.Back}}">Cancel</a><button class="btn pri" id="routine-save" type="submit" form="routine-editor"{{if .Routines.Editor.SaveOff}} disabled aria-disabled="true"{{end}}>{{.Routines.Editor.Save}}</button></div>{{end}}
+</aside>
+{{end}}
+
+{{define "routineList"}}
+<section class="psec"><div class="psec-h"><h4>Routines</h4><span class="side">{{.Routines.Count}}</span><a class="btn sm pri" href="/agents/{{.Agent.ID}}?panel=routines&amp;routine=new"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New routine</a></div>
+{{range .Routines.Rows}}<div class="rrow{{if .Off}} off{{end}}"><a class="grow rmain" href="{{.Href}}"><span class="t1">{{.Name}}</span><span class="t2">{{.Schedule}}</span><span class="t2{{if .NextClass}} {{.NextClass}}{{end}}">{{.Next}}</span>{{if .Pill}}<span class="rst {{.PillClass}}">{{.Pill}}</span>{{end}}</a><form method="post" action="{{.Toggle}}"><input type="hidden" name="csrf" value="{{$.CSRF}}"><label class="tog"><input class="vh" type="checkbox" name="on" value="1"{{if .On}} checked{{end}} aria-label="{{.Name}} on"><span class="track"></span></label><input type="hidden" name="on" value="0"></form></div>{{end}}
+</section>
+<section class="psec"><p class="fineprint">{{.Routines.Fine}}</p></section>
+{{end}}
+
+{{define "routineEmpty"}}
+<section class="psec empty-r"><h3>{{.Routines.EmptyLead}}</h3><p>{{.Routines.EmptyBody}}</p><a class="btn pri" href="/agents/{{.Agent.ID}}?panel=routines&amp;routine=new">New routine</a><h4>Ideas</h4>{{range .Routines.Ideas}}<a class="sug" href="{{.Href}}"><b>{{.Name}}</b>{{.Sub}}</a>{{end}}</section>
+{{end}}
+
+{{define "routineEditor"}}
+<form class="redit" id="routine-editor" method="post" action="{{.Routines.Editor.Action}}">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+{{if .Routines.Editor.ID}}<input type="hidden" name="id" value="{{.Routines.Editor.ID}}">{{end}}
+<a class="link back" href="{{.Routines.Editor.Back}}">&lt; Routines</a>
+<h3>{{.Routines.Editor.Title}}</h3>
+{{if .Routines.Editor.Err}}<div class="ferr" role="alert">{{.Routines.Editor.Err}}</div>{{end}}
+<label class="fld">Name<input name="name" maxlength="80" value="{{.Routines.Editor.Name}}" required></label>
+<fieldset class="fld"><legend>Repeat</legend><div class="presets">{{range .Routines.Editor.Presets}}<label class="pchip"><input type="radio" name="preset" value="{{.ID}}" data-cron="{{.Cron}}"{{if .On}} checked{{end}}>{{.Label}}</label>{{end}}</div></fieldset>
+<label class="fld">Schedule<span class="hint">cron, edit to customize</span><input name="cron" value="{{.Routines.Editor.Cron}}" autocomplete="off" hx-get="{{.Routines.Editor.PreviewURL}}" hx-trigger="keyup changed delay:300ms, change" hx-target="#routine-preview" hx-swap="outerHTML" hx-include="[name='tz']"><span class="parts"><span>minute</span><span>hour</span><span>day</span><span>month</span><span>weekday</span></span></label>
+{{template "routinePreview" .Routines.Editor.Preview}}
+<label class="fld">Time zone<select name="tz" hx-get="{{.Routines.Editor.PreviewURL}}" hx-trigger="change" hx-target="#routine-preview" hx-swap="outerHTML" hx-include="[name='cron']">{{range .Routines.Editor.Zones}}<option value="{{.Name}}"{{if eq $.Routines.Editor.Zone .Name}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{if .Routines.Editor.Help}}<span class="hint">{{.Routines.Editor.Help}}</span>{{end}}</label>
+<label class="fld">What should {{.Agent.Name}} do?<textarea name="prompt" maxlength="8000" rows="5">{{.Routines.Editor.Prompt}}</textarea></label>
+<fieldset class="fld"><legend>If a run is missed</legend><div class="radio-list one"><label class="ropt"><input type="radio" name="missed" value="once"{{if .Routines.Editor.MissedOnce}} checked{{end}}><span class="grow"><b>Run it once when castbot is back</b><span class="t2">If castbot was offline at run time, it runs one catch-up, never one per missed time.</span></span></label><label class="ropt"><input type="radio" name="missed" value="skip"{{if .Routines.Editor.MissedSkip}} checked{{end}}><span class="grow"><b>Skip it</b><span class="t2">Wait for the next scheduled time. The missed run is listed as skipped.</span></span></label></div></fieldset>
+<fieldset class="fld"><legend>If a step needs approval</legend><div class="radio-list one"><label class="ropt"><input type="radio" name="approval" value="wait"{{if .Routines.Editor.ApprovalWait}} checked{{end}}><span class="grow"><b>Wait for me, then deny after 10 min</b><span class="t2">The run holds at the card in its thread. {{$.Agent.Name}} shows a shield in the sidebar.</span></span></label><label class="ropt"><input type="radio" name="approval" value="deny"{{if .Routines.Editor.ApprovalDeny}} checked{{end}}><span class="grow"><b>Deny right away and continue</b><span class="t2">{{$.Agent.Name}} is told no and finishes without it.</span></span></label></div></fieldset>
+</form>
+{{end}}
+
+{{define "routinePreview"}}
+<div id="routine-preview" class="cron-prev{{if not .OK}} dim{{end}}"><div class="say">{{if .OK}}{{.Say}}{{else}}No preview until the schedule is valid{{end}}</div>{{if .Next}}<div class="next">{{.Next}}</div>{{end}}{{if not .OK}}<div class="ferr" role="alert">{{.Err}}</div>{{end}}</div>
+{{end}}
+
+{{define "routineDetail"}}
+{{if .Routines.Detail.Note}}<div class="pnote {{.Routines.Detail.NoteClass}}"><span>{{.Routines.Detail.Note}}</span></div>{{end}}
+<section class="psec"><a class="link back" href="/agents/{{.Agent.ID}}?panel=routines">&lt; Routines</a>
+<div class="rhead"><div class="grow"><div class="t1">{{.Routines.Detail.Name}}</div><div class="t2">{{.Routines.Detail.When}}</div></div><form method="post" action="{{.Routines.Detail.Toggle}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><label class="tog"><input class="vh" type="checkbox" name="on" value="1"{{if .Routines.Detail.On}} checked{{end}} aria-label="{{.Routines.Detail.Name}} on"><span class="track"></span></label><input type="hidden" name="on" value="0"></form></div>
+<dl class="kv"><div><dt>Next run</dt><dd>{{.Routines.Detail.Next}}</dd></div><div><dt>If missed</dt><dd>{{.Routines.Detail.Missed}}</dd></div><div><dt>Approvals</dt><dd>{{.Routines.Detail.Approval}}</dd></div><div><dt>Runs</dt><dd>{{.Routines.Detail.Runs}}</dd></div></dl>
+<p class="prompt">{{.Routines.Detail.Prompt}}</p>
+<div class="row">
+<form method="post" action="{{.Routines.Detail.RunHref}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Routines.Detail.RunNowOff}} disabled title="{{.Routines.Detail.RunNowWhy}}"{{end}}>Run now</button></form>
+<a class="btn sm" href="{{.Routines.Detail.EditHref}}">Edit</a>
+<a class="btn sm danger-ghost" href="{{.Routines.Detail.DeleteHref}}">Delete</a>
+</div>
+</section>
+<section class="psec"><div class="psec-h"><h4>Runs</h4><span class="side">Each run is its own thread</span>{{if .Routines.Detail.SeeAll}}<a class="link" href="{{.Routines.Detail.AllHref}}">See all</a>{{end}}</div>
+<div class="runs">{{range .Routines.Detail.History}}{{if .Href}}<a class="runrow{{if .Current}} cur{{end}}" href="{{.Href}}">{{else}}<div class="runrow{{if .Current}} cur{{end}}">{{end}}<span class="rst {{.Class}}">{{.Pill}}</span><span class="grow"><span class="t1">{{.When}}</span><span class="t2">{{.Detail}}</span></span>{{if .Href}}</a>{{else}}</div>{{end}}{{end}}</div>
+</section>
+{{range .Routines.Detail.Siblings}}<section class="psec"><h4>{{.Heading}}</h4><div class="pnote late"><span>{{.Note}}</span></div><div class="runs">{{range .History}}<div class="runrow"><span class="rst {{.Class}}">{{.Pill}}</span><span class="grow"><span class="t1">{{.When}}</span><span class="t2">{{.Detail}}</span></span></div>{{end}}</div></section>{{end}}
+{{end}}
+
+{{define "routineDelete"}}
+<div class="scrim"></div>
+<div class="modal" role="dialog" aria-labelledby="del-title"><h3 id="del-title">Delete {{.Routines.Delete.Name}}?</h3><p>Future runs stop now. This cannot be undone.</p><ul><li>The schedule and prompt are deleted.</li><li>Past run threads stay in {{.Routines.Delete.Agent}}'s chat, labeled "deleted routine".</li><li>A run in progress finishes first.</li></ul><div class="row"><a class="btn" href="{{.Routines.Delete.Back}}">Cancel</a><form method="post" action="{{.Routines.Delete.Action}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn danger" type="submit">Delete routine</button></form></div></div>
+{{end}}

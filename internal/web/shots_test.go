@@ -199,6 +199,23 @@ func TestShots(t *testing.T) {
 			}
 		}
 	}
+	dir09 := filepath.Join("..", "..", "docs", "evidence", "S09")
+	if err := os.MkdirAll(dir09, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, theme := range []string{"dark", "light"} {
+		for _, vp := range []struct {
+			w, h int
+			name string
+		}{{1280, 800, "1280"}, {390, 844, "390"}} {
+			for _, kind := range []string{"11a", "11a2", "11b", "11b2", "11c", "11d", "11d2", "11d3", "11d4", "11e", "11f", "11g"} {
+				kind := kind
+				t.Run("s09-"+kind+"-"+theme+"-"+vp.name, func(t *testing.T) {
+					shootRoutine(t, browserCtx, dir09, vp.w, vp.h, theme, vp.name, kind)
+				})
+			}
+		}
+	}
 }
 
 // shootDecisionBar clicks Approve on a live card and checks the waiting bar
