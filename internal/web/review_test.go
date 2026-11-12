@@ -881,6 +881,50 @@ func TestQueuedRunIsNotInterruptedBeforeStart(t *testing.T) {
 	}
 }
 
+func TestWaitingApprovalIsNotInterruptedByThePage(t *testing.T) {
+	h := newHarness(t)
+	ip := "203.0.113.245:9"
+	user, secret := h.account("held@example.com", "Held", "correct-horse-1")
+	h.login("held@example.com", "correct-horse-1", secret, ip, false)
+	agent := h.newAgent(ip, "Atlas")
+	threads, err := h.st.ListThreadsByAgent(context.Background(), user.ID, agent.ID)
+	if err != nil || len(threads) == 0 {
+		t.Fatal(err)
+	}
+	row, err := h.st.CreateRun(context.Background(), user.ID, threads[0].ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"id":"req-held","tool":"git_push","arguments":{"command":"ls demo"}}`)
+	if _, err := h.st.RecordPermission(context.Background(), user.ID, row.ID, raw, h.st.Now().Add(time.Hour), 1); err != nil {
+		t.Fatal(err)
+	}
+	live := httptest.NewServer(h.srv.Handler())
+	t.Cleanup(live.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, live.URL+"/runs/"+row.ID+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range h.cookieList() {
+		req.AddCookie(c)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+	got, err := h.st.GetRun(context.Background(), user.ID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "waiting_approval" || got.Error != "" {
+		t.Fatalf("approval run became %s %q", got.Status, got.Error)
+	}
+}
+
 type seqClient struct {
 	errs []error
 	next runtime.Client

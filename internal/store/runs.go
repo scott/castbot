@@ -361,7 +361,7 @@ func (s *Store) RetryRun(ctx context.Context, userID, runID string) (Run, Messag
 
 // FailAbandoned marks every queued, streaming, and waiting_approval run failed
 // and writes the error event in the same transaction. Startup uses it so a
-// restarted process does not leave a bubble on Replying.
+// restarted process does not leave a bubble on the activity row.
 func (s *Store) FailAbandoned(ctx context.Context, message string) error {
 	message = strings.TrimSpace(message)
 	if message == "" || len(message) > 400 {

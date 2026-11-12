@@ -200,6 +200,70 @@
       });
     }
 
+    document.addEventListener("click", function (ev) {
+      var t = ev.target;
+      if (!t || !t.closest) return;
+      var codeBtn = t.closest("[data-copy='code']");
+      if (codeBtn) {
+        var fig = codeBtn.closest("figure");
+        var pre = fig && fig.querySelector("pre");
+        if (pre) copyText(pre.innerText, codeBtn);
+        return;
+      }
+      var msgBtn = t.closest("[aria-label='Copy message as markdown']");
+      if (msgBtn && msgBtn.getAttribute("data-md")) {
+        copyText(decodeMd(msgBtn.getAttribute("data-md")), msgBtn);
+      }
+    });
+
+    function decodeMd(value) {
+      try {
+        var bin = atob(value);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return new TextDecoder().decode(bytes);
+      } catch (e) {
+        return "";
+      }
+    }
+    function copyText(text, btn) {
+      var finish = function () { announceCopy(btn); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(finish, function () { fallbackCopy(text); finish(); });
+      } else {
+        fallbackCopy(text);
+        finish();
+      }
+    }
+    function fallbackCopy(text) {
+      var area = document.createElement("textarea");
+      area.value = text;
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(area);
+    }
+    function announceCopy(btn) {
+      var live = document.getElementById("copy-status");
+      if (live) live.textContent = "Copied";
+      if (!btn) return;
+      btn.classList.add("done");
+      var svg = btn.querySelector("svg");
+      var label = btn.querySelector("span");
+      var old = svg ? svg.innerHTML : "";
+      var oldLabel = label ? label.textContent : "";
+      if (svg) {
+        svg.innerHTML = '<path d="M4.5 12.5l5 5L19.5 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
+      }
+      if (label && oldLabel === "Copy") label.textContent = "Copied";
+      window.setTimeout(function () {
+        btn.classList.remove("done");
+        if (svg) svg.innerHTML = old;
+        if (label && oldLabel) label.textContent = oldLabel;
+        if (live) live.textContent = "";
+      }, 1500);
+    }
+
     var themeForm = document.getElementById("theme-form");
     if (themeForm) {
       themeForm.addEventListener("change", function () {

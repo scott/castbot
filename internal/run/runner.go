@@ -202,6 +202,25 @@ func (r *Runner) runLimit() time.Duration {
 // Done is closed when the runner context is canceled.
 func (r *Runner) Done() <-chan struct{} { return r.ctx.Done() }
 
+// PinWatch marks a run as in progress without starting work.
+// Screenshots use it so a seeded stream is not abandoned.
+// The returned function clears the mark.
+func (r *Runner) PinWatch(runID, agentID string) func() {
+	r.mu.Lock()
+	if r.active == nil {
+		r.active = map[string]string{}
+	}
+	r.active[runID] = agentID
+	r.mu.Unlock()
+	return func() {
+		r.mu.Lock()
+		if r.active[runID] == agentID {
+			delete(r.active, runID)
+		}
+		r.mu.Unlock()
+	}
+}
+
 // Watching reports whether this process still has a goroutine for the run.
 func (r *Runner) Watching(id string) bool {
 	r.mu.Lock()

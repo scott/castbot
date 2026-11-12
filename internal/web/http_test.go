@@ -413,7 +413,7 @@ func TestCSRFThemeEchoAndSessions(t *testing.T) {
 	}
 	agent := h.newAgent(ip, "Echo")
 	code, body, _ = h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {"hello there"}}), ip, map[string]string{"HX-Request": "true"})
-	if code != 200 || !strings.Contains(body, `sse-connect="/runs/`) || !strings.Contains(body, "hello there") || !strings.Contains(body, "Replying") {
+	if code != 200 || !strings.Contains(body, `sse-connect="/runs/`) || !strings.Contains(body, "hello there") || !strings.Contains(body, `class="act"`) || strings.Contains(body, ">Replying<") {
 		t.Fatalf("echo %d %s", code, body)
 	}
 	body = h.poll(ip, "/agents/"+agent.ID, "You said: hello there")

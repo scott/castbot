@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html/template"
 	"net/http"
 	"net/url"
 	"os"
@@ -812,22 +813,32 @@ func (s *Server) approvalChrome(ctx context.Context, user store.User, agentID, r
 	if err != nil {
 		return "", err
 	}
-	tail := "Replying"
+	act := ""
 	if runID != "" {
-		rows, err := s.store.ListRunApprovals(ctx, user.ID, runID)
-		if err != nil {
-			return "", err
-		}
-		for _, row := range rows {
-			if row.Status == "pending" && row.Origin == "web" {
-				tail = "Waiting for approval"
-				break
+		if runRow, err := s.store.GetRun(ctx, user.ID, runID); err == nil && !runTerminal(runRow.Status) {
+			events, _ := s.store.ListRunEvents(ctx, user.ID, runID, 0)
+			text, _, _, fact, _ := foldRun(events)
+			pending := false
+			if rows, err := s.store.ListRunApprovals(ctx, user.ID, runID); err == nil {
+				for _, row := range rows {
+					if row.Status == "pending" {
+						pending = true
+						break
+					}
+				}
 			}
+			out := s.activityFor(ctx, user.ID, runRow, text, fact, pending)
+			elapsed := ""
+			if started, perr := time.Parse(time.RFC3339, runRow.StartedAt); perr == nil {
+				elapsed, _ = formatElapsed(s.store.Now().Sub(started))
+			}
+			slot := actSlotHTML(runID, actRowHTML(out, elapsed), out.HideThread)
+			act = strings.Replace(slot, `class="act-hold"`, `class="act-hold" hx-swap-oob="outerHTML"`, 1)
 		}
 	}
 	return execTemplate("approvalChrome", chromeView{
 		AgentID: agent.ID, RunID: runID, AgentApprovals: agent.Approvals,
-		Total: total, Unread: agent.Unread, Tail: tail,
+		Total: total, Unread: agent.Unread, Act: template.HTML(act),
 	})
 }
 

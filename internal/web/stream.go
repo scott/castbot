@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/scott/castbot/internal/md"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
@@ -73,7 +74,8 @@ func (s *Server) retryRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Header.Get("HX-Request") == "true" {
 		av := presentAgent(agent, true, userLocation(user.Timezone))
-		body, err := execTemplate("pending", liveView{RunID: next.ID, Color: av.Color, Letter: av.Letter, CSRF: from(r).CSRF})
+		live := s.paintLive(r.Context(), user, next, av, from(r).CSRF)
+		body, err := execTemplate("pending", live)
 		if err != nil {
 			http.Error(w, "Error", http.StatusInternalServerError)
 			return
@@ -104,7 +106,8 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	flush := func() { _ = rc.Flush() }
 	flush()
 
-	after := streamCursor(r)
+	cur := streamCursor(r)
+	after := cur.listAfter()
 	signals, unsub := s.runs.Hub.Subscribe(runRow.ID)
 	defer unsub()
 	sentTerminal := false
@@ -139,18 +142,35 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			flush()
 		}
+		delivered := false
 		for _, ev := range events {
-			if err := s.writeRunEvent(r.Context(), w, user, runRow, ev, from(r).CSRF); err != nil {
+			n, err := s.writeRunEvent(r.Context(), w, user, runRow, ev, from(r).CSRF, cur.skip(ev.Seq))
+			if err != nil {
 				return
 			}
 			after = ev.Seq
-			flush()
-			if ev.Kind == "done" || ev.Kind == "error" {
+			if n > 0 {
+				delivered = true
+				flush()
+			}
+			if n > 0 && (ev.Kind == "done" || ev.Kind == "error") {
 				sentTerminal = true
 			}
 		}
 		if sentTerminal {
-			_ = writeSSE(w, 0, "stop", "")
+			_ = writeSSE(w, "", "stop", "")
+			flush()
+			return
+		}
+		// A plain Last-Event-ID already consumed a one-frame terminal event.
+		// The list is not empty, but nothing new was written, so resend the
+		// closing card the same way a cursor past the end does.
+		if !delivered && batchTerminal(events) {
+			if err := s.writeCaughtUp(r.Context(), w, user, runRow, from(r).CSRF); err != nil {
+				return
+			}
+			flush()
+			_ = writeSSE(w, "", "stop", "")
 			flush()
 			return
 		}
@@ -177,15 +197,16 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flush()
-			_ = writeSSE(w, 0, "stop", "")
+			_ = writeSSE(w, "", "stop", "")
 			flush()
 			return
 		}
 		// A queued run is waiting for its goroutine. Start tracks the run
 		// before the response that names it, but a page read can still see
 		// the row in that gap. Failing it here would interrupt a brand-new
-		// run. A streaming run whose goroutine is gone still fails.
-		if !runTerminal(current.Status) && current.Status != "queued" && !s.runs.Watching(current.ID) {
+		// run. A waiting approval is the user's decision, not a dead stream.
+		// A streaming run whose goroutine is gone still fails.
+		if !runTerminal(current.Status) && current.Status != "queued" && current.Status != "waiting_approval" && !s.runs.Watching(current.ID) {
 			if orphaned {
 				return
 			}
@@ -214,27 +235,78 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func streamCursor(r *http.Request) int {
-	after := 0
-	if n, ok := parseSeq(r.URL.Query().Get("after")); ok && n > after {
-		after = n
-	}
-	if n, ok := parseSeq(r.Header.Get("Last-Event-ID")); ok && n > after {
-		after = n
-	}
-	return after
+// resumePos is how far the browser got inside one store sequence.
+// A text event is several frames (text, tail, each closed block, tools, act)
+// that share one store seq. A plain query after=N means the page already
+// painted every frame of N. A Last-Event-ID of N means only frame 0 arrived.
+// A dotted id N.k means frame k arrived, so later frames of N must be resent.
+type resumePos struct {
+	seq   int
+	part  int
+	whole bool
 }
 
-func parseSeq(raw string) (int, bool) {
+func streamCursor(r *http.Request) resumePos {
+	q, qOK := parseResume(r.URL.Query().Get("after"), true)
+	h, hOK := parseResume(r.Header.Get("Last-Event-ID"), false)
+	if !qOK {
+		return h
+	}
+	if !hOK || !h.after(q) {
+		return q
+	}
+	return h
+}
+
+func parseResume(raw string, query bool) (resumePos, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return 0, false
+		return resumePos{}, false
+	}
+	if i := strings.IndexByte(raw, '.'); i >= 0 {
+		seq, err1 := strconv.Atoi(raw[:i])
+		part, err2 := strconv.Atoi(raw[i+1:])
+		if err1 != nil || err2 != nil || seq <= 0 || part < 0 || strings.Contains(raw[i+1:], ".") {
+			return resumePos{}, false
+		}
+		return resumePos{seq: seq, part: part}, true
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n <= 0 {
-		return 0, false
+		return resumePos{}, false
 	}
-	return n, true
+	if query {
+		return resumePos{seq: n, whole: true}, true
+	}
+	return resumePos{seq: n, part: 0}, true
+}
+
+func (p resumePos) after(o resumePos) bool {
+	if p.seq != o.seq {
+		return p.seq > o.seq
+	}
+	if p.whole != o.whole {
+		return p.whole
+	}
+	return p.part > o.part
+}
+
+func (p resumePos) listAfter() int {
+	if p.seq <= 0 {
+		return 0
+	}
+	if p.whole {
+		return p.seq
+	}
+	return p.seq - 1
+}
+
+// skip is the last frame index already delivered for this seq, or -1 to send all.
+func (p resumePos) skip(seq int) int {
+	if !p.whole && p.seq == seq {
+		return p.part
+	}
+	return -1
 }
 
 func runTerminal(status string) bool {
@@ -260,51 +332,73 @@ func (s *Server) writeCaughtUp(ctx context.Context, w http.ResponseWriter, user 
 	if last == nil {
 		return nil
 	}
-	return s.writeRunEvent(ctx, w, user, runRow, *last, csrf)
+	_, err = s.writeRunEvent(ctx, w, user, runRow, *last, csrf, -1)
+	return err
 }
 
-func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, ev store.RunEvent, csrf string) error {
+func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, ev store.RunEvent, csrf string, fromPart int) (n int, err error) {
+	fw := &frameWriter{w: w, seq: ev.Seq, from: fromPart}
+	defer func() { n = fw.sent }()
 	switch ev.Kind {
 	case "text":
 		var payload struct {
 			Text string `json:"text"`
 		}
-		if err := json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
-			return err
+		if err = json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
+			return
 		}
-		return writeSSE(w, ev.Seq, "text", html.EscapeString(payload.Text))
+		if err = fw.write("text", html.EscapeString(payload.Text)); err != nil {
+			return
+		}
+		err = s.writeMarkdownProgress(ctx, fw, user, runRow, ev, csrf)
+		return
+	case "tool":
+		if err = fw.write("note", ""); err != nil {
+			return
+		}
+		err = s.writeMarkdownProgress(ctx, fw, user, runRow, ev, csrf)
+		return
 	case "error":
 		var payload struct {
 			Message string `json:"message"`
 		}
-		if err := json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
-			return err
+		if err = json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
+			return
 		}
-		body, err := execTemplate("runError", liveView{RunID: runRow.ID, Error: payload.Message, CSRF: csrf})
+		var body string
+		body, err = execTemplate("runError", s.calmLive(ctx, user, runRow, payload.Message, csrf))
 		if err != nil {
-			return err
+			return
 		}
-		return writeSSE(w, ev.Seq, "fail", body)
+		body += `<div id="tail-` + html.EscapeString(runRow.ID) + `" class="act-hold" hidden hx-swap-oob="outerHTML"></div>`
+		body += s.sideOOB(ctx, user, runRow.AgentID)
+		clearDwell(runRow.ID)
+		err = fw.write("fail", body)
+		return
 	case "done":
 		var payload struct {
 			MessageID string `json:"messageId"`
 		}
-		if err := json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
-			return err
+		if err = json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
+			return
 		}
-		return s.writeDone(ctx, w, user, runRow, ev.Seq, payload.MessageID, csrf)
+		err = s.writeDone(ctx, fw, user, runRow, payload.MessageID, csrf)
+		return
 	case "permission":
-		body, err := s.cardsHTML(ctx, user, runRow.ID, csrf)
+		var body string
+		body, err = s.cardsHTML(ctx, user, runRow.ID, csrf)
 		if err != nil {
-			return err
+			return
 		}
-		return writeSSE(w, ev.Seq, "card", body)
+		err = fw.write("card", body)
+		return
 	default:
-		return writeSSE(w, ev.Seq, "note", "")
+		err = fw.write("note", "")
+		return
 	}
 }
 
-func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, seq int, messageID, csrf string) error {
+func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User, runRow store.Run, messageID, csrf string) error {
 	msg, err := s.store.GetMessage(ctx, user.ID, messageID)
 	if err != nil {
 		return err
@@ -316,7 +410,7 @@ func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user stor
 	views := presentMessages([]store.Message{msg}, agent, s.store.Now(), userLocation(user.Timezone))
 	s.linkMentionedFiles(ctx, user.ID, runRow.AgentID, views)
 	if len(views) == 0 {
-		return writeSSE(w, seq, "done", "")
+		return fw.write("done", "")
 	}
 	views[0].ShowDay = false
 	cards, err := s.cardsFor(ctx, user, runRow.ID, csrf)
@@ -330,7 +424,109 @@ func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user stor
 	if chrome, cerr := s.approvalChrome(ctx, user, runRow.AgentID, runRow.ID); cerr == nil {
 		body += chrome
 	}
-	return writeSSE(w, seq, "done", body)
+	body += s.sideOOB(ctx, user, runRow.AgentID)
+	clearDwell(runRow.ID)
+	return fw.write("done", body)
+}
+
+func (s *Server) calmLive(ctx context.Context, user store.User, runRow store.Run, message, csrf string) liveView {
+	name := "The agent"
+	if row, err := s.store.GetAgent(ctx, user.ID, runRow.AgentID); err == nil && row.Name != "" {
+		name = row.Name
+	}
+	events, _ := s.store.ListRunEvents(ctx, user.ID, runRow.ID, 0)
+	text, _, _, _, _ := foldRun(events)
+	calm := calmFor(name, message, strings.TrimSpace(text) != "")
+	return liveView{
+		RunID: runRow.ID, Error: message, CSRF: csrf, AgentID: runRow.AgentID, AgentName: name,
+		CalmTitle: calm.Title, CalmLine: calm.Line, CalmRetry: calm.Retry, CalmSecond: calm.Second, CalmWake: calm.Wake,
+	}
+}
+
+func (s *Server) writeMarkdownProgress(ctx context.Context, fw *frameWriter, user store.User, runRow store.Run, ev store.RunEvent, csrf string) error {
+	events, err := s.store.ListRunEvents(ctx, user.ID, runRow.ID, 0)
+	if err != nil {
+		return err
+	}
+	before, through := textBefore(events, ev.Seq)
+	prev, _ := md.Split(before)
+	closed, tail := md.Split(through)
+	_, _, tools, fact, _ := foldRun(events)
+	pending := runRow.Status == "waiting_approval"
+	if rows, err := s.store.ListRunApprovals(ctx, user.ID, runRow.ID); err == nil {
+		for _, row := range rows {
+			if row.Status == "pending" {
+				pending = true
+				break
+			}
+		}
+	}
+	current := runRow
+	if row, err := s.store.GetRun(ctx, user.ID, runRow.ID); err == nil {
+		current = row
+	}
+	out := s.activityFor(ctx, user.ID, current, through, fact, pending)
+	elapsed := ""
+	if started, perr := time.Parse(time.RFC3339, current.StartedAt); perr == nil {
+		elapsed, _ = formatElapsed(s.store.Now().Sub(started))
+	}
+	inner := ""
+	if strings.TrimSpace(tail.Raw) != "" {
+		inner = md.RenderTail(tail)
+	}
+	if out.HideThread {
+		if inner == "" && strings.TrimSpace(through) != "" {
+			inner = `<span class="caret" aria-hidden="true"></span>`
+		}
+	} else {
+		inner = strings.ReplaceAll(inner, `<span class="caret" aria-hidden="true"></span>`, "")
+	}
+	if err := fw.write("tail", inner); err != nil {
+		return err
+	}
+	for i := len(prev); i < len(closed); i++ {
+		if err := fw.write("block", md.Render(closed[i].Raw)); err != nil {
+			return err
+		}
+	}
+	if err := fw.write("tools", tools); err != nil {
+		return err
+	}
+	slot := actSlotHTML(current.ID, actRowHTML(out, elapsed), out.HideThread)
+	if err := fw.write("act", slot); err != nil {
+		return err
+	}
+	return nil
+}
+
+// frameWriter gives each SSE frame of one store seq its own id.
+// Frame 0 keeps the plain integer so existing text cursors still parse.
+// Later frames use seq.part. A resume that saw only an earlier part
+// skips those frames and sends the rest, including a block that closed
+// in the same batch.
+type frameWriter struct {
+	w    io.Writer
+	seq  int
+	part int
+	from int
+	sent int
+}
+
+func (f *frameWriter) write(event, data string) error {
+	id := ""
+	if f.seq > 0 {
+		id = strconv.Itoa(f.seq)
+		if f.part > 0 {
+			id += "." + strconv.Itoa(f.part)
+		}
+	}
+	part := f.part
+	f.part++
+	if part <= f.from {
+		return nil
+	}
+	f.sent++
+	return writeSSE(f.w, id, event, data)
 }
 
 func batchTerminal(events []store.RunEvent) bool {
@@ -347,18 +543,18 @@ func (s *Server) writeLiveCards(ctx context.Context, w http.ResponseWriter, user
 	if err != nil || cards == "" || cards == *last {
 		return nil
 	}
-	if err := writeSSE(w, 0, "card", cards); err != nil {
+	if err := writeSSE(w, "", "card", cards); err != nil {
 		return err
 	}
 	*last = cards
 	return nil
 }
 
-func writeSSE(w http.ResponseWriter, id int, event, data string) error {
+func writeSSE(w io.Writer, id, event, data string) error {
 	var b strings.Builder
-	if id > 0 {
+	if id != "" && id != "0" {
 		b.WriteString("id: ")
-		b.WriteString(strconv.Itoa(id))
+		b.WriteString(id)
 		b.WriteByte('\n')
 	}
 	if event != "" {
@@ -388,25 +584,28 @@ func (s *Server) loadLives(r *http.Request, user store.User, threadID string, ag
 	last := runs[len(runs)-1]
 	var out []liveView
 	for _, row := range runs {
-		view := liveView{RunID: row.ID, Color: agent.Color, Letter: agent.Letter, CSRF: from(r).CSRF}
-		if cards, err := s.cardsFor(r.Context(), user, row.ID, from(r).CSRF); err == nil {
-			view.Cards = cards
-		}
 		if s.isGreetRun(row.ID) {
 			continue
 		}
+		cards, _ := s.cardsFor(r.Context(), user, row.ID, from(r).CSRF)
 		switch row.Status {
 		case "queued", "streaming", "waiting_approval":
-			if row.RoutineRunID != "" && row.Status != "waiting_approval" {
-				view.Status = "Working"
-			}
+			view := s.paintLive(r.Context(), user, row, agent, from(r).CSRF)
+			view.Cards = cards
 			out = append(out, view)
 		case "failed":
 			if row.ID != last.ID || row.RoutineRunID != "" {
 				continue
 			}
+			view := s.paintLive(r.Context(), user, row, agent, from(r).CSRF)
+			view.Cards = cards
 			view.Failed = true
-			view.Text, view.Error = s.runProgress(r, user.ID, row)
+			if view.Error == "" {
+				_, view.Error = s.runProgress(r, user.ID, row)
+				calm := calmFor(agent.Name, view.Error, strings.TrimSpace(view.Text) != "")
+				view.CalmTitle, view.CalmLine, view.CalmRetry, view.CalmSecond = calm.Title, calm.Line, calm.Retry, calm.Second
+				view.CalmWake = calm.Wake
+			}
 			out = append(out, view)
 		}
 	}

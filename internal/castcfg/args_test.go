@@ -233,7 +233,7 @@ func TestScrubStopsAtShellMeta(t *testing.T) {
 	for c := 0; c < 256; c++ {
 		s := string([]byte{byte(c)})
 		if shellStop(byte(c)) == re.MatchString(s) {
-			t.Fatalf("stop set and value class disagree on %q", c)
+			t.Fatalf("stop set and value class disagree on %q", s)
 		}
 	}
 	const secret = "zzSecret"

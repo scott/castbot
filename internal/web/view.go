@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"html/template"
 	"strings"
 	"time"
 	_ "time/tzdata"
@@ -26,6 +27,7 @@ type agentView struct {
 	SizeLabel, IdleLabel, Created                      string
 	Approvals, Unread                                  int
 	On, Avatar                                         bool
+	ActSub                                             template.HTML
 }
 
 type sectionView struct {
@@ -53,6 +55,8 @@ type msgView struct {
 	Chips                                                 []chipView
 	PathLines                                             []string
 	File                                                  *fileLinkView
+	HTML                                                  template.HTML
+	Copy                                                  string
 }
 
 type threadView struct {
@@ -67,8 +71,13 @@ type cliTokView struct {
 
 type liveView struct {
 	RunID, Color, Letter, Text, Error, CSRF, Status string
-	Failed                                          bool
+	AgentID, AgentName                              string
+	Failed, HideAct                                 bool
+	After                                           int
 	Cards                                           []cardView
+	HTML, Blocks, Tail, Act, Tools, Side            template.HTML
+	CalmTitle, CalmLine, CalmRetry, CalmSecond      string
+	CalmWake                                        bool
 }
 
 type cardView struct {
@@ -85,6 +94,8 @@ type chromeView struct {
 	Total          int
 	Unread         int
 	Tail           string
+	Act            template.HTML
+	HideAct        bool
 }
 
 type argView struct {

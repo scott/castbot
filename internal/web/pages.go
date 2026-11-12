@@ -1,6 +1,7 @@
 package web
 
 import (
+	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
@@ -94,6 +95,13 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		return nil
 	}
 	p.Agent = s.paintAgent(r.Context(), user.ID, agent, true, userLocation(user.Timezone))
+	if rows, err := s.store.ListOpenRuns(r.Context(), user.ID); err == nil {
+		for _, row := range rows {
+			if row.AgentID == agent.ID {
+				s.decorateAgent(r.Context(), user.ID, &p.Agent, row, true)
+			}
+		}
+	}
 	p.HasAgent = true
 	p.Machine = machine
 	p.FormError = formError
@@ -345,14 +353,12 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("HX-Request") == "true" {
 		av := presentAgent(agent, true, userLocation(user.Timezone))
 		loc := userLocation(user.Timezone)
-		stamp := ""
-		if vm, err := s.store.LiveVM(r.Context(), user.ID, agent.ID); err == nil && vm.State == "paused" {
-			stamp = "Waking"
-		}
+		live := s.paintLive(r.Context(), user, run, av, from(r).CSRF)
+		live.Side = template.HTML(s.sideOOB(r.Context(), user, agent.ID))
 		p := page{
 			CSRF:     from(r).CSRF,
 			Messages: presentMessages([]store.Message{msg}, av, s.store.Now(), loc),
-			Lives:    []liveView{{RunID: run.ID, Color: av.Color, Letter: av.Letter, CSRF: from(r).CSRF, Status: stamp}},
+			Lives:    []liveView{live},
 		}
 		for i := range p.Messages {
 			p.Messages[i].ShowDay = false
@@ -604,11 +610,20 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 		return page{}, err
 	}
 	loc := userLocation(user.Timezone)
+	open := map[string]store.OpenRun{}
+	if rows, err := s.store.ListOpenRuns(r.Context(), user.ID); err == nil {
+		for _, row := range rows {
+			open[row.AgentID] = row
+		}
+	}
 	by := map[string][]agentView{}
 	approvals := 0
 	for _, a := range agents {
 		approvals += a.Approvals
-		by[a.SectionID] = append(by[a.SectionID], s.paintAgent(r.Context(), user.ID, a, false, loc))
+		view := s.paintAgent(r.Context(), user.ID, a, false, loc)
+		row, has := open[a.ID]
+		s.decorateAgent(r.Context(), user.ID, &view, row, has)
+		by[a.SectionID] = append(by[a.SectionID], view)
 	}
 	var sv []sectionView
 	for _, sec := range sections {
@@ -745,6 +760,7 @@ func presentMessages(msgs []store.Message, agent agentView, now time.Time, loc *
 		} else if !v.Prompt && store.ValidAgentColor(agent.Color) {
 			v.Color = agent.Color
 		}
+		fillMessage(&v)
 		out = append(out, v)
 	}
 	return out
