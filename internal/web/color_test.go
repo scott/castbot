@@ -183,16 +183,12 @@ func TestEditColorUpdatesChatBubbles(t *testing.T) {
 		"model": {model}, "instructions": {"Check the docs."}, "color": {"c6"},
 	}
 	code, raw, hdr := h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, fields, nil)
-	if code != http.StatusSeeOther {
-		t.Fatalf("edit %d %s", code, raw)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/agents/"+agent.ID {
+		t.Fatalf("edit %d %s %s", code, hdr.Get("Location"), raw)
 	}
-	saved := follow(t, h, ip, code, hdr)
-	if !strings.Contains(saved, `value="c6" checked`) || strings.Contains(saved, colorAdvancedHint) {
-		t.Fatal("edit form did not keep Rose selected")
-	}
-	code, chat, _ := h.do(http.MethodGet, "/agents/"+agent.ID, "", ip, nil)
-	if code != 200 {
-		t.Fatal(code)
+	chat := follow(t, h, ip, code, hdr)
+	if strings.Contains(chat, "Edit agent") || strings.Contains(chat, colorAdvancedHint) {
+		t.Fatal("save stayed on the edit form")
 	}
 	if !strings.Contains(chat, `class="m-user c6" id="m-`+old.ID+`"`) {
 		t.Fatal("existing human bubble did not take the new color")

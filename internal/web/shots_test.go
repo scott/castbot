@@ -107,6 +107,9 @@ func TestShots(t *testing.T) {
 			})
 		}
 	}
+	t.Run("agentform-return-1280", func(t *testing.T) {
+		shootEditReturn(t, browserCtx, 1280, 800)
+	})
 	dir06 := filepath.Join("..", "..", "docs", "evidence", "S06")
 	if err := os.MkdirAll(dir06, 0o755); err != nil {
 		t.Fatal(err)
@@ -807,15 +810,10 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 	if err := chromedp.Run(ctx, chromedp.Click(`form.na button.pri`, chromedp.ByQuery)); err != nil && !strings.Contains(err.Error(), "navigated or closed") {
 		t.Fatal(err)
 	}
-	var saved string
-	if err := chromedp.Run(ctx, chromedp.Tasks{
-		chromedp.WaitVisible(`.banner.ok`, chromedp.ByQuery),
-		chromedp.Evaluate(js(`document.body.innerText`), &saved),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(saved, "No new machine was created.") {
-		t.Fatalf("reload notice %s", saved)
+	if err := chromedp.Run(ctx, chromedp.Poll(js(`location.pathname==='/agents/`+agent.ID+`' && (document.body.innerText||'').indexOf('Reloaded helper')>=0 && (document.body.innerText||'').indexOf('Edit agent')<0`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+		var saved string
+		_ = chromedp.Run(ctx, chromedp.Evaluate(js(`location.href+"\n"+(document.body?document.body.innerText:"")`), &saved))
+		t.Fatalf("reload chat %v\n%s", err, saved)
 	}
 	scrollTop(t, ctx)
 	shotPage(t, ctx, filepath.Join(dir, "edit-"+theme+"-"+name+".png"))

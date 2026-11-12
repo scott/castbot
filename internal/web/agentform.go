@@ -405,14 +405,20 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	notice, reloadErr := s.applyBundle(r.Context(), user.ID, fresh, version)
+	_, reloadErr := s.applyBundle(r.Context(), user.ID, fresh, version)
 	if reloadErr != nil {
 		f.SaveErr = "The agent could not be reloaded. The saved copy is updated. No new machine was created."
 		f.HasAvatar = fresh.AvatarPath != ""
 		s.showForm(w, r, user, f, http.StatusBadGateway)
 		return
 	}
-	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID)+"/edit?notice="+notice, http.StatusSeeOther)
+	target := "/agents/" + url.PathEscape(agent.ID)
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", target)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) importNew(w http.ResponseWriter, r *http.Request) {
