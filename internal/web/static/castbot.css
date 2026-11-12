@@ -913,9 +913,6 @@ textarea.ph::placeholder { color: var(--tx3); }
 }
 
 /* routines panel */
-.pane.routines .ptabs { display: flex; gap: 2px; padding: 8px 8px 0; border-bottom: 1px solid var(--line); overflow: auto; }
-.pane.routines .ptabs a { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 10px; border-radius: 10px 10px 0 0; color: var(--tx3); font-size: 13px; font-weight: 650; white-space: nowrap; }
-.pane.routines .ptabs a.on { color: var(--tx); background: var(--surf); }
 .pbody { min-height: 0; }
 .psec-h .side { margin-left: auto; color: var(--tx3); font-size: 12.5px; }
 .psec-h .btn { margin-left: 8px; }
@@ -1055,11 +1052,11 @@ body.panel-routines .ch-h .tabs { display: none; }
 .stoc a.on { color: var(--tx); border-color: var(--acc); background: var(--acc-soft); }
 .s19pane { position: relative; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
 .s19ph { gap: 12px; }
-.s19pane .ptabs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 6px; border-bottom: 1px solid var(--line); background: var(--bg2); }
-.s19pane .ptabs a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 52px; padding: 4px 1px; border-radius: 10px; font-size: 11.5px; font-weight: 650; color: var(--tx3); min-width: 0; }
-.s19pane .ptabs a span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.s19pane .ptabs a.on { background: var(--raise); color: var(--tx); box-shadow: inset 0 -2px 0 var(--acc); }
-.s19pane .ptabs a.on .i { color: var(--acc); }
+.pane .ptabs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 6px; border-bottom: 1px solid var(--line); background: var(--bg2); }
+.pane .ptabs a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 52px; padding: 4px 1px; border-radius: 10px; font-size: 11.5px; font-weight: 650; color: var(--tx3); min-width: 0; }
+.pane .ptabs a span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.pane .ptabs a.on { background: var(--raise); color: var(--tx); box-shadow: inset 0 -2px 0 var(--acc); }
+.pane .ptabs a.on .i { color: var(--acc); }
 .pbody { overflow: auto; flex: 1; min-height: 0; }
 .pclose { border-color: var(--line2); }
 .vault-open .tabs { display: none; }
