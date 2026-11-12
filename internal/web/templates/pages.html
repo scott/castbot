@@ -272,8 +272,8 @@
 {{end}}
 
 {{define "agentForm"}}
-<header class="ph-top ph-only"><a class="ibtn" href="/" aria-label="Back">{{template "backsvg" .}}</a><span class="t">{{.AgentForm.Heading}}</span></header>
-<div class="page-h"><div><h1 class="dt-only">{{.AgentForm.Heading}}</h1><p class="sub">{{.AgentForm.Sub}}</p></div>{{if .AgentForm.Back}}<a class="link" href="{{.AgentForm.Back}}">Back to the chat</a>{{end}}</div>
+<header class="ph-top ph-only"><a class="ibtn" href="{{if .AgentForm.Editing}}/agents/{{.AgentForm.AgentID}}{{else}}/{{end}}" aria-label="{{if .AgentForm.Editing}}Back to chat{{else}}Back{{end}}">{{template "backsvg" .}}</a><span class="t">{{.AgentForm.Heading}}</span></header>
+<div class="page-h"><div><h1 class="dt-only">{{.AgentForm.Heading}}</h1><p class="sub">{{.AgentForm.Sub}}</p></div>{{if .AgentForm.Editing}}<a class="btn" href="/agents/{{.AgentForm.AgentID}}">Cancel</a>{{else if .AgentForm.Back}}<a class="link" href="{{.AgentForm.Back}}">Back to the chat</a>{{end}}</div>
 <form class="na" method="post" action="{{.AgentForm.Action}}" enctype="multipart/form-data">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="form" value="agent">
@@ -317,7 +317,7 @@
 {{if .AgentForm.ToolErr}}<p class="err">{{.AgentForm.ToolErr}}</p>{{end}}
 {{range .AgentForm.Tools}}<div class="toolrow"><label><input type="checkbox" name="tool" value="{{.Name}}"{{if .On}} checked{{end}}> {{.Name}}</label><div class="selwrap"><select class="sel" name="perm_{{.Name}}" aria-label="{{.Name}} permission"><option value="ask"{{if eq .Level "ask"}} selected{{end}}>Ask</option><option value="always-allow"{{if eq .Level "always-allow"}} selected{{end}}>Always allow</option><option value="deny"{{if eq .Level "deny"}} selected{{end}}>Deny</option></select></div></div>{{end}}
 </section>
-<button class="btn pri" type="submit">{{.AgentForm.Submit}}</button>
+<div class="acts"><button class="btn pri" type="submit">{{.AgentForm.Submit}}</button>{{if .AgentForm.Editing}}<a class="btn" href="/agents/{{.AgentForm.AgentID}}">Cancel</a>{{end}}</div>
 {{if .AgentForm.Advanced}}<p class="fineprint">The machine starts as soon as you create. You land in {{if .AgentForm.Name}}{{.AgentForm.Name}}{{else}}the agent{{end}}'s chat.</p>{{end}}
 {{if .AgentForm.KeyLine}}<p class="fineprint">{{.AgentForm.KeyLine}}</p><p class="help">Secrets you add here are saved in your vault (Settings, Secrets) and given to this agent. Changing one later reloads the agent, no new machine.</p>{{end}}
 </div>

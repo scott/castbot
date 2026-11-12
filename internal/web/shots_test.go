@@ -107,6 +107,9 @@ func TestShots(t *testing.T) {
 			})
 		}
 	}
+	t.Run("agentform-return-1280", func(t *testing.T) {
+		shootEditReturn(t, browserCtx, 1280, 800)
+	})
 	dir06 := filepath.Join("..", "..", "docs", "evidence", "S06")
 	if err := os.MkdirAll(dir06, 0o755); err != nil {
 		t.Fatal(err)
@@ -286,6 +289,15 @@ func TestShots(t *testing.T) {
 	t.Run("s19-sec-dark-1280", func(t *testing.T) { shootS19Secrets(t, browserCtx, 1280, 800) })
 	t.Run("s19-sec-dark-390", func(t *testing.T) { shootS19Secrets(t, browserCtx, 390, 844) })
 	t.Run("s19-back-dark-1280", func(t *testing.T) { shootS19Back(t, browserCtx) })
+	for _, vp := range []struct {
+		w, h int
+		name string
+	}{{1280, 800, "1280"}, {1440, 900, "1440"}} {
+		vp := vp
+		t.Run("s19-toggle-dark-"+vp.name, func(t *testing.T) {
+			shootPanelToggle(t, browserCtx, dir19, vp.w, vp.h, vp.name)
+		})
+	}
 }
 
 // shootDecisionBar clicks Approve on a live card and checks the waiting bar
@@ -795,19 +807,10 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Click(`form.na button.pri`, chromedp.ByQuery)); err != nil && !strings.Contains(err.Error(), "navigated or closed") {
+	if err := chromedp.Run(ctx, chromedp.Click(`form.na button.pri`, chromedp.ByQuery)); err != nil && !containsNav(err) {
 		t.Fatal(err)
 	}
-	var saved string
-	if err := chromedp.Run(ctx, chromedp.Tasks{
-		chromedp.WaitVisible(`.banner.ok`, chromedp.ByQuery),
-		chromedp.Evaluate(js(`document.body.innerText`), &saved),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(saved, "No new machine was created.") {
-		t.Fatalf("reload notice %s", saved)
-	}
+	editWait(t, ctx, "reload chat", `location.pathname==='/agents/`+agent.ID+`' && pageText().indexOf('Reloaded helper')>=0 && pageText().indexOf('Edit agent')<0`)
 	scrollTop(t, ctx)
 	shotPage(t, ctx, filepath.Join(dir, "edit-"+theme+"-"+name+".png"))
 	if len(fake.Creates) != 1 {

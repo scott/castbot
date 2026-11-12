@@ -58,7 +58,7 @@ func TestAgentFormRoundTrip(t *testing.T) {
 		t.Fatal(loc)
 	}
 	code, body, _ = h.do(http.MethodGet, loc+"/edit", "", ip, nil)
-	if code != 200 || !strings.Contains(body, "Be concise.") || !strings.Contains(body, `value="Atlas"`) {
+	if code != 200 || !strings.Contains(body, "Be concise.") || !strings.Contains(body, `value="Atlas"`) || !strings.Contains(body, `href="`+loc+`">Cancel</a>`) {
 		t.Fatalf("saved page %d", code)
 	}
 	agent := onlyAgent(t, h, user.ID)
@@ -220,7 +220,7 @@ func TestSaveReloadsRunningAndLeavesPaused(t *testing.T) {
 	before, _ := fake.Snapshot()
 	creates := len(fake.Creates)
 	code, body, hdr := h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, fields, nil)
-	if code != http.StatusSeeOther || !strings.Contains(hdr.Get("Location"), "notice=reloaded") {
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/agents/"+url.PathEscape(agent.ID) {
 		t.Fatalf("save %d %s %s", code, hdr.Get("Location"), snippet(body))
 	}
 	after, _ := fake.Snapshot()
@@ -228,8 +228,8 @@ func TestSaveReloadsRunningAndLeavesPaused(t *testing.T) {
 		t.Fatalf("calls before %v after %v creates %d", before, after, len(fake.Creates))
 	}
 	code, body, _ = h.do(http.MethodGet, hdr.Get("Location"), "", ip, nil)
-	if code != 200 || !strings.Contains(body, "The running agent was reloaded. No new machine was created.") {
-		t.Fatalf("notice %d %s", code, snippet(body))
+	if code != 200 || !strings.Contains(body, "Updated") || strings.Contains(body, "Edit agent") {
+		t.Fatalf("chat %d %s", code, snippet(body))
 	}
 
 	if code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine/pause", h.form(url.Values{}), ip, nil); code != http.StatusSeeOther {
@@ -239,7 +239,7 @@ func TestSaveReloadsRunningAndLeavesPaused(t *testing.T) {
 	before, _ = fake.Snapshot()
 	creates = len(fake.Creates)
 	code, _, hdr = h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, fields, nil)
-	if code != http.StatusSeeOther || !strings.Contains(hdr.Get("Location"), "notice=paused") {
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/agents/"+url.PathEscape(agent.ID) {
 		t.Fatalf("paused save %d %s", code, hdr.Get("Location"))
 	}
 	after, _ = fake.Snapshot()
@@ -293,7 +293,7 @@ func TestSaveDoesNotWakeAnAutoPausedMachine(t *testing.T) {
 	}
 	before, _ := fake.Snapshot()
 	code, _, hdr := h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, fields, nil)
-	if code != http.StatusSeeOther || !strings.Contains(hdr.Get("Location"), "notice=paused") {
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/agents/"+url.PathEscape(agent.ID) {
 		t.Fatalf("save %d %s", code, hdr.Get("Location"))
 	}
 	after, _ := fake.Snapshot()

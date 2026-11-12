@@ -312,3 +312,75 @@ func shootS19Back(t *testing.T, browser context.Context) {
 		t.Fatalf("back to chat: %v %s", err, now)
 	}
 }
+
+func shootPanelToggle(t *testing.T, browser context.Context, dir string, width, height int, name string) {
+	t.Helper()
+	h := newHarness(t)
+	user, _ := h.account("s19-toggle-"+name+"@example.com", "Alex Rivera", "correct-horse-1")
+	if err := h.st.UpdateTheme(context.Background(), user.ID, "dark"); err != nil {
+		t.Fatal(err)
+	}
+	agent := seedAgent(t, h.st, user.ID, "Atlas")
+	threads, err := h.st.ListThreadsByAgent(context.Background(), user.ID, agent.ID)
+	if err != nil || len(threads) == 0 {
+		t.Fatal(err)
+	}
+	if _, err := h.st.CreateMessage(context.Background(), user.ID, threads[0].ID, "user", user.ID, "Draft the weekly note."); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	ctx := tab(t, browser)
+	page := ts.URL + "/agents/" + agent.ID + "?panel=closed"
+	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Poll(js(panelClosedJS), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Click(`[data-panel-toggle]`, chromedp.ByQuery)); err != nil && !containsNav(err) {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Poll(js(panelPlacedJS+`==='ok'`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+		var why string
+		_ = chromedp.Run(ctx, chromedp.Evaluate(js(panelPlacedJS), &why))
+		t.Fatalf("toggle open: %v %s", err, why)
+	}
+	assertNoSideScroll(t, ctx)
+	assertShotClean(t, ctx)
+	saveShot(t, ctx, filepath.Join(dir, "13toggle-dark-"+name+".png"))
+	if err := chromedp.Run(ctx, chromedp.Click(`[data-panel-toggle]`, chromedp.ByQuery)); err != nil && !containsNav(err) {
+		t.Fatal(err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Poll(js(panelClosedJS), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+		var why string
+		_ = chromedp.Run(ctx, chromedp.Evaluate(js(`location.href+' '+(document.querySelector('.app')&&document.querySelector('.app').className)+' aria='+(document.querySelector('[data-panel-toggle]')&&document.querySelector('[data-panel-toggle]').getAttribute('aria-expanded'))`), &why))
+		t.Fatalf("toggle close: %v %s", err, why)
+	}
+}
+
+const panelClosedJS = `(function(){
+	if(location.search.indexOf('panel=')>=0) return false;
+	var app=document.querySelector('.app');
+	var tog=document.querySelector('[data-panel-toggle]');
+	var panel=document.getElementById('agent-panel');
+	var open=panel&&!panel.hidden&&panel.classList.contains('s19pane');
+	return !!(app&&tog&&!open&&!app.classList.contains('with-pane')&&tog.getAttribute('aria-expanded')==='false');
+})()`
+
+const panelPlacedJS = `(function(){
+	var app=document.querySelector('.app');
+	var main=document.querySelector('.main');
+	var panel=document.getElementById('agent-panel');
+	var tog=document.querySelector('[data-panel-toggle]');
+	if(!app||!main||!panel||!tog) return 'missing';
+	if(!app.classList.contains('with-pane')) return 'no with-pane class='+panel.className+' hidden='+panel.hidden;
+	if(panel.hidden||!panel.classList.contains('s19pane')) return 'panel closed';
+	if(tog.getAttribute('aria-expanded')!=='true') return 'aria '+tog.getAttribute('aria-expanded');
+	var pb=panel.getBoundingClientRect();
+	var mb=main.getBoundingClientRect();
+	if(pb.left+1<mb.right) return 'left '+Math.round(pb.left)+' mainRight '+Math.round(mb.right);
+	if(pb.top<-2||pb.top>24) return 'top '+Math.round(pb.top);
+	if(pb.left<0||pb.right>window.innerWidth+1||pb.bottom>window.innerHeight+1) return 'outside '+Math.round(pb.left)+','+Math.round(pb.top)+' '+Math.round(pb.right)+'x'+Math.round(pb.bottom);
+	return 'ok';
+})()`
