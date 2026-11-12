@@ -20,9 +20,10 @@ type wakeFacts struct {
 	Endpoint  string
 }
 
-// wakeForWork is the chat wake path. strict is set for a routine run:
-// a failed wake or probe fails the run before the prompt is sent.
-// A chat reply still returns the paused notice and ignores a probe miss.
+// wakeForWork wakes a paused machine before a reply.
+// strict is set for a routine run: Wake and Probe use the 90s budget,
+// and a failure fails the run before the prompt is sent.
+// A chat reply keeps the run context (up to the run limit) and returns the paused notice.
 func (s *Server) wakeForWork(ctx context.Context, h host.AgentHost, userID, agentID string, vm store.VM, endpoint, token, state string, strict bool) (wakeFacts, error) {
 	facts := wakeFacts{State: state, Endpoint: endpoint}
 	if vm.MicroVMID == "" || vm.MicroVMID == "pending" {
@@ -38,13 +39,17 @@ func (s *Server) wakeForWork(ctx context.Context, h host.AgentHost, userID, agen
 	facts.PausedFor = s.pausedFor(ctx, userID, agentID)
 	s.noteVM(ctx, userID, agentID, vm.MicroVMID, store.EventWakeRequested, 0)
 	wakeAt := time.Now()
-	wctx, cancel := context.WithTimeout(ctx, s.wakeBudget())
-	defer cancel()
-	got, werr := h.Wake(wctx, vm.MicroVMID)
+	wakeCtx := ctx
+	if strict {
+		var cancel context.CancelFunc
+		wakeCtx, cancel = context.WithTimeout(ctx, s.wakeBudget())
+		defer cancel()
+	}
+	got, werr := h.Wake(wakeCtx, vm.MicroVMID)
 	facts.WakeFor = time.Since(wakeAt)
 	if werr != nil {
 		code := store.WakeProvider
-		if errors.Is(werr, context.DeadlineExceeded) || errors.Is(wctx.Err(), context.DeadlineExceeded) {
+		if errors.Is(werr, context.DeadlineExceeded) || errors.Is(wakeCtx.Err(), context.DeadlineExceeded) {
 			code = store.WakeTimeout
 		}
 		s.recordWakeFailed(ctx, userID, agentID, code, facts.WakeFor)

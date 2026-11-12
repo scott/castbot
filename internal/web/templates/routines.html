@@ -5,6 +5,7 @@
 <div class="pbody">
 {{if eq .Routines.Mode "edit"}}{{template "routineEditor" .}}{{else if eq .Routines.Mode "detail"}}{{template "routineDetail" .}}{{else if eq .Routines.Mode "empty"}}{{template "routineEmpty" .}}{{else}}{{template "routineList" .}}{{end}}
 </div>
+{{if eq .Routines.Mode "edit"}}<div class="pfoot"><span class="note">Each run wakes {{.Agent.Name}}'s machine if it is paused.</span><a class="btn" href="{{.Routines.Editor.Back}}">Cancel</a><button class="btn pri" id="routine-save" type="submit" form="routine-editor"{{if .Routines.Editor.SaveOff}} disabled aria-disabled="true"{{end}}>{{.Routines.Editor.Save}}</button></div>{{end}}
 </aside>
 {{end}}
 
@@ -25,6 +26,7 @@
 {{if .Routines.Editor.ID}}<input type="hidden" name="id" value="{{.Routines.Editor.ID}}">{{end}}
 <a class="link back" href="{{.Routines.Editor.Back}}">&lt; Routines</a>
 <h3>{{.Routines.Editor.Title}}</h3>
+{{if .Routines.Editor.Err}}<div class="ferr" role="alert">{{.Routines.Editor.Err}}</div>{{end}}
 <label class="fld">Name<input name="name" maxlength="80" value="{{.Routines.Editor.Name}}" required></label>
 <fieldset class="fld"><legend>Repeat</legend><div class="presets">{{range .Routines.Editor.Presets}}<label class="pchip"><input type="radio" name="preset" value="{{.ID}}" data-cron="{{.Cron}}"{{if .On}} checked{{end}}>{{.Label}}</label>{{end}}</div></fieldset>
 <label class="fld">Schedule<span class="hint">cron, edit to customize</span><input name="cron" value="{{.Routines.Editor.Cron}}" autocomplete="off" hx-get="{{.Routines.Editor.PreviewURL}}" hx-trigger="keyup changed delay:300ms, change" hx-target="#routine-preview" hx-swap="outerHTML" hx-include="[name='tz']"><span class="parts"><span>minute</span><span>hour</span><span>day</span><span>month</span><span>weekday</span></span></label>
@@ -34,7 +36,6 @@
 <fieldset class="fld"><legend>If a run is missed</legend><div class="radio-list one"><label class="ropt"><input type="radio" name="missed" value="once"{{if .Routines.Editor.MissedOnce}} checked{{end}}><span class="grow"><b>Run it once when castbot is back</b><span class="t2">If castbot was offline at run time, it runs one catch-up, never one per missed time.</span></span></label><label class="ropt"><input type="radio" name="missed" value="skip"{{if .Routines.Editor.MissedSkip}} checked{{end}}><span class="grow"><b>Skip it</b><span class="t2">Wait for the next scheduled time. The missed run is listed as skipped.</span></span></label></div></fieldset>
 <fieldset class="fld"><legend>If a step needs approval</legend><div class="radio-list one"><label class="ropt"><input type="radio" name="approval" value="wait"{{if .Routines.Editor.ApprovalWait}} checked{{end}}><span class="grow"><b>Wait for me, then deny after 10 min</b><span class="t2">The run holds at the card in its thread. {{$.Agent.Name}} shows a shield in the sidebar.</span></span></label><label class="ropt"><input type="radio" name="approval" value="deny"{{if .Routines.Editor.ApprovalDeny}} checked{{end}}><span class="grow"><b>Deny right away and continue</b><span class="t2">{{$.Agent.Name}} is told no and finishes without it.</span></span></label></div></fieldset>
 </form>
-<div class="pfoot"><span class="note">Each run wakes {{.Agent.Name}}'s machine if it is paused.</span><a class="btn" href="{{.Routines.Editor.Back}}">Cancel</a><button class="btn pri" id="routine-save" type="submit" form="routine-editor"{{if .Routines.Editor.SaveOff}} disabled aria-disabled="true"{{end}}>{{.Routines.Editor.Save}}</button></div>
 {{end}}
 
 {{define "routinePreview"}}

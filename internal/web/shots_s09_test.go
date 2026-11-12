@@ -58,16 +58,10 @@ func s09Shot(t *testing.T, theme, name string) (*harness, store.User, store.Agen
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent, thread, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{
+	agent, _, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{
 		SectionID: sec.ID, Name: "Atlas", Title: "Docs helper", Status: "ready", Model: "model-large",
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.st.CreateMessage(context.Background(), user.ID, thread.ID, "user", user.ID, "Thanks. What did the morning check change?"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.st.CreateMessage(context.Background(), user.ID, thread.ID, "agent", agent.ID, "It fixed 3 broken links in docs/setup.md and docs/faq.md on the branch docs/fix-links. Nothing was pushed. The details are in the routine thread."); err != nil {
 		t.Fatal(err)
 	}
 	return h, user, agent
@@ -83,14 +77,14 @@ func s09State(t *testing.T, h *harness, user store.User, agent store.Agent, kind
 		return base + "?panel=routines", `(function(){var t=document.body.innerText||"";return t.indexOf("No routines yet")>=0 && t.indexOf("Morning docs check")>=0;})()`
 	case "11b":
 		pin(h, time.Date(2026, 11, 12, 7, 0, 0, 0, loc))
-		return base + "?panel=routines&routine=new", `(function(){var t=document.body.innerText||"";return t.indexOf("New routine")>=0 && t.indexOf("Today, 8:00 AM")>=0 && t.indexOf("Mon Nov 16, 8:00 AM")>=0 && t.indexOf("Every weekday at 8:00 AM")>=0;})()`
+		return base + "?panel=routines&routine=new", `(function(){var t=document.body.innerText||"";var b=document.getElementById("routine-save");if(!b)return false;var r=b.getBoundingClientRect();return t.indexOf("New routine")>=0 && t.indexOf("Today, 8:00 AM")>=0 && t.indexOf("Mon Nov 16, 8:00 AM")>=0 && t.indexOf("Every weekday at 8:00 AM")>=0 && r.top>=0 && r.bottom<=window.innerHeight && r.width>0;})()`
 	case "11b2":
 		pin(h, time.Date(2026, 11, 12, 10, 0, 0, 0, loc))
 		routine := makeShotRoutine(t, h, user, agent, "Morning docs check", "0 8 * * 1-5", store.MissedOnce, true)
-		return base + "?panel=routines&routine=" + routine.ID + "&edit=1", `(function(){var t=document.body.innerText||"";return t.indexOf("Edit: Morning docs check")>=0 && t.indexOf("Your zone")>=0;})()`
+		return base + "?panel=routines&routine=" + routine.ID + "&edit=1", `(function(){var t=document.body.innerText||"";var b=document.getElementById("routine-save");if(!b)return false;var r=b.getBoundingClientRect();return t.indexOf("Edit: Morning docs check")>=0 && t.indexOf("Your zone")>=0 && r.top>=0 && r.bottom<=window.innerHeight;})()`
 	case "11a":
 		s09List(t, h, user, agent, loc)
-		return base + "?panel=routines", `(function(){var t=document.body.innerText||"";return t.indexOf("Morning docs check")>=0 && t.indexOf("Needs approval now")>=0 && t.indexOf("Paused")>=0 && t.indexOf("Only Atlas's routines")>=0;})()`
+		return base + "?panel=routines", `(function(){var t=document.body.innerText||"";return t.indexOf("Morning docs check")>=0 && t.indexOf("Every Wednesday at 1:00 PM")>=0 && t.indexOf("Wed Nov 18, 1:00 PM")>=0 && t.indexOf("Needs approval now")>=0 && t.indexOf("Paused")>=0 && t.indexOf("Only Atlas's routines")>=0;})()`
 	case "11c", "11f":
 		routine := s09Morning(t, h, user, agent, loc)
 		ready := `(function(){var t=document.body.innerText||"";return t.indexOf("Run once when back")>=0 && t.indexOf("Wait 10 min, then deny")>=0 && t.indexOf("Run now")>=0;})()`
@@ -112,7 +106,7 @@ func s09State(t *testing.T, h *harness, user store.User, agent store.Agent, kind
 		return base + "?panel=routines&routine=" + routine.ID, `(function(){var t=document.body.innerText||"";return t.indexOf("castbot was offline from Sat Nov 7, 6:10 PM to Tue Nov 10, 9:13 AM")>=0 && t.indexOf("missed 2 runs (Mon and Tue, 8:00 AM)")>=0 && t.indexOf("ran once at 9:14 AM")>=0 && t.indexOf("Same outage, a routine set to skip")>=0;})()`
 	case "11g":
 		s09Marker(t, h, user, agent, loc)
-		return base, `(function(){var t=document.body.innerText||"";return t.indexOf("Routine run: Morning docs check")>=0 && t.indexOf("Open thread")>=0 && t.indexOf("fixed 3 links")>=0;})()`
+		return base, `(function(){var t=document.body.innerText||"";var m=t.indexOf("Routine run: Morning docs check");var u=t.indexOf("Thanks. What did the morning check change?");return m>=0 && u>m && t.indexOf("Open thread")>=0 && t.indexOf("fixed 3 links")>=0;})()`
 	default:
 		t.Fatalf("kind %s", kind)
 		return "", ""
@@ -124,7 +118,7 @@ func s09List(t *testing.T, h *harness, user store.User, agent store.Agent, loc *
 	pin(h, time.Date(2026, 11, 12, 6, 0, 0, 0, loc))
 	morning := makeShotRoutine(t, h, user, agent, "Morning docs check", "0 8 * * 1-5", store.MissedOnce, true)
 	pin(h, time.Date(2026, 11, 12, 6, 1, 0, 0, loc))
-	weekly := makeShotRoutine(t, h, user, agent, "Weekly link sweep", "0 13 * * 4", store.MissedOnce, true)
+	weekly := makeShotRoutine(t, h, user, agent, "Weekly link sweep", "0 13 * * 3", store.MissedOnce, true)
 	pin(h, time.Date(2026, 11, 12, 6, 2, 0, 0, loc))
 	month := makeShotRoutine(t, h, user, agent, "Month-end docs report", "0 9 1 * *", store.MissedOnce, true)
 	pin(h, time.Date(2026, 11, 12, 8, 0, 0, 0, loc))
@@ -146,25 +140,6 @@ func s09List(t *testing.T, h *harness, user store.User, agent store.Agent, loc *
 	if err := h.st.FinishRoutineRun(context.Background(), user.ID, runRow.ID, store.RoutineDone, "Woke the machine · 2 min 14 s"); err != nil {
 		t.Fatal(err)
 	}
-	pin(h, time.Date(2026, 11, 12, 13, 0, 0, 0, loc))
-	if _, err := h.st.ClaimDue(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	wrows, err := h.st.ListRoutineRuns(context.Background(), user.ID, weekly.ID, 0)
-	if err != nil || len(wrows) != 1 {
-		t.Fatalf("weekly %v %+v", err, wrows)
-	}
-	_, th, runRow, err := h.st.BeginRoutineExecution(context.Background(), user.ID, wrows[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.st.CreateOriginMessage(context.Background(), user.ID, th.ID, "user", user.ID, "Find broken external links across docs/, fix them on a branch, and push it for review.", "routine"); err != nil {
-		t.Fatal(err)
-	}
-	pin(h, time.Date(2026, 11, 12, 13, 4, 0, 0, loc))
-	if _, err := h.st.RecordPermission(context.Background(), user.ID, runRow.ID, []byte(`{"id":"req-shot","tool":"git_push","arguments":{"remote":"origin","branch":"docs/link-sweep-1116"}}`), h.st.Now().Add(6*time.Minute), 1); err != nil {
-		t.Fatal(err)
-	}
 	pin(h, time.Date(2026, 11, 1, 9, 3, 0, 0, loc))
 	mrow, err := h.st.ClaimManual(context.Background(), user.ID, month.ID)
 	if err != nil {
@@ -183,7 +158,23 @@ func s09List(t *testing.T, h *harness, user store.User, agent store.Agent, loc *
 	if _, err := h.st.SetRoutineEnabled(context.Background(), user.ID, month.ID, false); err != nil {
 		t.Fatal(err)
 	}
+	pin(h, time.Date(2026, 11, 12, 9, 0, 0, 0, loc))
+	wrow, err := h.st.ClaimManual(context.Background(), user.ID, weekly.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, th, wrun, err := h.st.BeginRoutineExecution(context.Background(), user.ID, wrow.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.CreateOriginMessage(context.Background(), user.ID, th.ID, "user", user.ID, "Find broken external links across docs/, fix them on a branch, and push it for review.", "routine"); err != nil {
+		t.Fatal(err)
+	}
 	pin(h, time.Date(2026, 11, 12, 10, 0, 0, 0, loc))
+	if _, err := h.st.RecordPermission(context.Background(), user.ID, wrun.ID, []byte(`{"id":"req-shot","tool":"git_push","arguments":{"remote":"origin","branch":"docs/link-sweep-1116"}}`), h.st.Now().Add(6*time.Minute), 1); err != nil {
+		t.Fatal(err)
+	}
+	s09Chat(t, h, user, agent)
 }
 
 func s09Morning(t *testing.T, h *harness, user store.User, agent store.Agent, loc *time.Location) store.Routine {
@@ -222,9 +213,9 @@ func s09Running(t *testing.T, h *harness, user store.User, agent store.Agent, lo
 
 func s09Approval(t *testing.T, h *harness, user store.User, agent store.Agent, loc *time.Location) string {
 	t.Helper()
-	pin(h, time.Date(2026, 11, 12, 12, 0, 0, 0, loc))
-	routine := makeShotRoutine(t, h, user, agent, "Weekly link sweep", "0 13 * * 4", store.MissedOnce, true)
-	pin(h, time.Date(2026, 11, 12, 13, 0, 0, 0, loc))
+	pin(h, time.Date(2026, 11, 11, 12, 0, 0, 0, loc))
+	routine := makeShotRoutine(t, h, user, agent, "Weekly link sweep", "0 13 * * 3", store.MissedOnce, true)
+	pin(h, time.Date(2026, 11, 11, 13, 0, 0, 0, loc))
 	if _, err := h.st.ClaimDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +236,7 @@ func s09Approval(t *testing.T, h *harness, user store.User, agent store.Agent, l
 	if _, err := h.st.CreateMessage(context.Background(), user.ID, th.ID, "agent", agent.ID, "Fixed 4 external links. Ready to push:"); err != nil {
 		t.Fatal(err)
 	}
-	pin(h, time.Date(2026, 11, 12, 13, 4, 0, 0, loc))
+	pin(h, time.Date(2026, 11, 11, 13, 4, 0, 0, loc))
 	if _, err := h.st.RecordPermission(context.Background(), user.ID, runRow.ID, []byte(`{"id":"req-shot","tool":"git_push","arguments":{"remote":"origin","branch":"docs/link-sweep-1116"}}`), h.st.Now().Add(6*time.Minute), 1); err != nil {
 		t.Fatal(err)
 	}
@@ -391,6 +382,31 @@ func s09Marker(t *testing.T, h *harness, user store.User, agent store.Agent, loc
 		t.Fatal(err)
 	}
 	pin(h, time.Date(2026, 11, 12, 10, 0, 0, 0, loc))
+	s09Chat(t, h, user, agent)
+}
+
+func s09Chat(t *testing.T, h *harness, user store.User, agent store.Agent) {
+	t.Helper()
+	threads, err := h.st.ListThreadsByAgent(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var thread store.Thread
+	for _, th := range threads {
+		if th.Kind == "dm" {
+			thread = th
+			break
+		}
+	}
+	if thread.ID == "" {
+		t.Fatal("no dm thread")
+	}
+	if _, err := h.st.CreateMessage(context.Background(), user.ID, thread.ID, "user", user.ID, "Thanks. What did the morning check change?"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.CreateMessage(context.Background(), user.ID, thread.ID, "agent", agent.ID, "It fixed 3 broken links in docs/setup.md and docs/faq.md on the branch docs/fix-links. Nothing was pushed. The details are in the routine thread."); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func makeShotRoutine(t *testing.T, h *harness, user store.User, agent store.Agent, name, cronExpr, missed string, on bool) store.Routine {

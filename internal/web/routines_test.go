@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/scott/castbot/internal/cron"
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
@@ -212,6 +213,102 @@ func TestRoutineQueueBehindReply(t *testing.T) {
 	waitOpens(t, client, 2)
 }
 
+func TestRoutineClaimThenChat(t *testing.T) {
+	h, user, agent, ip := routineFixture(t, "claim-chat@example.com")
+	loc, _ := time.LoadLocation("America/Denver")
+	h.st.SetNow(func() time.Time { return time.Date(2026, 11, 12, 7, 0, 0, 0, loc) })
+	routine := makeRoutine(t, h, user.ID, agent.ID, store.ApprovalWait, store.MissedOnce)
+	block := make(chan struct{})
+	client := &scriptClient{block: block}
+	h.srv.SetClient(client)
+	h.st.SetNow(func() time.Time { return time.Date(2026, 11, 12, 8, 0, 0, 0, loc) })
+	claimed, err := h.st.ClaimDue(context.Background())
+	if err != nil || len(claimed) != 1 || claimed[0].RunID != "" || !claimed[0].Launch {
+		t.Fatalf("claim %+v %v", claimed, err)
+	}
+	code, _, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {"hello"}}), ip, nil)
+	if code != http.StatusSeeOther && code != http.StatusOK {
+		t.Fatal(code)
+	}
+	if client.Opens() != 0 {
+		t.Fatal("chat started while a routine slot was claimed")
+	}
+	dm := dmThread(t, h, user.ID, agent.ID)
+	chatRuns, err := h.st.ListThreadRuns(context.Background(), user.ID, dm.ID)
+	if err != nil || len(chatRuns) != 1 || chatRuns[0].Status != "queued" {
+		t.Fatalf("chat run %v %+v", err, chatRuns)
+	}
+	h.srv.Tick(context.Background())
+	waitOpens(t, client, 1)
+	if client.Opens() != 1 {
+		t.Fatalf("opens %d", client.Opens())
+	}
+	rows, err := h.st.ListRoutineRuns(context.Background(), user.ID, routine.ID, 0)
+	if err != nil || len(rows) != 1 || rows[0].RunID == "" {
+		t.Fatalf("routine did not start %v %+v", err, rows)
+	}
+	chatRuns, err = h.st.ListThreadRuns(context.Background(), user.ID, dm.ID)
+	if err != nil || len(chatRuns) != 1 || chatRuns[0].Status != "queued" {
+		t.Fatalf("chat left the queue %v %+v", err, chatRuns)
+	}
+	close(block)
+	waitOpens(t, client, 2)
+}
+
+func TestRoutineCrashReclaim(t *testing.T) {
+	h, user, agent, _ := routineFixture(t, "reclaim@example.com")
+	loc, _ := time.LoadLocation("America/Denver")
+	h.st.SetNow(func() time.Time { return time.Date(2026, 11, 12, 7, 0, 0, 0, loc) })
+	routine := makeRoutine(t, h, user.ID, agent.ID, store.ApprovalWait, store.MissedOnce)
+	client := &scriptClient{block: make(chan struct{})}
+	h.srv.SetClient(client)
+	h.st.SetNow(func() time.Time { return time.Date(2026, 11, 12, 8, 0, 0, 0, loc) })
+	claimed, err := h.st.ClaimDue(context.Background())
+	if err != nil || len(claimed) != 1 || claimed[0].RunID != "" {
+		t.Fatalf("claim %+v %v", claimed, err)
+	}
+	h.srv.Tick(context.Background())
+	waitOpens(t, client, 1)
+	h.srv.Tick(context.Background())
+	deadline := time.Now().Add(400 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if client.Opens() != 1 {
+			t.Fatalf("reclaim started %d runs", client.Opens())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	rows, err := h.st.ListRoutineRuns(context.Background(), user.ID, routine.ID, 0)
+	if err != nil || len(rows) != 1 || rows[0].RunID == "" {
+		t.Fatalf("slot %v %+v", err, rows)
+	}
+
+	h2, user2, agent2, _ := routineFixture(t, "reclaim-chat@example.com")
+	h2.st.SetNow(func() time.Time { return time.Date(2026, 11, 12, 7, 0, 0, 0, loc) })
+	routine2 := makeRoutine(t, h2, user2.ID, agent2.ID, store.ApprovalWait, store.MissedOnce)
+	client2 := &scriptClient{}
+	h2.srv.SetClient(client2)
+	h2.st.SetNow(func() time.Time { return time.Date(2026, 11, 12, 8, 0, 0, 0, loc) })
+	if _, err := h2.st.ClaimDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	dm := dmThread(t, h2, user2.ID, agent2.ID)
+	runRow, err := h2.st.CreateRun(context.Background(), user2.ID, dm.ID, agent2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h2.st.MarkStreaming(context.Background(), user2.ID, runRow.ID); err != nil {
+		t.Fatal(err)
+	}
+	h2.srv.Tick(context.Background())
+	if client2.Opens() != 0 {
+		t.Fatal("reclaim started beside a chat run")
+	}
+	rows, err = h2.st.ListRoutineRuns(context.Background(), user2.ID, routine2.ID, 0)
+	if err != nil || len(rows) != 1 || rows[0].Status != store.RoutineQueued || rows[0].Detail != "Waits for the reply in progress" || rows[0].RunID != "" {
+		t.Fatalf("parked %v %+v", err, rows)
+	}
+}
+
 func TestRoutineOneAtATime(t *testing.T) {
 	h, user, agent, ip := routineFixture(t, "two@example.com")
 	_ = ip
@@ -267,7 +364,7 @@ func TestRoutineWakeFailedCodes(t *testing.T) {
 		t.Cleanup(func() { close(wait) })
 		h.srv.SetWakeBudget(40 * time.Millisecond)
 		body := runAndRead(t, h, user, agent, ip)
-		if strings.Contains(body, "Routine prompt, sent by castbot") || !strings.Contains(body, "(WAKE_TIMEOUT).") {
+		if strings.Contains(body, "Routine prompt, sent by castbot") || !strings.Contains(body, "(WAKE_TIMEOUT).") || !strings.Contains(body, "after 90 s") || !strings.Contains(body, "within 90 s") {
 			t.Fatalf("timeout page missing code\n%s", body)
 		}
 		if strings.Contains(strings.Join(fake.Calls, " "), "stream") {
@@ -282,8 +379,8 @@ func TestRoutineWakeFailedCodes(t *testing.T) {
 		fake := pauseMachine(t, h, user.ID, agent.ID, "paused")
 		fake.WakeErr = errors.New("provider-secret-do-not-store")
 		body := runAndRead(t, h, user, agent, ip)
-		if strings.Contains(body, "provider-secret-do-not-store") || !strings.Contains(body, "(PROVIDER_ERROR).") {
-			t.Fatal("provider text leaked or code missing")
+		if strings.Contains(body, "provider-secret-do-not-store") || !strings.Contains(body, "(PROVIDER_ERROR).") || strings.Contains(body, "90 s") {
+			t.Fatal("provider text leaked, code missing, or 90 s shown")
 		}
 		if strings.Contains(strings.Join(fake.Calls, " "), "stream") {
 			t.Fatal("prompt was sent")
@@ -297,8 +394,8 @@ func TestRoutineWakeFailedCodes(t *testing.T) {
 		fake := pauseMachine(t, h, user.ID, agent.ID, "running")
 		fake.ProbeErr = errors.New("probe-secret-do-not-store")
 		body := runAndRead(t, h, user, agent, ip)
-		if strings.Contains(body, "probe-secret-do-not-store") || !strings.Contains(body, "(HEALTH_FAILED).") {
-			t.Fatal("health text leaked or code missing")
+		if strings.Contains(body, "probe-secret-do-not-store") || !strings.Contains(body, "(HEALTH_FAILED).") || strings.Contains(body, "90 s") {
+			t.Fatal("health text leaked, code missing, or 90 s shown")
 		}
 		if strings.Contains(strings.Join(fake.Calls, " "), "stream") {
 			t.Fatal("prompt was sent")
@@ -334,9 +431,12 @@ func TestRoutinePanelLast30(t *testing.T) {
 	if code != 200 || !strings.Contains(body, "See all") || strings.Contains(body, "slot-01") || !strings.Contains(body, "slot-31") {
 		t.Fatalf("panel %d has see all %v slot01 %v", code, strings.Contains(body, "See all"), strings.Contains(body, "slot-01"))
 	}
-	_, all, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=routines&routine="+routine.ID+"&all=1", "", ip, nil)
-	if !strings.Contains(all, "slot-01") {
-		t.Fatal("see all hid the oldest")
+	if !strings.Contains(body, "?threads="+routine.ID) || strings.Contains(body, "all=1") {
+		t.Fatal("see all did not open the routine threads")
+	}
+	_, all, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?threads="+routine.ID, "", ip, nil)
+	if !strings.Contains(all, "slot-01") || !strings.Contains(all, "slot-31") {
+		t.Fatal("filtered threads hid a run")
 	}
 }
 
@@ -389,6 +489,7 @@ func TestRoutineAuthzAndCSRF(t *testing.T) {
 	for _, path := range []string{
 		"/agents/" + agent.ID + "/routines/preview?cron=0+8+*+*+*&tz=America/Denver",
 		"/agents/" + agent.ID + "?panel=routines&routine=" + routine.ID,
+		"/agents/" + agent.ID + "?threads=" + routine.ID,
 		"/runs/" + runRow.ID + "/events",
 	} {
 		code, _, _ := h.do(http.MethodGet, path, "", ip, nil)
@@ -411,11 +512,111 @@ func TestRoutineAuthzAndCSRF(t *testing.T) {
 }
 
 func TestRoutineCSRF(t *testing.T) {
-	h, _, agent, ip := routineFixture(t, "csrf@example.com")
-	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/routines", "name=Nope&cron=0+8+*+*+1-5&tz=America/Denver&prompt=Hi&missed=once&approval=wait", ip, nil)
-	if code != http.StatusForbidden || !strings.Contains(body, "The form expired.") {
-		t.Fatalf("csrf %d %s", code, body)
+	h, user, agent, ip := routineFixture(t, "csrf@example.com")
+	routine := makeRoutine(t, h, user.ID, agent.ID, store.ApprovalWait, store.MissedOnce)
+	posts := []string{
+		"/agents/" + agent.ID + "/routines",
+		"/agents/" + agent.ID + "/routines/" + routine.ID + "/toggle",
+		"/agents/" + agent.ID + "/routines/" + routine.ID + "/run",
+		"/agents/" + agent.ID + "/routines/" + routine.ID + "/delete",
 	}
+	for _, path := range posts {
+		body := "name=Nope&cron=0+8+*+*+1-5&tz=America/Denver&prompt=Hi&missed=once&approval=wait"
+		if path != posts[0] {
+			body = "on=0"
+		}
+		code, text, _ := h.do(http.MethodPost, path, body, ip, nil)
+		if code != http.StatusForbidden || !strings.Contains(text, "The form expired.") {
+			t.Fatalf("csrf %s %d %s", path, code, text)
+		}
+	}
+}
+
+func TestRoutineFinishedLateMarker(t *testing.T) {
+	h, user, agent, ip := routineFixture(t, "late-mark@example.com")
+	loc, _ := time.LoadLocation("America/Denver")
+	h.st.SetNow(func() time.Time { return time.Date(2026, 11, 12, 7, 0, 0, 0, loc) })
+	routine := makeRoutine(t, h, user.ID, agent.ID, store.ApprovalWait, store.MissedOnce)
+	h.st.SetNow(func() time.Time { return time.Date(2026, 11, 12, 10, 0, 0, 0, loc) })
+	claimed, err := h.st.ClaimDue(context.Background())
+	if err != nil || len(claimed) != 1 {
+		t.Fatal(err, len(claimed))
+	}
+	rr, _, _, err := h.st.BeginRoutineExecution(context.Background(), user.ID, claimed[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.FinishRoutineRun(context.Background(), user.ID, rr.RunID, store.RoutineLate, "ran once at 10:00 AM"); err != nil {
+		t.Fatal(err)
+	}
+	_, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID, "", ip, nil)
+	if !strings.Contains(body, "Ran late") || strings.Contains(body, `rst ok">Done`) {
+		t.Fatal("finished late marker")
+	}
+	_ = routine
+}
+
+func TestRoutineDeletedStamp(t *testing.T) {
+	h, user, agent, ip := routineFixture(t, "stamp@example.com")
+	routine := makeRoutine(t, h, user.ID, agent.ID, store.ApprovalWait, store.MissedOnce)
+	row, err := h.st.ClaimManual(context.Background(), user.ID, routine.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, th, runRow, err := h.st.BeginRoutineExecution(context.Background(), user.ID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.RecordPermission(context.Background(), user.ID, runRow.ID, []byte(`{"id":"req-del","tool":"git_push","arguments":{}}`), h.st.Now().Add(10*time.Minute), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.DeleteRoutine(context.Background(), user.ID, routine.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?thread="+th.ID, "", ip, nil)
+	if !strings.Contains(body, "from a deleted routine") || strings.Contains(body, "from the routine deleted routine") {
+		t.Fatal("deleted stamp")
+	}
+}
+
+func TestRoutineStoreInvalidIs400(t *testing.T) {
+	h, _, agent, ip := routineFixture(t, "bad-cron@example.com")
+	code, body, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/routines", h.form(url.Values{
+		"name": {"Nope"}, "cron": {"0 8 31 2 *"}, "tz": {"America/Denver"},
+		"prompt": {"Hi"}, "missed": {"once"}, "approval": {"wait"},
+	}), ip, nil)
+	if code != http.StatusBadRequest || !strings.Contains(body, cron.BadSchedule) {
+		t.Fatalf("invalid %d %s", code, body)
+	}
+}
+
+func TestChatWakeKeepsRunBudget(t *testing.T) {
+	h, user, agent, _ := routineFixture(t, "wake-budget@example.com")
+	fake := pauseMachine(t, h, user.ID, agent.ID, "paused")
+	fake.WakeWait = make(chan struct{})
+	vm, err := h.st.LiveVM(context.Background(), user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.srv.SetWakeBudget(40 * time.Millisecond)
+	t.Run("chat", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		_, err := h.srv.wakeForWork(ctx, fake, user.ID, agent.ID, vm, "https://vm.example", "token", "paused", false)
+		if time.Since(start) < 200*time.Millisecond {
+			t.Fatalf("chat wake used the routine budget (%v)", err)
+		}
+	})
+	t.Run("routine", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		start := time.Now()
+		_, err := h.srv.wakeForWork(ctx, fake, user.ID, agent.ID, vm, "https://vm.example", "token", "paused", true)
+		if err == nil || time.Since(start) > 700*time.Millisecond {
+			t.Fatalf("routine wake ignored the 90s budget (%v)", err)
+		}
+	})
 }
 
 func TestRoutineHoldDuringReplace(t *testing.T) {
@@ -516,6 +717,21 @@ func waitRoutine(t *testing.T, h *harness, userID, routineID string, ok func(sto
 	}
 	t.Fatalf("routine did not settle: %+v", last)
 	return last
+}
+
+func dmThread(t *testing.T, h *harness, userID, agentID string) store.Thread {
+	t.Helper()
+	threads, err := h.st.ListThreadsByAgent(context.Background(), userID, agentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, th := range threads {
+		if th.Kind == "dm" {
+			return th
+		}
+	}
+	t.Fatal("no dm thread")
+	return store.Thread{}
 }
 
 func waitOpens(t *testing.T, client *scriptClient, n int) {

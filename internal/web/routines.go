@@ -63,7 +63,17 @@ func (s *Server) launchRoutine(ctx context.Context, row store.RoutineRun) {
 }
 
 func (s *Server) launchLocked(ctx context.Context, row store.RoutineRun) {
+	// withAgent is held by the caller. The busy check and BeginRoutineExecution
+	// therefore cannot interleave with a chat post on this agent.
+	// A queued chat run is not a reason to stop: that chat is waiting for this claim.
+	// A reply this process is already streaming, or a streaming row left from before
+	// a restart, parks the slot instead of starting a second run.
 	if s.replacing(ctx, row.UserID, row.AgentID) {
+		_ = s.store.DeferRoutineRun(ctx, row.UserID, row.ID, store.RoutineHeld, "Waits for the machine replacement")
+		return
+	}
+	if s.runs.WatchingAgent(row.AgentID) {
+		_ = s.store.DeferRoutineRun(ctx, row.UserID, row.ID, store.RoutineQueued, "Waits for the reply in progress")
 		return
 	}
 	rr, th, runRow, err := s.store.BeginRoutineExecution(ctx, row.UserID, row.ID)
@@ -285,11 +295,11 @@ func (s *Server) saveRoutine(w http.ResponseWriter, r *http.Request) {
 		}
 		saved, err = s.store.UpdateRoutine(r.Context(), user.ID, id, in)
 	}
-	if s.missing(w, err) {
-		return
-	}
 	if err == store.ErrInvalid {
 		s.renderRoutineEditor(w, r, user, agent, id, in, cron.BadSchedule, http.StatusBadRequest)
+		return
+	}
+	if s.missing(w, err) {
 		return
 	}
 	if err != nil {

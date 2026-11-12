@@ -40,6 +40,13 @@ type errRoutineBusy struct{}
 
 func (errRoutineBusy) Error() string { return "routine busy" }
 
+// ErrAgentBusy means another reply is streaming, so this slot was left queued.
+var ErrAgentBusy = errAgentBusy{}
+
+type errAgentBusy struct{}
+
+func (errAgentBusy) Error() string { return "agent busy" }
+
 // Routine is one cron prompt for one agent.
 type Routine struct {
 	ID             string
@@ -426,13 +433,13 @@ WHERE user_id = ? AND routine_id = ? AND finished_at IS NULL AND status IN ('que
 	return n > 0, err
 }
 
-// AgentBusy reports a queued, streaming, or waiting run on the agent.
+// AgentBusy reports a queued, streaming, or waiting run on the agent,
+// or a claimed routine slot that has not started a run yet.
 func (s *Store) AgentBusy(ctx context.Context, userID, agentID string) (bool, error) {
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
 		return false, err
 	}
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE user_id = ? AND agent_id = ? AND status IN ('queued', 'streaming', 'waiting_approval')`, userID, agentID).Scan(&n)
+	n, err := agentBusyCount(ctx, s.db, userID, agentID)
 	return n > 0, err
 }
 
@@ -680,6 +687,25 @@ func (s *Store) BeginRoutineExecution(ctx context.Context, userID, routineRunID 
 	default:
 		return RoutineRun{}, Thread{}, Run{}, ErrInvalid
 	}
+	// A queued chat run is waiting its turn and must not block this claimed slot.
+	// A streaming or waiting reply is already in progress, so the slot goes back to queued
+	// in this same transaction and no run row is inserted.
+	var executing int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE user_id = ? AND agent_id = ? AND status IN ('streaming', 'waiting_approval')`, rr.UserID, rr.AgentID).Scan(&executing); err != nil {
+		return RoutineRun{}, Thread{}, Run{}, err
+	}
+	if executing > 0 {
+		if _, err := conn.ExecContext(ctx, `UPDATE routine_runs SET status = ?, detail = ? WHERE id = ? AND user_id = ? AND finished_at IS NULL AND (run_id IS NULL OR run_id = '')`,
+			RoutineQueued, "Waits for the reply in progress", rr.ID, userID); err != nil {
+			return RoutineRun{}, Thread{}, Run{}, err
+		}
+		err = s.endImmediate(ctx, conn, true)
+		conn = nil
+		if err != nil {
+			return RoutineRun{}, Thread{}, Run{}, err
+		}
+		return RoutineRun{}, Thread{}, Run{}, ErrAgentBusy
+	}
 	routine, err := scanRoutine(conn.QueryRowContext(ctx, routineSelect+` WHERE id = ? AND user_id = ?`, rr.RoutineID, userID))
 	if err != nil {
 		return RoutineRun{}, Thread{}, Run{}, err
@@ -768,6 +794,22 @@ func (s *Store) PromoteRoutine(ctx context.Context, userID, agentID string) (Rou
 	commit = true
 	rr.Launch = true
 	return rr, true, nil
+}
+
+// DeferRoutineRun parks an unstarted slot. A slot that already has a run is left alone.
+func (s *Store) DeferRoutineRun(ctx context.Context, userID, id, status, detail string) error {
+	switch status {
+	case RoutineQueued, RoutineHeld:
+	default:
+		return ErrInvalid
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE routine_runs SET status = ?, detail = ? WHERE id = ? AND user_id = ? AND finished_at IS NULL AND (run_id IS NULL OR run_id = '')`,
+		status, detail, id, userID)
+	if err != nil {
+		return err
+	}
+	_, err = res.RowsAffected()
+	return err
 }
 
 // UnstartedRoutineRuns returns claimed slots that still have no run.
@@ -909,9 +951,23 @@ func (s *Store) endImmediate(ctx context.Context, conn *sql.Conn, commit bool) e
 	return cerr
 }
 
-func (s *Store) busyConn(ctx context.Context, conn *sql.Conn, userID, agentID string) (bool, error) {
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func agentBusyCount(ctx context.Context, q queryRower, userID, agentID string) (int, error) {
 	var n int
-	err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE user_id = ? AND agent_id = ? AND status IN ('queued', 'streaming', 'waiting_approval')`, userID, agentID).Scan(&n)
+	err := q.QueryRowContext(ctx, `SELECT (
+  SELECT COUNT(*) FROM runs WHERE user_id = ? AND agent_id = ? AND status IN ('queued', 'streaming', 'waiting_approval')
+) + (
+  SELECT COUNT(*) FROM routine_runs WHERE user_id = ? AND agent_id = ? AND finished_at IS NULL
+    AND status IN ('running', 'late') AND (run_id IS NULL OR run_id = '')
+)`, userID, agentID, userID, agentID).Scan(&n)
+	return n, err
+}
+
+func (s *Store) busyConn(ctx context.Context, conn *sql.Conn, userID, agentID string) (bool, error) {
+	n, err := agentBusyCount(ctx, conn, userID, agentID)
 	return n > 0, err
 }
 

@@ -373,6 +373,55 @@ func (s *Server) runWaiting(r *http.Request, userID string, row store.RoutineRun
 	return err == nil && runRow.Status == "waiting_approval"
 }
 
+// filterRoutineThreads opens the agent chat limited to one routine's threads.
+// See all uses this instead of dumping every history row into the panel.
+func (s *Server) filterRoutineThreads(r *http.Request, user store.User, agent store.Agent, routineID string, p *page) error {
+	routine, err := s.store.GetRoutine(r.Context(), user.ID, routineID)
+	if err != nil {
+		return err
+	}
+	if routine.AgentID != agent.ID {
+		return store.ErrNotFound
+	}
+	runs, err := s.store.ListRoutineRuns(r.Context(), user.ID, routine.ID, 0)
+	if err != nil {
+		return err
+	}
+	name := routine.Name
+	if routine.DeletedAt != "" {
+		name = "deleted routine"
+	}
+	var threads []threadView
+	var markers []msgView
+	on := false
+	for _, row := range runs {
+		if row.ThreadID == "" {
+			continue
+		}
+		title := row.Detail
+		if title == "" {
+			title = name
+		}
+		href := "/agents/" + url.PathEscape(agent.ID) + "?threads=" + url.QueryEscape(routine.ID) + "&thread=" + url.QueryEscape(row.ThreadID)
+		chosen := row.ThreadID == p.ThreadID
+		if chosen {
+			on = true
+		}
+		threads = append(threads, threadView{Title: title, Href: href, On: chosen})
+		markers = append(markers, msgView{
+			Marker: true, Body: "Routine run: " + name, Sub: title, Href: href,
+			Pill: "Done", PillClass: "ok",
+		})
+	}
+	p.Threads = threads
+	if !on {
+		p.Messages = markers
+		p.Lives = nil
+		p.ThreadID = ""
+	}
+	return nil
+}
+
 func (s *Server) detailView(r *http.Request, user store.User, agent store.Agent, id string, linked store.RoutineRun, now time.Time) (routineDetail, routineDelete) {
 	routine, err := s.store.GetLiveRoutine(r.Context(), user.ID, id)
 	if err != nil {
@@ -380,12 +429,7 @@ func (s *Server) detailView(r *http.Request, user store.User, agent store.Agent,
 	}
 	loc := userLocation(routine.Timezone)
 	sched, _ := cron.Parse(routine.Cron)
-	all := r.URL.Query().Get("all") == "1"
-	limit := routineHistory
-	if all {
-		limit = 0
-	}
-	runs, _ := s.store.ListRoutineRuns(r.Context(), user.ID, routine.ID, limit)
+	runs, _ := s.store.ListRoutineRuns(r.Context(), user.ID, routine.ID, routineHistory)
 	count, _ := s.store.CountRoutineRuns(r.Context(), user.ID, routine.ID)
 	d := routineDetail{
 		Name:       routine.Name,
@@ -415,9 +459,9 @@ func (s *Server) detailView(r *http.Request, user store.User, agent store.Agent,
 	for _, row := range runs {
 		d.History = append(d.History, s.historyItem(r, user, agent, routine, row, linked, now, loc))
 	}
-	if !all && count > routineHistory {
+	if count > routineHistory {
 		d.SeeAll = true
-		d.AllHref = routineDetailPath(agent.ID, routine.ID) + "&all=1"
+		d.AllHref = "/agents/" + url.PathEscape(agent.ID) + "?threads=" + url.QueryEscape(routine.ID)
 	}
 	d.Note, d.NoteClass = outageNote(runs, now, loc)
 	d.Siblings = s.skipSiblings(r, user, agent, routine, runs, now)
@@ -613,7 +657,11 @@ func (s *Server) runBar(r *http.Request, user store.User, agent store.Agent, row
 		if code == "" {
 			code = store.WakeTimeout
 		}
-		bar.Wake = "Wake requested at " + at + ". No answer after 90 s (" + code + ")."
+		bar.Wake = "Wake requested at " + at + ". No answer"
+		if code == store.WakeTimeout {
+			bar.Wake += " after 90 s"
+		}
+		bar.Wake += " (" + code + ")."
 		bar.Done = ""
 	}
 	return bar
@@ -649,9 +697,15 @@ func (s *Server) mergeMarkers(r *http.Request, user store.User, agent store.Agen
 		}
 		pill, class := "Done", "ok"
 		switch row.Status {
-		case store.RoutineRunning, store.RoutineLate:
+		case store.RoutineRunning:
 			if row.FinishedAt == "" {
 				pill, class = "Running", "run"
+			}
+		case store.RoutineLate:
+			if row.FinishedAt == "" {
+				pill, class = "Running", "run"
+			} else {
+				pill, class = "Ran late", "late"
 			}
 		case store.RoutineFailed:
 			pill, class = "Failed", "err"
@@ -834,7 +888,7 @@ func (s *Server) routineCardExtra(row store.Approval, user store.User) (extra, f
 	}
 	from = "Tool " + row.Tool + " is set to Ask · from the routine " + routine.Name
 	if routine.DeletedAt != "" {
-		from = "Tool " + row.Tool + " is set to Ask · from the routine deleted routine"
+		from = "Tool " + row.Tool + " is set to Ask · from a deleted routine"
 	}
 	if row.Status != "pending" || routine.ApprovalPolicy != store.ApprovalWait {
 		return "", from

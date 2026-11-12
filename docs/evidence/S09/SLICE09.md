@@ -24,13 +24,31 @@ No new runtime image. The guest API is unchanged.
 
 `TestRoutineQueueBehindReply` leaves a due routine Queued with "Waits for the reply in progress" while a chat reply is streaming, then starts it after that reply ends.
 
+`TestRoutineClaimThenChat` claims a slot, posts a chat, then ticks. The chat stays queued and the routine starts. The chat starts after that run finishes.
+
+`TestRoutineCrashReclaim` starts a claimed but unstarted slot once on the next tick, and leaves it queued when a chat run is already streaming.
+
+`TestRoutineFinishedLateMarker` shows Ran late on a finished late run. `TestRoutineWakeFailedCodes` says 90 s only for `WAKE_TIMEOUT`.
+
+`TestRoutineCSRF` returns 403 for save, toggle, run now, and delete with no token. `TestRoutineStoreInvalidIs400` returns 400 when the store rejects a schedule that parses but never fires.
+
+`TestChatWakeKeepsRunBudget` leaves a chat wake on the run context. A routine wake still stops at the 90 s budget.
+
+`TestFinishReplacementNotesAgent` reads the agent id before the replacement commit and runs the hook after the lock is clear.
+
+`TestParseRangesStepsAndOr`, `TestParseRejectsBadFields`, `TestDescribeFallback`, `TestTooFrequentBoundary`, and `TestNextAcrossSpringForward` cover the cron parser.
+
 `TestRoutineOneAtATime` starts one of two routines that are due on the same tick and starts the other after the first ends.
 
 `TestHoldDuringReplace`, `TestHoldLateAfterOneHour`, and `TestRoutineHoldDuringReplace` keep the run Held with no Wake while a replacement is active. Within an hour of the scheduled time the start is on time. After an hour it is Ran late.
 
 `TestRoutineWakeFailedCodes` records `wake_failed` as `WAKE_TIMEOUT`, `PROVIDER_ERROR`, or `HEALTH_FAILED`. The thread shows the code at the end of the system line. The prompt is not streamed, and the provider text is not stored.
 
-`TestPanelHistoryCap` and `TestRoutinePanelLast30` list 30 runs and offer See all.
+`TestPanelHistoryCap` and `TestRoutinePanelLast30` list 30 runs and offer See all. See all opens that routine's threads.
+
+`TestRoutineDeletedStamp` says "from a deleted routine" on an approval card after the schedule is deleted.
+
+Marker pills are drawn when the page renders. The chat stream belongs to the open thread, and a routine marker sits on the agent chat while the run streams on its own thread, so the pill is not pushed over that stream.
 
 `TestDeleteKeepsThreads` and `TestRoutineDeleteLabel` delete the schedule, keep the thread labeled "deleted routine", and leave an in-progress run in place.
 

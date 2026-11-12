@@ -104,7 +104,7 @@ type Runner struct {
 	approval time.Duration
 
 	mu     sync.Mutex
-	active map[string]struct{}
+	active map[string]string // run id to agent id
 	rng    *rand.Rand
 	after  func(Job, string)
 	onPerm func(Job, store.Approval)
@@ -123,7 +123,7 @@ func New(ctx context.Context, st *store.Store, client runtime.Client) *Runner {
 		budget:   retryBudget,
 		limit:    runLimit,
 		approval: DefaultApprovalWait,
-		active:   map[string]struct{}{},
+		active:   map[string]string{},
 		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
@@ -208,6 +208,22 @@ func (r *Runner) Watching(id string) bool {
 	return ok
 }
 
+// WatchingAgent reports whether this process is streaming a reply for the agent.
+// A queued run that was never started is not watched.
+func (r *Runner) WatchingAgent(agentID string) bool {
+	if agentID == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, agent := range r.active {
+		if agent == agentID {
+			return true
+		}
+	}
+	return false
+}
+
 // Wait blocks until in-flight runs have recorded an outcome, or d elapses.
 func (r *Runner) Wait(d time.Duration) {
 	deadline := time.Now().Add(d)
@@ -257,19 +273,19 @@ func (r *Runner) SetOnPermission(fn func(Job, store.Approval)) {
 // Start runs the job until the reply is stored or failed.
 // A second Start for a run this process already watches does nothing.
 func (r *Runner) Start(job Job) {
-	if !r.track(job.RunID) {
+	if !r.track(job.RunID, job.AgentID) {
 		return
 	}
 	go r.execute(job)
 }
 
-func (r *Runner) track(id string) bool {
+func (r *Runner) track(id, agentID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.active[id]; ok {
 		return false
 	}
-	r.active[id] = struct{}{}
+	r.active[id] = agentID
 	return true
 }
 
@@ -563,6 +579,9 @@ func (r *Runner) fail(job Job, message string, offset int) {
 }
 
 func (r *Runner) notifyAfter(job Job, status string) {
+	// Drop the watch before the hook. The run is already finished, and the hook
+	// starts the next reply. Leaving this run watched would park that start.
+	r.untrack(job.RunID)
 	r.mu.Lock()
 	fn := r.after
 	r.mu.Unlock()

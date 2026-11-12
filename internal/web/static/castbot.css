@@ -930,6 +930,9 @@ textarea.ph::placeholder { color: var(--tx3); }
 .prompt { white-space: pre-wrap; color: var(--tx2); font-size: 14px; font-weight: 450; }
 .back { justify-self: start; }
 .app.with-pane.wide-pane { grid-template-columns: 220px minmax(0, 1fr) minmax(360px, 540px); }
+.pane.routines { overflow: hidden; }
+.pane.routines .pbody { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.pane.routines .pfoot { flex: none; position: sticky; bottom: 0; z-index: 2; }
 body.panel-routines .ch-h .tabs { display: none; }
 .pane.routines { min-width: 0; }
 .rst.held { color: var(--tx2); }

@@ -170,6 +170,11 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		p.CLINote = flash.note
 	}
 	s.attachRoutines(r, user, agent, current, &p)
+	if filter := strings.TrimSpace(r.URL.Query().Get("threads")); filter != "" {
+		if err := s.filterRoutineThreads(r, user, agent, filter, &p); s.missing(w, err) {
+			return nil
+		}
+	}
 	switch tab {
 	case "home":
 		p.Page = "home"

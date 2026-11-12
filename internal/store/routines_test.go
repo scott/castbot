@@ -447,6 +447,34 @@ func TestHoldDuringReplace(t *testing.T) {
 	_ = routine
 }
 
+func TestFinishReplacementNotesAgent(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	user := makeUser(t, s, "finish-note@example.com", "Finish")
+	agent := routineAgent(t, s, user.ID)
+	holdVM(t, s, user.ID, agent.ID)
+	if _, _, err := s.BeginReplacement(ctx, user.ID, agent.ID, "web:test", "example.invalid/castbot-runtime:next", false); err != nil {
+		t.Fatal(err)
+	}
+	repl, err := s.ActiveReplacement(ctx, user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotUser, gotAgent string
+	stillActive := true
+	s.SetReplaceDone(func(userID, agentID string) {
+		gotUser, gotAgent = userID, agentID
+		_, err := s.ActiveReplacement(ctx, userID, agentID)
+		stillActive = err == nil
+	})
+	if err := s.FinishReplacement(ctx, user.ID, repl.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if gotUser != user.ID || gotAgent != agent.ID || stillActive {
+		t.Fatalf("hook user %s agent %s active %v", gotUser, gotAgent, stillActive)
+	}
+}
+
 func TestHoldLateAfterOneHour(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
