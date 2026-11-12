@@ -48,4 +48,4 @@ jobs:
           sudo apt-get install -y --allow-downgrades /tmp/chrome.deb
           google-chrome --version | grep -F "$ver"
       - name: shots
-        run: go test -tags shots -count=1 -timeout 20m -run 'TestShots/(502|restart|error|container|machine|agentform|cli|s07|s07b|s08|s09|s10|s19|s20|s27|s22)' ./internal/web
+        run: go test -tags shots -count=1 -timeout 20m -run 'TestShots/(502|restart|error|container|machine|agentform|cli|s07|s07b|s08|s09|s10|s19|s20|s27|s22|resume)' ./internal/web

@@ -5,6 +5,7 @@ package web
 import (
 	"context"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +137,49 @@ func assertEditClose(t *testing.T, ctx context.Context) {
 	}
 	if got != "ok" {
 		t.Fatalf("close control %s", got)
+	}
+}
+
+func frameEditForm(t *testing.T, ctx context.Context) {
+	t.Helper()
+	err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){
+		var main=document.querySelector('.main');
+		if(main) main.scrollTop=0;
+		window.scrollTo(0,0);
+		if(window.innerWidth>=700) return;
+		var sum=document.querySelector('.sum');
+		if(sum) sum.scrollIntoView({block:'end'});
+	})()`), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertModelLabelShown(t *testing.T, ctx context.Context, label string) {
+	t.Helper()
+	var got string
+	err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){
+		var want=`+strconv.Quote(label)+`;
+		var nodes=document.querySelectorAll('.sum div');
+		for (var i=0;i<nodes.length;i++){
+			var el=nodes[i];
+			if ((el.textContent||'').indexOf(want)<0) continue;
+			var nested=false;
+			for (var c=0;c<el.children.length;c++){
+				if ((el.children[c].textContent||'').indexOf(want)>=0) nested=true;
+			}
+			if (nested) continue;
+			var r=el.getBoundingClientRect();
+			if (r.width>1 && r.height>1 && r.top>=0 && r.bottom<=window.innerHeight && r.left<window.innerWidth && r.right>0) return 'ok';
+			return 'offscreen';
+		}
+		return 'missing';
+	})()`), &got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ok" {
+		t.Fatalf("model label %s", got)
 	}
 }
 

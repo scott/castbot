@@ -814,24 +814,20 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 	if err := h.st.SaveVMToken(context.Background(), agent.ID, guest); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Navigate(ts.URL+"/agents/"+agent.ID+"/edit")); err != nil && !containsNav(err) {
-		t.Fatal(err)
-	}
-	waitVisibleClose(t, ctx)
-	assertEditClose(t, ctx)
-	scrollTop(t, ctx)
-	shotPage(t, ctx, filepath.Join(dir, "editform-"+theme+"-"+name+".png"))
 	if err := chromedp.Run(ctx, chromedp.Tasks{
+		chromedp.Navigate(ts.URL + "/agents/" + agent.ID + "/edit"),
 		chromedp.WaitVisible(`input[name="title"]`, chromedp.ByQuery),
 		chromedp.SetValue(`form.na input[name="title"]`, "Reloaded helper", chromedp.ByQuery),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	label := modelLabel(model)
-	editWait(t, ctx, "edit form", `pageText().indexOf('Cancel')>=0 && pageText().indexOf('`+label+`')>=0 && (document.querySelector('select[name="model"]')||{}).value==='`+model+`'`)
-	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var sum=document.querySelector('.sum');var cancel=document.querySelector('.acts a.btn');if(window.innerWidth<700 && sum && cancel){cancel.scrollIntoView({block:'center'});}else{var m=document.querySelector('.main');if(m)m.scrollTop=0;window.scrollTo(0,0);}})()`), nil)); err != nil {
-		t.Fatal(err)
-	}
+	editWait(t, ctx, "edit form", `!!document.querySelector('a.sclose[href]') && pageText().indexOf('Cancel')<0 && pageText().indexOf('`+label+`')>=0 && (document.querySelector('select[name="model"]')||{}).value==='`+model+`'`)
+	waitVisibleClose(t, ctx)
+	frameEditForm(t, ctx)
+	assertEditClose(t, ctx)
+	assertModelLabelShown(t, ctx, label)
+	shotPage(t, ctx, filepath.Join(dir, "editform-"+theme+"-"+name+".png"))
 	shotPage(t, ctx, filepath.Join(dir, "edit-"+theme+"-"+name+".png"))
 	if err := chromedp.Run(ctx, chromedp.Click(`form.na button.pri`, chromedp.ByQuery)); err != nil && !containsNav(err) {
 		t.Fatal(err)
