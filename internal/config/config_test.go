@@ -151,3 +151,20 @@ func TestRejectsBadSecretsKey(t *testing.T) {
 		t.Fatal("expected an all-zero secrets key to be rejected")
 	}
 }
+
+func TestRejectsSecretsKeyMatchingSession(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "castbot.env")
+	same := fakeSessionKey()
+	body := "CASTBOT_SESSION_KEY=" + same + "\nCASTBOT_SECRETS_KEY=" + same + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("expected equal keys to be rejected")
+	}
+	if strings.Contains(err.Error(), same) {
+		t.Fatal("error included a key")
+	}
+}

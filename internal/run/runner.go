@@ -552,6 +552,12 @@ func (r *Runner) recordPermission(job Job, raw json.RawMessage, offset int) erro
 	return nil
 }
 
+// Finish records a successful run and notifies after-run hooks.
+// The streaming path uses the same function.
+func (r *Runner) Finish(job Job, text string, offset int) error {
+	return r.finish(job, text, offset)
+}
+
 func (r *Runner) finish(job Job, text string, offset int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

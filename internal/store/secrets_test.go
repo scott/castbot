@@ -3,7 +3,6 @@ package store
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,7 +80,6 @@ func TestMigrateEncryptsFixtures(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	checkpoint(t, path)
 	disk, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -101,21 +99,6 @@ func TestMigrateEncryptsFixtures(t *testing.T) {
 	got, err = s.DecryptSecret(ctx, user.ID, id)
 	if err != nil || got != plain {
 		t.Fatal("reopen did not decrypt")
-	}
-}
-
-func checkpoint(t *testing.T, path string) {
-	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`VACUUM`); err != nil {
-		t.Fatal(err)
 	}
 }
 

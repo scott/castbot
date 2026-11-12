@@ -28,20 +28,22 @@ type keySlot struct {
 
 func modelSlots() []keySlot {
 	keyed := castcfg.KeyedProviders()
-	spec := []keySlot{
-		{ID: "a", Title: "Provider A", Letter: "A"},
-		{ID: "b", Title: "Provider B", Letter: "B"},
-	}
 	var out []keySlot
-	for i := range spec {
-		if i >= len(keyed) {
-			break
-		}
-		spec[i].Manifest = keyed[i].Key
-		spec[i].Env = keyed[i].EnvVar
-		out = append(out, spec[i])
+	for i, p := range keyed {
+		letter := providerLetter(i)
+		out = append(out, keySlot{
+			ID: strings.ToLower(letter), Title: "Provider " + letter, Letter: letter,
+			Manifest: p.Key, Env: p.EnvVar,
+		})
 	}
 	return out
+}
+
+func providerLetter(i int) string {
+	if i >= 0 && i < 26 {
+		return string(rune('A' + i))
+	}
+	return "Z"
 }
 
 func slotByID(id string) (keySlot, bool) {
@@ -74,14 +76,27 @@ func slotForModel(model string) (keySlot, bool) {
 }
 
 // effectiveModelSecret returns the guest env name and value for a model.
-// A vault row for that provider wins. Otherwise the process env is used.
+// The newest vault row for that provider wins. Otherwise the process env is used.
 func (s *Server) effectiveModelSecret(ctx context.Context, userID, model string) (envName, value, missing string) {
-	if slot, ok := slotForModel(model); ok {
+	vault := ""
+	slot, slotted := slotForModel(model)
+	if slotted {
 		rows, err := s.store.ProviderSecrets(ctx, userID, []string{slot.ID, slot.Manifest})
-		if err == nil && len(rows) > 0 && strings.TrimSpace(rows[0].Value) != "" {
-			return slot.Env, rows[0].Value, ""
+		if err == nil && len(rows) > 0 {
+			vault = strings.TrimSpace(rows[0].Value)
 		}
-		if v := strings.TrimSpace(os.Getenv(castcfg.ProviderKeyEnv(slot.Manifest))); v != "" {
+	}
+	if _, ok := castcfg.InferenceFor(model); ok {
+		envName, value, missing = castcfg.ProviderSecretFrom(model, vault)
+		if envName != "" || missing != "" {
+			return envName, value, missing
+		}
+	}
+	if slotted {
+		if vault != "" {
+			return slot.Env, vault, ""
+		}
+		if v := strings.TrimSpace(providerEnv(slot.Manifest)); v != "" {
 			return slot.Env, v, ""
 		}
 	}

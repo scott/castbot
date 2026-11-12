@@ -164,7 +164,7 @@ func vaultPath(kind string, ids vaultIDs) (string, string) {
 	case "10e":
 		return "/settings/secrets/item/" + ids.github + "?watch=1", `(function(){return (document.body.innerText||"").indexOf("did not reload")>=0;})()`
 	case "10f":
-		return "/agents/" + ids.atlas + "?panel=secrets", `(function(){var t=document.body.innerText||"";return t.indexOf("GITHUB_TOKEN")>=0 && t.indexOf("Provider A key")>=0;})()`
+		return "/agents/" + ids.atlas + "?panel=secrets", `(function(){var t=document.body.innerText||"";var main=document.querySelector(".main");var shown=main&&getComputedStyle(main).display!=="none";var chat=!shown||(main.innerText||"").indexOf("Check docs/")>=0;return t.indexOf("GITHUB_TOKEN")>=0 && t.indexOf("Provider A key")>=0 && chat;})()`
 	case "10f2":
 		return "/agents/" + ids.atlas + "?panel=secrets&revoke=" + ids.github, `(function(){return (document.body.innerText||"").indexOf("Take GITHUB_TOKEN away from Atlas?")>=0;})()`
 	case "10f3":
@@ -172,7 +172,7 @@ func vaultPath(kind string, ids vaultIDs) (string, string) {
 	case "10g":
 		return "/settings/secrets/item/" + ids.github + "/delete", `(function(){return (document.body.innerText||"").indexOf("Delete GITHUB_TOKEN?")>=0;})()`
 	case "10g2":
-		return "/settings/secrets/item/" + ids.key + "/delete", `(function(){return (document.body.innerText||"").indexOf("This key is in use")>=0;})()`
+		return "/settings/secrets/item/" + ids.key + "/delete", `(function(){var t=document.body.innerText||"";return t.indexOf("Replace this key, or change those agents' model first.")>=0 && t.indexOf("Agent secrets")>=0;})()`
 	default:
 		return "/settings/secrets", `true`
 	}
@@ -219,12 +219,20 @@ func seedVaultCast(t *testing.T, st *store.Store, userID string, withSecrets boo
 	var ids vaultIDs
 	mk := func(sec, name, title, color, status, activity, model string) string {
 		st.SetNow(func() time.Time { return time.Date(2026, 10, 28, 15, 0, 0, 0, time.UTC) })
-		agent, _, err := st.CreateAgent(ctx, userID, store.AgentInput{
+		agent, thread, err := st.CreateAgent(ctx, userID, store.AgentInput{
 			SectionID: sec, Name: name, Title: title, Color: color,
 			Status: status, Activity: activity, Model: model,
 		})
 		if err != nil {
 			t.Fatal(err)
+		}
+		if name == "Atlas" {
+			if _, err := st.CreateMessage(ctx, userID, thread.ID, "user", userID, "Check docs/ for broken links and fix what you can on a branch."); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.CreateMessage(ctx, userID, thread.ID, "agent", agent.ID, "Done. I fixed 3 broken links in docs/setup.md and docs/faq.md on the branch docs/fix-links."); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return agent.ID
 	}

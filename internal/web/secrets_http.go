@@ -375,11 +375,11 @@ func (s *Server) vaultDeleteForm(w http.ResponseWriter, r *http.Request) {
 	if s.missing(w, err) {
 		return
 	}
-	status := http.StatusOK
 	if v.Modal.Class == "warnm" {
-		status = http.StatusConflict
+		s.renderInUse(w, r, user, v)
+		return
 	}
-	s.renderVault(w, r, user, status, v)
+	s.renderVault(w, r, user, http.StatusOK, v)
 }
 
 func (s *Server) vaultDelete(w http.ResponseWriter, r *http.Request) {
@@ -406,7 +406,7 @@ func (s *Server) vaultDelete(w http.ResponseWriter, r *http.Request) {
 				if s.missing(w, viewErr) {
 					return
 				}
-				s.renderVault(w, r, user, http.StatusConflict, v)
+				s.renderInUse(w, r, user, v)
 				return
 			}
 		}
@@ -425,6 +425,17 @@ func (s *Server) vaultDelete(w http.ResponseWriter, r *http.Request) {
 	s.audit(r.Context(), user, "secret.deleted", sec.ID, sec.Name, "", "")
 	s.reloadAgents(r.Context(), user.ID, sec.ID, ids)
 	http.Redirect(w, r, "/settings/secrets", http.StatusSeeOther)
+}
+
+// renderInUse draws the vault list with the in-use dialog on top.
+func (s *Server) renderInUse(w http.ResponseWriter, r *http.Request, user store.User, detail vaultView) {
+	list, err := s.listView(r, user, vaultForm{}, "")
+	if s.missing(w, err) {
+		return
+	}
+	list.Modal = detail.Modal
+	list.ModalOpen = true
+	s.renderVault(w, r, user, http.StatusConflict, list)
 }
 
 func (s *Server) vaultReloadAgent(w http.ResponseWriter, r *http.Request) {

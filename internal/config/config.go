@@ -3,6 +3,7 @@ package config
 
 import (
 	"bufio"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -97,6 +98,9 @@ func LoadFile(path string) (Config, error) {
 	}
 	if allZero(secrets) {
 		return Config{}, errors.New("CASTBOT_SECRETS_KEY must not be all zeros")
+	}
+	if subtle.ConstantTimeCompare(key, secrets) == 1 {
+		return Config{}, errors.New("CASTBOT_SECRETS_KEY must not match CASTBOT_SESSION_KEY")
 	}
 	cfg := Config{
 		EnvFile:          path,

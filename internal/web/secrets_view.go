@@ -43,7 +43,7 @@ type vaultSummary struct {
 
 type vaultKey struct {
 	Slot, Title, Letter, Label, When, Used, UsedLabel, Href string
-	Added                                                   bool
+	Added, Idle                                             bool
 	Avatars                                                 []vaultAv
 }
 
@@ -105,11 +105,11 @@ type vaultPaneRow struct {
 }
 
 type vaultModal struct {
-	Class, Title, Body, Action, Submit, SecretID string
-	Lines                                        []string
-	Green                                        string
-	Value                                        bool
-	Danger                                       bool
+	Class, Title, Body, Action, Close, Submit, SecretID string
+	Lines                                               []string
+	Green                                               string
+	Value                                               bool
+	Danger                                              bool
 }
 
 type secretEvent struct {
@@ -196,7 +196,7 @@ func (s *Server) vaultSummary(ctx context.Context, user store.User) (vaultView, 
 	return v, nil
 }
 
-// slotKey is the oldest vault row for a slot, or an env-backed stand-in with an empty id.
+// slotKey is the newest vault row for a slot, or an env-backed stand-in with an empty id.
 func (s *Server) slotKey(ctx context.Context, userID string, slot keySlot) (store.Secret, bool, error) {
 	rows, err := s.store.ListSecrets(ctx, userID, "")
 	if err != nil {
@@ -204,11 +204,12 @@ func (s *Server) slotKey(ctx context.Context, userID string, slot keySlot) (stor
 	}
 	var found *store.Secret
 	for i := range rows {
-		if rows[i].Provider == slot.ID || rows[i].Provider == slot.Manifest {
-			if found == nil || rows[i].CreatedAt < found.CreatedAt {
-				cp := rows[i]
-				found = &cp
-			}
+		if rows[i].Provider != slot.ID && rows[i].Provider != slot.Manifest {
+			continue
+		}
+		if found == nil || rows[i].CreatedAt > found.CreatedAt || (rows[i].CreatedAt == found.CreatedAt && rows[i].ID > found.ID) {
+			cp := rows[i]
+			found = &cp
 		}
 	}
 	if found != nil {
@@ -317,6 +318,7 @@ func (s *Server) listView(r *http.Request, user store.User, form vaultForm, high
 	for _, slot := range modelSlots() {
 		key := vaultKey{Slot: slot.ID, Title: slot.Title, Letter: slot.Letter, Href: "/settings/secrets/keys/" + slot.ID}
 		sec, ok, err := s.slotKey(ctx, user.ID, slot)
+		effectiveID := ""
 		if err != nil {
 			return vaultView{}, err
 		}
@@ -345,9 +347,28 @@ func (s *Server) listView(r *http.Request, user store.User, form vaultForm, high
 			key.Avatars = avatars(users, 3)
 			if sec.ID != "" {
 				key.Href = "/settings/secrets/item/" + sec.ID + "/replace"
+				effectiveID = sec.ID
 			}
 		}
 		v.Keys = append(v.Keys, key)
+		for _, extra := range rows {
+			if extra.ID == "" || extra.ID == effectiveID {
+				continue
+			}
+			if extra.Provider != slot.ID && extra.Provider != slot.Manifest {
+				continue
+			}
+			label := extra.Label
+			if label == "" {
+				label = extra.Name
+			}
+			v.Keys = append(v.Keys, vaultKey{
+				Slot: slot.ID, Title: slot.Title, Letter: slot.Letter,
+				Label: label, Added: true, Idle: true,
+				When: "Added " + monthDay(extra.CreatedAt, loc),
+				Href: "/settings/secrets/item/" + extra.ID + "/delete",
+			})
+		}
 	}
 	for _, sec := range rows {
 		if sec.Provider != "" {
@@ -719,9 +740,10 @@ func (s *Server) attachModal(ctx context.Context, user store.User, sec store.Sec
 				if blocked != "" {
 					v.Modal = vaultModal{
 						Class: "warnm", Title: "This key is in use", Body: blocked,
-						Submit: "", SecretID: sec.ID,
+						Submit: "Replace", SecretID: sec.ID,
+						Action: "/settings/secrets/item/" + sec.ID + "/replace",
+						Close:  "/settings/secrets",
 					}
-					v.Modal.Action = "/settings/secrets/keys/" + slot.ID
 					v.ModalOpen = true
 					return nil
 				}
@@ -797,7 +819,7 @@ func (s *Server) keyInUse(ctx context.Context, userID string, sec store.Secret, 
 	if label == "" {
 		label = sec.Name
 	}
-	return label + " is the " + slot.Title + " key for " + englishAnd(names) + ". Add another " + slot.Title + " key and switch those agents to it first, or change their model.", nil
+	return label + " is the " + slot.Title + " key for " + englishAnd(names) + ". Replace this key, or change those agents' model first.", nil
 }
 
 func (s *Server) giveAgentsForm(ctx context.Context, user store.User, sec store.Secret, granted []store.Agent) (vaultForm, error) {

@@ -13,7 +13,7 @@ openssl rand -hex 32
 openssl rand -hex 32
 ```
 
-Put the first value in `castbot.env` as `CASTBOT_SESSION_KEY` and the second as `CASTBOT_SECRETS_KEY` (see `castbot.env.example`), then `chmod 0600 castbot.env`. The secrets key encrypts the vault. The process will not start without it. A later deploy has to set `CASTBOT_SECRETS_KEY` on the host. This slice does not deploy.
+Put the first value in `castbot.env` as `CASTBOT_SESSION_KEY` and the second as `CASTBOT_SECRETS_KEY` (see `castbot.env.example`), then `chmod 0600 castbot.env`. The two values must be different. The secrets key encrypts the vault. The process will not start without it. A later deploy has to set `CASTBOT_SECRETS_KEY` on the host before the first start. That start checkpoints and vacuums any old plaintext fixtures. This slice does not deploy.
 
 ```
 go run ./cmd/castbot create-user --email you@example.com --name "Your Name"

@@ -103,12 +103,28 @@ func (s *Store) migrateSecrets() error {
 		if err := s.encryptFixtures(); err != nil {
 			return err
 		}
-		if _, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (16)`); err != nil {
-			return err
-		}
+	}
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO schema_migrations(version) VALUES (16)`); err != nil {
+		return err
 	}
 	// A crash can leave plaintext behind. The vault already has the copy.
-	if _, err := s.db.Exec(`DELETE FROM secret_fixtures`); err != nil {
+	res, err := s.db.Exec(`DELETE FROM secret_fixtures`)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	// Free pages and the WAL can still hold the old plaintext. One connection
+	// is open, so the checkpoint and VACUUM are safe here.
+	if _, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`VACUUM`); err != nil {
 		return err
 	}
 	return nil
@@ -372,8 +388,8 @@ func (s *Store) ListSecrets(ctx context.Context, userID, providerFilter string) 
 	return out, rows.Err()
 }
 
-// ProviderSecrets returns model keys whose provider is one of ids, oldest first.
-// Values are decrypted.
+// ProviderSecrets returns model keys whose provider is one of ids, newest first.
+// The first row is the one agents use. Values are decrypted.
 func (s *Store) ProviderSecrets(ctx context.Context, userID string, ids []string) ([]Secret, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -388,7 +404,7 @@ FROM secrets WHERE user_id = ? AND provider IN (`
 		q += "?"
 		args = append(args, id)
 	}
-	q += `) ORDER BY created_at, name`
+	q += `) ORDER BY created_at DESC, rowid DESC`
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err

@@ -10,6 +10,6 @@ A key added or rotated after the machine is already running is picked up on the 
 
 If a run needs a key and the variable is empty, the run fails at once with: No key for provider digitalocean. Ask the owner to add it. A keyless provider, such as ollama, does not need a variable.
 
-A vault row for that provider wins over the process environment. Provider A and Provider B in Settings are the first two keyed providers in the manifest. If the vault has no row, the process environment is still used, so an existing agent keeps working. Other providers stay on the process environment. See `docs/secrets.md`.
+Settings lists every keyed provider. The newest vault row for that provider wins over the process environment. If the vault has no row, the process environment is still used, so an existing agent keeps working. See `docs/secrets.md`.
 
 `CASTBOT_DEV_ECHO=1` turns on the local echo runtime. It is off by default. Startup refuses the flag when `CASTBOT_PUBLIC_URL` is https and the host is not localhost, 127.0.0.1, or ::1.

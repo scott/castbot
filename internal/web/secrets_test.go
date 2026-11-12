@@ -1,19 +1,27 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
+	"encoding/json"
 	"errors"
+	"html"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/scott/castbot/internal/auth"
 	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/store"
+	_ "modernc.org/sqlite"
 )
 
 func TestVaultPageHidesValues(t *testing.T) {
@@ -216,10 +224,9 @@ func TestReloadWaitsForReplyThenRetries(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, "Reloads after its reply") || !strings.Contains(body, "New value saved.") {
 		t.Fatal("deferred copy missing")
 	}
-	if _, _, err := h.st.FinishRun(context.Background(), user.ID, runRow.ID, "done", 1); err != nil {
+	if err := h.srv.runs.Finish(run.Job{UserID: user.ID, AgentID: agent.ID, RunID: runRow.ID}, "done", 1); err != nil {
 		t.Fatal(err)
 	}
-	h.srv.afterSecretRun(run.Job{UserID: user.ID, AgentID: agent.ID, RunID: runRow.ID})
 	_, edgesDone := fake.Snapshot()
 	if edgesDone == edges {
 		t.Fatal("reload did not run after the reply")
@@ -278,7 +285,8 @@ func TestModelKeyDeleteAndEnvFallback(t *testing.T) {
 	id := strings.TrimPrefix(hdr.Get("Location"), "/settings/secrets/item/")
 	id = strings.TrimSuffix(id, "?watch=1")
 	code, body, _ := h.do(http.MethodPost, "/settings/secrets/item/"+id+"/delete", h.form(url.Values{}), ip, nil)
-	if code != http.StatusConflict || !strings.Contains(body, "This key is in use") || !strings.Contains(body, "provider-a-main is the Provider A key for Atlas.") {
+	shown := html.UnescapeString(body)
+	if code != http.StatusConflict || !strings.Contains(shown, "This key is in use") || !strings.Contains(shown, "provider-a-main is the Provider A key for Atlas.") || !strings.Contains(shown, "Replace this key, or change those agents' model first.") || !strings.Contains(body, "/replace") || strings.Contains(shown, "Add another") || !strings.Contains(shown, "Agent secrets") {
 		t.Fatalf("blocked delete %d", code)
 	}
 	if strings.Contains(body, "vault-provider-value") || strings.Contains(body, "env-provider-value") {
@@ -425,5 +433,293 @@ func TestMachinePullIsGrantPlusModelKey(t *testing.T) {
 	code, packed, _ := h.do(http.MethodGet, "/api/castlet/agents/"+agent.ID+"/bundle", "", ip, map[string]string{"Authorization": "Bearer " + token})
 	if code != http.StatusOK || strings.Contains(packed, granted) || strings.Contains(packed, other) || strings.Contains(packed, modelKey) {
 		t.Fatal("bundle response carried a secret")
+	}
+}
+
+func TestNewestVaultKeyWins(t *testing.T) {
+	ip := "203.0.113.87:9"
+	h := newHarness(t)
+	user, secret := h.account("ada-newest@example.com", "Ada", "correct-horse-1")
+	h.login("ada-newest@example.com", "correct-horse-1", secret, ip, false)
+	agent := vaultAgent(t, h.st, user.ID, "Atlas")
+	if err := h.st.SetAgentModel(context.Background(), user.ID, agent.ID, "Provider A / model-large"); err != nil {
+		t.Fatal(err)
+	}
+	h.st.SetNow(func() time.Time { return time.Date(2026, 10, 28, 15, 0, 0, 0, time.UTC) })
+	old, err := h.st.CreateSecret(context.Background(), user.ID, store.SecretInput{
+		Name: "PROVIDER_A_OLD", Label: "old-key", Provider: "a", Value: "old-vault-value",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.st.SetNow(func() time.Time { return time.Date(2026, 11, 3, 15, 0, 0, 0, time.UTC) })
+	newer, err := h.st.CreateSecret(context.Background(), user.ID, store.SecretInput{
+		Name: "PROVIDER_A_NEW", Label: "new-key", Provider: "a", Value: "new-vault-value",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, value, missing := h.srv.effectiveModelSecret(context.Background(), user.ID, "Provider A / model-large")
+	if missing != "" || value != "new-vault-value" {
+		t.Fatal("newest vault key did not win")
+	}
+	code, body, _ := h.do(http.MethodGet, "/settings/secrets", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, "Not in use") || !strings.Contains(body, "old-key") || strings.Contains(body, "old-vault-value") || strings.Contains(body, "new-vault-value") {
+		t.Fatal("older key was not marked unused")
+	}
+	slots := modelSlots()
+	if len(slots) < 3 {
+		t.Fatal("expected every keyed provider")
+	}
+	for _, slot := range slots {
+		if !strings.Contains(body, slot.Title) {
+			t.Fatalf("missing %s", slot.Title)
+		}
+	}
+	code, _, _ = h.do(http.MethodPost, "/settings/secrets/item/"+old.ID+"/delete", h.form(url.Values{}), ip, nil)
+	if code != http.StatusSeeOther {
+		t.Fatalf("unused delete %d", code)
+	}
+	if _, err := h.st.SecretMeta(context.Background(), user.ID, old.ID); err != store.ErrNotFound {
+		t.Fatal("unused key remained")
+	}
+	code, body, _ = h.do(http.MethodPost, "/settings/secrets/item/"+newer.ID+"/delete", h.form(url.Values{}), ip, nil)
+	if code != http.StatusConflict || !strings.Contains(body, "This key is in use") {
+		t.Fatalf("effective delete %d", code)
+	}
+	third := slots[2]
+	model := third.Manifest + "/demo-model"
+	if inf, ok := castcfg.InferenceFor(model); !ok || inf.Key != third.Manifest {
+		t.Fatal("third provider model did not match")
+	}
+	t.Setenv(castcfg.ProviderKeyEnv(third.Manifest), "env-third-value")
+	_, value, missing = h.srv.effectiveModelSecret(context.Background(), user.ID, model)
+	if missing != "" || value != "env-third-value" {
+		t.Fatal("env fallback missed a later provider")
+	}
+	if _, err := h.st.CreateSecret(context.Background(), user.ID, store.SecretInput{
+		Name: "PROVIDER_C_MAIN", Label: "later-key", Provider: third.ID, Value: "vault-third-value",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, value, missing = h.srv.effectiveModelSecret(context.Background(), user.ID, model)
+	if missing != "" || value != "vault-third-value" {
+		t.Fatal("vault key missed a later provider")
+	}
+}
+
+func TestMigrateKeepsHMACAndSkipsReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.db")
+	opt := store.Options{SecretsKey: bytes.Repeat([]byte{0x3c}, 32), Argon: auth.Params{Time: 1, Memory: 8 * 1024, Threads: 1, KeyLen: 32}}
+	st, err := store.Open(path, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	hash, err := auth.Hash("correct-horse-1", st.Argon())
+	if err != nil {
+		t.Fatal(err)
+	}
+	totp, err := auth.NewTOTPSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := st.CreateUser(ctx, store.NewUser{Email: "ada-fp2@example.com", DisplayName: "Ada", Workspace: "Personal", PasswordHash: hash, TOTPSecret: totp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, err := st.SystemSection(ctx, user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := st.CreateAgent(ctx, user.ID, store.AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "sec-fp"
+	const plain = "fixture-plain-value"
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version = 16`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO secret_fixtures(id, workspace_id, user_id, name, value, created_at) VALUES (?, ?, ?, 'SEARCH_API_KEY', ?, '2026-10-28T15:00:00Z')`, id, user.WorkspaceID, user.ID, plain); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO agent_secret_grants(agent_id, secret_id, workspace_id, user_id) VALUES (?, ?, ?, ?)`, agent.ID, id, user.WorkspaceID, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	session := bytes.Repeat([]byte{0x11}, 32)
+	mac := hmac.New(sha256.New, session)
+	mac.Write([]byte("castbot-secret-fp-v1"))
+	before := hashSecretPairs(hmac.New(sha256.New, mac.Sum(nil)), []secretPair{{name: "SEARCH_API_KEY", value: plain}})
+	st, err = store.Open(path, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv := New(st, session, nil)
+	t.Cleanup(srv.Close)
+	agent, err = st.GetAgent(ctx, user.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := srv.secretFingerprint(ctx, user.ID, agent)
+	if err != nil || after != before {
+		t.Fatal("fingerprint changed across migration")
+	}
+	if err := st.SetSecretFP(ctx, user.ID, agent.ID, before); err != nil {
+		t.Fatal(err)
+	}
+	fake := host.NewFake()
+	srv.SetHost(fake, "example.invalid/castbot-runtime:s08", "https://castbot.example")
+	if err := srv.refreshSecrets(ctx, user.ID, agent, "https://vm.example", "token"); err != nil {
+		t.Fatal(err)
+	}
+	if _, edges := fake.Snapshot(); edges != 0 {
+		t.Fatal("migration reloaded a matching set")
+	}
+}
+
+func TestReloadWaitsForApproval(t *testing.T) {
+	ip := "203.0.113.88:9"
+	h := newHarness(t)
+	fake := host.NewFake()
+	h.srv.SetHost(fake, "example.invalid/castbot-runtime:s08", "https://castbot.example")
+	user, secret := h.account("ada-approve@example.com", "Ada", "correct-horse-1")
+	h.login("ada-approve@example.com", "correct-horse-1", secret, ip, false)
+	agent := vaultAgent(t, h.st, user.ID, "Juniper")
+	readyMachine(t, h, fake, agent, "vm-approve", "running")
+	sec, err := h.st.PutSecret(context.Background(), user.ID, "GITHUB_TOKEN", "old-vault-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.GrantSecret(context.Background(), user.ID, agent.ID, sec.ID); err != nil {
+		t.Fatal(err)
+	}
+	thread := agentThread(t, h, user.ID, agent.ID)
+	runRow, err := h.st.CreateRun(context.Background(), user.ID, thread, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.MarkStreaming(context.Background(), user.ID, runRow.ID); err != nil {
+		t.Fatal(err)
+	}
+	ap, err := h.st.RecordPermission(context.Background(), user.ID, runRow.ID, json.RawMessage(`{"id":"req-1","tool":"bash"}`), time.Now().Add(time.Hour), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotRun, err := h.st.GetRun(context.Background(), user.ID, runRow.ID)
+	if err != nil || gotRun.Status != "waiting_approval" {
+		t.Fatal("approval did not wait")
+	}
+	_, edges := fake.Snapshot()
+	code, _, hdr := h.do(http.MethodPost, "/settings/secrets/item/"+sec.ID+"/replace", h.form(url.Values{"value": {"new-vault-value"}}), ip, nil)
+	if code != http.StatusSeeOther {
+		t.Fatalf("replace %d", code)
+	}
+	if _, now := fake.Snapshot(); now != edges {
+		t.Fatal("reload ran during an approval")
+	}
+	code, body, _ := h.do(http.MethodGet, hdr.Get("Location"), "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, "Reloads after its reply") {
+		t.Fatal("approval wait was not shown")
+	}
+	if _, claimed, err := h.st.ClaimDecision(context.Background(), user.ID, ap.ID, runRow.ID, "denied", user.ID); err != nil || !claimed {
+		t.Fatal("approval was not decided")
+	}
+	if err := h.srv.runs.Finish(run.Job{UserID: user.ID, AgentID: agent.ID, RunID: runRow.ID}, "done", 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, now := fake.Snapshot(); now == edges {
+		t.Fatal("reload did not run after the approval")
+	}
+}
+
+func TestVaultMutationsNeedCSRFAndReplaceLock(t *testing.T) {
+	ip := "203.0.113.89:9"
+	h := newHarness(t)
+	fake := host.NewFake()
+	h.srv.SetHost(fake, "example.invalid/castbot-runtime:s08", "https://castbot.example")
+	user, secret := h.account("ada-lock2@example.com", "Ada", "correct-horse-1")
+	h.login("ada-lock2@example.com", "correct-horse-1", secret, ip, false)
+	agent := vaultAgent(t, h.st, user.ID, "Atlas")
+	if err := h.st.SetAgentModel(context.Background(), user.ID, agent.ID, "Provider A / model-large"); err != nil {
+		t.Fatal(err)
+	}
+	readyMachine(t, h, fake, agent, "vm-lock", "running")
+	sec, err := h.st.PutSecret(context.Background(), user.ID, "GITHUB_TOKEN", "old-vault-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spare, err := h.st.PutSecret(context.Background(), user.ID, "OTHER_TOKEN", "spare-vault-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.GrantSecret(context.Background(), user.ID, agent.ID, sec.ID); err != nil {
+		t.Fatal(err)
+	}
+	posts := []struct {
+		path string
+		form url.Values
+	}{
+		{"/settings/secrets", url.Values{"name": {"NEW_TOKEN"}, "value": {"fresh-vault-value"}, "agent": {agent.ID}}},
+		{"/settings/secrets/keys/a", url.Values{"label": {"provider-a-main"}, "value": {"vault-provider-value"}}},
+		{"/settings/secrets/item/" + sec.ID + "/replace", url.Values{"value": {"new-vault-value"}}},
+		{"/settings/secrets/item/" + sec.ID + "/delete", url.Values{}},
+		{"/settings/secrets/item/" + sec.ID + "/reload/" + agent.ID, url.Values{}},
+		{"/settings/secrets/item/" + sec.ID + "/grant", url.Values{"agent": {agent.ID}}},
+		{"/agents/" + agent.ID + "/secrets/grant", url.Values{"secret": {spare.ID}}},
+		{"/agents/" + agent.ID + "/secrets/revoke", url.Values{"secret": {sec.ID}}},
+	}
+	for _, post := range posts {
+		vals := url.Values{}
+		for k, vs := range post.form {
+			vals[k] = append([]string{}, vs...)
+		}
+		vals.Set("csrf", "nope")
+		code, body, _ := h.do(http.MethodPost, post.path, vals.Encode(), ip, nil)
+		if code != http.StatusForbidden || !strings.Contains(body, "The form expired.") {
+			t.Fatalf("csrf %s %d", post.path, code)
+		}
+	}
+	if _, err := h.st.SecretByName(context.Background(), user.ID, "NEW_TOKEN"); err != store.ErrNotFound {
+		t.Fatal("csrf add wrote a secret")
+	}
+	got, err := h.st.DecryptSecret(context.Background(), user.ID, sec.ID)
+	if err != nil || got != "old-vault-value" {
+		t.Fatal("csrf changed a value")
+	}
+	if _, _, err := h.st.BeginReplacement(context.Background(), user.ID, agent.ID, "ada@example.com", "example.invalid/castbot-runtime:s08", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, post := range posts {
+		code, body, _ := h.do(http.MethodPost, post.path, h.form(post.form), ip, nil)
+		if code != http.StatusConflict || !strings.Contains(body, "This machine is being replaced.") {
+			t.Fatalf("lock %s %d", post.path, code)
+		}
+	}
+	got, err = h.st.DecryptSecret(context.Background(), user.ID, sec.ID)
+	if err != nil || got != "old-vault-value" {
+		t.Fatal("lock changed a value")
+	}
+	if _, err := h.st.SecretByName(context.Background(), user.ID, "NEW_TOKEN"); err != store.ErrNotFound {
+		t.Fatal("lock wrote a secret")
+	}
+	ids, err := h.st.GrantAgentIDs(context.Background(), user.ID, sec.ID)
+	if err != nil || len(ids) != 1 || ids[0] != agent.ID {
+		t.Fatal("lock changed a grant")
+	}
+	ids, err = h.st.GrantAgentIDs(context.Background(), user.ID, spare.ID)
+	if err != nil || len(ids) != 0 {
+		t.Fatal("lock granted a spare secret")
 	}
 }
