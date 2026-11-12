@@ -34,6 +34,9 @@ type agentForm struct {
 	KeptLines                     []castcfg.KeptItem
 	HasAvatar, Editing            bool
 	AgentID                       string
+	Back, Job, KeyLine, Size      string
+	Idle                          int
+	Advanced, Prefill             bool
 }
 
 type toolField struct {
@@ -212,7 +215,26 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
+	base.Heading = "New agent, all fields"
+	base.Sub = "Change anything, then create."
+	base.Submit = "Create and start"
+	base.Back = "/new-agent"
+	base.Advanced = true
 	f, spec, avatar, mime, good := s.readForm(r, base)
+	f.Job, _ = redactSecrets(strings.TrimSpace(r.FormValue("job")))
+	switch strings.TrimSpace(r.FormValue("size")) {
+	case "2:4096", "8:16384":
+		f.Size = strings.TrimSpace(r.FormValue("size"))
+	default:
+		f.Size = createSize
+	}
+	f.Idle = createIdle
+	switch strings.TrimSpace(r.FormValue("idle")) {
+	case "300":
+		f.Idle = 300
+	case "3600":
+		f.Idle = 3600
+	}
 	if err := s.bindKept(r.Context(), user.ID, "", &f, &spec); err != nil {
 		f.SaveErr = keptErr(err)
 		good = false
@@ -224,8 +246,18 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 	if _, err := s.store.GetSection(r.Context(), user.ID, f.SectionID); s.missing(w, err) {
 		return
 	}
+	h, image, publicURL := s.hostConfig()
+	hosted := h != nil && image != "" && publicURL != ""
+	if hosted {
+		if _, ok := s.userModelKey(r.Context(), user.ID, f.Model); !ok {
+			f.SaveErr = "Add a model key first. Agents run on your own Provider A key, and you have not added one yet."
+			s.showForm(w, r, user, f, http.StatusBadRequest)
+			return
+		}
+	}
 	agent, _, err := s.store.CreateAgent(r.Context(), user.ID, store.AgentInput{
-		SectionID: f.SectionID, Name: f.Name, Title: f.Title, Model: f.Model, Status: "draft", Color: "c0",
+		SectionID: f.SectionID, Name: f.Name, Title: f.Title, Description: f.Job, Model: f.Model, Status: "draft", Color: "c0",
+		IdleTimeout: f.Idle, Size: f.Size, PendingGreet: hosted,
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -257,7 +289,28 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 			return
 		}
 	}
-	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID)+"/edit?notice=saved", http.StatusSeeOther)
+	if hosted {
+		if err := s.noteCreated(r.Context(), user, agent); err != nil {
+			http.Error(w, "Error", http.StatusInternalServerError)
+			return
+		}
+		if err := s.launchNewAgent(r.Context(), user.ID, agent); err != nil {
+			if errors.Is(err, store.ErrQuota) {
+				_ = s.store.DeleteAgent(r.Context(), user.ID, agent.ID)
+				f.SaveErr = "This account has reached its machine limit."
+				s.showForm(w, r, user, f, http.StatusConflict)
+				return
+			}
+			if !errors.Is(err, errNoHost) {
+				if s.missing(w, err) {
+					return
+				}
+				return
+			}
+		}
+	}
+	_ = s.store.DeleteCreateDraft(r.Context(), user.ID)
+	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID), http.StatusSeeOther)
 }
 
 func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {

@@ -132,14 +132,11 @@ func (s *Server) provisionMachine(w http.ResponseWriter, r *http.Request) {
 		s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusBadRequest, "No machine host is configured.")
 		return
 	}
-	if _, err := s.store.LiveVM(r.Context(), user.ID, agent.ID); err == nil {
-		s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusConflict, "This agent already has a machine.")
-		return
-	} else if !errors.Is(err, store.ErrNotFound) {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	if _, err := s.store.BeginVM(r.Context(), user.ID, agent.ID, host.MachineName(agent.ID), image); err != nil {
+	if err := s.launchNewAgent(r.Context(), user.ID, agent); err != nil {
+		if errors.Is(err, errNoHost) {
+			s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusBadRequest, "No machine host is configured.")
+			return
+		}
 		if errors.Is(err, store.ErrQuota) {
 			s.renderAgent(w, r, user, agent.ID, false, "machine", http.StatusConflict, "This account has reached its machine limit.")
 			return
@@ -153,12 +150,6 @@ func (s *Server) provisionMachine(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	s.noteVM(r.Context(), user.ID, agent.ID, "", store.EventCreateRequested, 0)
-	s.prov.Add(1)
-	go func() {
-		defer s.prov.Done()
-		s.finishProvision(s.base, h, user.ID, agent, image, publicURL)
-	}()
 	target := "/agents/" + url.PathEscape(agent.ID) + "/machine"
 	if r.Header.Get("HX-Request") == "true" {
 		w.Header().Set("HX-Redirect", target)
@@ -172,7 +163,7 @@ func (s *Server) finishProvision(ctx context.Context, h host.AgentHost, userID s
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, s.bootBudget())
 	defer cancel()
 	boot, err := s.store.IssueBootstrap(ctx, userID, agent.ID)
 	if err != nil {
@@ -189,9 +180,10 @@ func (s *Server) finishProvision(ctx context.Context, h host.AgentHost, userID s
 		return
 	}
 	started := time.Now()
+	cpu, mem := sizePair(agent.Size)
 	created, err := h.Create(ctx, host.CreateSpec{
 		Name: host.MachineName(agent.ID), AgentID: agent.ID, Image: image,
-		Region: host.DefaultRegion, CPU: host.DefaultCPU, MemoryMiB: host.DefaultMemoryMiB,
+		Region: host.DefaultRegion, CPU: cpu, MemoryMiB: mem,
 		Idle: idle, HTTPPort: host.DefaultHTTPPort,
 		ControlURL: publicURL, Bootstrap: boot,
 		Tags: []string{host.InstanceTag(inst)},

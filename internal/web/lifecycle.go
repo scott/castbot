@@ -229,6 +229,9 @@ func (s *Server) reconcileOnce(ctx context.Context) error {
 			s.noteVM(ctx, row.UserID, row.AgentID, row.MicroVMID, store.EventPauseObserved, 0)
 		}
 	}
+	for _, row := range rows {
+		s.maybeGreet(ctx, row.UserID, row.AgentID)
+	}
 	return nil
 }
 

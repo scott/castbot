@@ -81,6 +81,9 @@ type AgentInput struct {
 	IdleTimeout int
 	Size        string
 	CreatedAt   time.Time
+	// PendingGreet leaves greeted_at empty so the boot path says hello once.
+	// Other creates are marked greeted so an existing agent is not greeted again.
+	PendingGreet bool
 }
 
 func insertSection(ctx context.Context, tx *sql.Tx, wid, uid, name, kind string, pos int, stamp string) (string, error) {
@@ -321,8 +324,12 @@ func (s *Store) CreateAgent(ctx context.Context, userID string, in AgentInput) (
 		return Agent{}, Thread{}, err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO agents(id, workspace_id, user_id, section_id, name, title, description, avatar_color, model, status, activity, unread, approvals, idle_timeout, size, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		aid, sec.WorkspaceID, userID, sec.ID, name, strings.TrimSpace(in.Title), strings.TrimSpace(in.Description), color, strings.TrimSpace(in.Model), status, strings.TrimSpace(in.Activity), in.Unread, in.Approvals, idle, size, pos, stamp)
+	var greeted any
+	if !in.PendingGreet {
+		greeted = stamp
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO agents(id, workspace_id, user_id, section_id, name, title, description, avatar_color, model, status, activity, unread, approvals, idle_timeout, size, position, created_at, greeted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		aid, sec.WorkspaceID, userID, sec.ID, name, strings.TrimSpace(in.Title), strings.TrimSpace(in.Description), color, strings.TrimSpace(in.Model), status, strings.TrimSpace(in.Activity), in.Unread, in.Approvals, idle, size, pos, stamp, greeted)
 	if err != nil {
 		return Agent{}, Thread{}, err
 	}

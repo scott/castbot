@@ -90,6 +90,7 @@ func (s *Server) expireLoop() {
 			// or unreachable guest cannot hold the next deadline back.
 			_, _ = s.store.ExpireDue(s.base)
 			_, _ = s.store.SweepOrphanCLIDecisions(s.base)
+			_ = s.store.DropStaleCreateDrafts(s.base)
 			s.kickApprovalFollowUp()
 		}
 	}

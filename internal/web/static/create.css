@@ -1,0 +1,90 @@
+/* Chat-first new agent. Loaded with castbot.css. */
+
+.nh .nh-ico { width: 34px; height: 34px; border-radius: 10px; background: var(--acc-soft); color: var(--acc); display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.nh .nh-ico .mark { width: 22px; height: 22px; }
+.nh .grow { display: grid; min-width: 0; }
+.nh .nm { font: 650 16px var(--hd); }
+.nh .sub { font-size: 12.5px; color: var(--tx3); }
+.nh .advlink { font-size: 13.5px; display: inline-flex; align-items: center; min-height: 36px; padding: 0 6px; }
+.nclose { border: 1px solid var(--line2); }
+.ibtn.solid.on { box-shadow: 0 0 0 3px var(--acc-soft); }
+
+.nmain.hero .msgs { min-height: 100%; align-content: center; }
+.nhero { padding-top: 24px; }
+.nhero .av.cb.lg { width: 56px; height: 56px; border-radius: 16px; background: transparent; }
+.av.cb { background: transparent; padding: 0; overflow: hidden; }
+.av.cb .mark { width: 100%; height: 100%; }
+.nfoot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0; padding: 0 16px 12px; font-size: 12.5px; color: var(--tx3); }
+.nfoot .i { flex: none; }
+.nfoot span { flex: 1 1 260px; }
+.nfoot .link { font-size: 13px; font-weight: 650; display: inline-flex; align-items: center; min-height: 32px; }
+
+.cbm .body { max-width: 640px; }
+.tight { margin: 4px 0 8px; padding-left: 20px; display: grid; gap: 2px; color: var(--tx2); }
+.setup { border: 1px solid var(--line2); border-radius: 16px; background: var(--surf); padding: 16px; display: grid; gap: 14px; margin: 8px 0 6px; }
+.setup-h { display: flex; gap: 12px; align-items: flex-start; }
+.setup-h .av { width: 44px; height: 44px; border-radius: 12px; font-size: 18px; }
+.setup-h .grow { display: grid; gap: 6px; min-width: 0; }
+.setup-h .lab { font-size: 12px; font-weight: 650; color: var(--tx3); text-transform: uppercase; letter-spacing: .06em; }
+.sname { font: 650 18px var(--hd); margin: 0; }
+.sname.bad { color: var(--err); }
+.tag-auto { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--acc); font-weight: 600; }
+.ferr { display: flex; gap: 6px; align-items: flex-start; color: var(--err); font-size: 13px; margin: 0; }
+.sgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; margin: 0; font-size: 14px; }
+.sgrid > div { min-width: 0; }
+.sgrid .wide { grid-column: 1 / -1; }
+.sgrid dt { font-size: 12px; font-weight: 650; color: var(--tx3); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 3px; }
+.sgrid dd { margin: 0; color: var(--tx); }
+.sgrid .t2 { font-size: 12.5px; color: var(--tx3); }
+.instr { display: block; color: var(--tx2); border-left: 2px solid var(--line2); padding-left: 10px; margin-bottom: 4px; overflow-wrap: break-word; }
+.m-user, .keyout, .body p.pre { overflow-wrap: break-word; }
+.keymiss { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.keymiss .i { color: var(--warn); flex: none; }
+.keymiss .grow { flex: 1 1 240px; }
+.rhint2 { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 13px; color: var(--tx2); }
+.setup-f { display: grid; gap: 8px; }
+.cacts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.cnote, .cwhy { margin: 0; font-size: 12.5px; color: var(--tx3); display: flex; gap: 6px; align-items: flex-start; }
+.cwhy { color: var(--err); font-weight: 600; }
+.btn.dis { opacity: .45; pointer-events: none; }
+.keyout { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: var(--acc-soft); font-size: 14px; margin: 8px 0; }
+.keyout .i { flex: none; margin-top: 3px; color: var(--acc); }
+.setup.editing { border-color: var(--acc); box-shadow: 0 0 0 3px var(--acc-soft); }
+.setup-eh { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.efields { display: grid; gap: 14px; }
+.ta.sm { min-height: 64px; }
+.card.prefill { border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
+.body p.pre { white-space: pre-wrap; }
+.m-user.waiting { opacity: .85; }
+.wait { font-size: 12.5px; color: var(--tx3); margin: 2px 0 8px; text-align: right; }
+
+.boot { border: 1px solid color-mix(in srgb, var(--start) 40%, var(--line)); background: var(--start-soft); border-radius: 16px; padding: 16px; display: grid; gap: 12px; max-width: 560px; justify-self: center; width: 100%; }
+.boot-h { display: flex; gap: 12px; align-items: flex-start; }
+.boot-h .ico { width: 36px; height: 36px; border-radius: 10px; background: var(--surf); color: var(--start); display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.boot-h h3 { font-size: 16px; margin: 0; }
+.boot-h .t2 { margin: 2px 0 0; font-size: 13.5px; color: var(--tx2); }
+.boot .fineprint { margin: 0; }
+.boot.err { border-color: color-mix(in srgb, var(--err) 45%, transparent); background: var(--err-soft); }
+.boot.err .boot-h .ico { color: var(--err); }
+.boot-f { display: flex; gap: 10px; flex-wrap: wrap; }
+.step.bad { color: var(--err); font-weight: 650; }
+.step.bad .s { background: var(--err); border-color: var(--err); color: #fff; }
+.boot.done { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 12px; background: var(--ok-soft); border-color: transparent; color: var(--tx); font-size: 13.5px; }
+.boot.done > .i { color: var(--ok); flex: none; }
+.boot.done span { flex: 1; }
+.qreplies { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 6px; }
+
+@media (max-width: 760px) {
+  .nh .sub { display: none; }
+  .nh .advlink, .nfoot .link, .nclose { min-height: 44px; }
+  .nclose { width: 44px; height: 44px; }
+  .sgrid { grid-template-columns: 1fr; }
+  .setup { padding: 14px 12px; }
+  .setup-h .av { display: none; }
+  .cacts .btn, .keymiss .btn, .boot-f .btn, .qreplies .pchip, .sugs .pchip { min-height: 44px; min-width: 44px; }
+  .cacts form { display: contents; }
+  .cacts .btn { flex: 1 1 calc(50% - 4px); justify-content: center; }
+  .cacts .btn.pri { flex: 1 1 100%; }
+  .boot.done .link { min-height: 44px; display: inline-flex; align-items: center; }
+  .efields .ta.sm, .card.prefill .ta.sm { min-height: 104px; }
+}
