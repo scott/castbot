@@ -51,7 +51,7 @@ func Seed(ctx context.Context, st *store.Store, email string) error {
 		{agents.ID, store.AgentInput{Name: "Juniper", Title: "Repo maintainer", Color: "c3", Status: "provisioning", Activity: "Resuming", CreatedAt: created}, nil},
 		{agents.ID, store.AgentInput{Name: "Moss", Title: "Web research", Color: "c5", Status: "failed", CreatedAt: created}, nil},
 		{agents.ID, store.AgentInput{Name: "Wren", Title: "Release notes", Color: "c6", Status: "paused", CreatedAt: created}, nil},
-		{research.ID, store.AgentInput{Name: "Birch", Title: "Field notes", Color: "c0", Status: "ready", CreatedAt: created}, nil},
+		{research.ID, store.AgentInput{Name: "Birch", Title: "Field notes", Color: "c7", Status: "ready", CreatedAt: created}, nil},
 	}
 	for _, row := range rows {
 		row.in.SectionID = row.section

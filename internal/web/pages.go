@@ -742,6 +742,8 @@ func presentMessages(msgs []store.Message, agent agentView, now time.Time, loc *
 		if m.AuthorKind != "user" {
 			v.Color = agent.Color
 			v.Letter = agent.Letter
+		} else if !v.Prompt && store.ValidAgentColor(agent.Color) {
+			v.Color = agent.Color
 		}
 		out = append(out, v)
 	}
