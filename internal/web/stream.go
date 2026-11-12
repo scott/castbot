@@ -392,6 +392,9 @@ func (s *Server) loadLives(r *http.Request, user store.User, threadID string, ag
 		if cards, err := s.cardsFor(r.Context(), user, row.ID, from(r).CSRF); err == nil {
 			view.Cards = cards
 		}
+		if s.isGreetRun(row.ID) {
+			continue
+		}
 		switch row.Status {
 		case "queued", "streaming", "waiting_approval":
 			if row.RoutineRunID != "" && row.Status != "waiting_approval" {

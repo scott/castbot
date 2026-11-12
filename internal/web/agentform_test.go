@@ -33,7 +33,7 @@ func TestAgentFormRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := firstModel(t)
-	code, body, _ := h.do(http.MethodGet, "/new-agent", "", ip, nil)
+	code, body, _ := h.do(http.MethodGet, "/new-agent?advanced=1", "", ip, nil)
 	if code != 200 || !strings.Contains(body, "Choose a model") || !strings.Contains(body, model) || strings.Contains(body, "\u2014") {
 		t.Fatalf("empty form %d", code)
 	}
@@ -54,11 +54,11 @@ func TestAgentFormRoundTrip(t *testing.T) {
 		t.Fatalf("create %d %s", code, body)
 	}
 	loc := hdr.Get("Location")
-	if !strings.Contains(loc, "/edit?notice=saved") {
+	if !strings.HasPrefix(loc, "/agents/") || strings.Contains(loc, "/edit") || strings.Contains(loc, "/machine") {
 		t.Fatal(loc)
 	}
-	code, body, _ = h.do(http.MethodGet, loc, "", ip, nil)
-	if code != 200 || !strings.Contains(body, "Saved.") || !strings.Contains(body, "Be concise.") || !strings.Contains(body, `value="Atlas"`) {
+	code, body, _ = h.do(http.MethodGet, loc+"/edit", "", ip, nil)
+	if code != 200 || !strings.Contains(body, "Be concise.") || !strings.Contains(body, `value="Atlas"`) {
 		t.Fatalf("saved page %d", code)
 	}
 	agent := onlyAgent(t, h, user.ID)

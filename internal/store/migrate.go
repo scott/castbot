@@ -462,6 +462,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateFiles(); err != nil {
 		return err
 	}
+	// Version 19 is the chat-first create flow: greeted_at and create drafts.
+	if err := s.migrateV19(); err != nil {
+		return err
+	}
 	return nil
 }
 

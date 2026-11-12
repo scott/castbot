@@ -211,6 +211,10 @@ func TestShots(t *testing.T) {
 	if err := os.MkdirAll(dir10, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	dir20 := filepath.Join("..", "..", "docs", "evidence", "S20")
+	if err := os.MkdirAll(dir20, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for _, theme := range []string{"dark", "light"} {
 		for _, vp := range []struct {
 			w, h int
@@ -232,6 +236,12 @@ func TestShots(t *testing.T) {
 				kind := kind
 				t.Run("s10-"+kind+"-"+theme+"-"+vp.name, func(t *testing.T) {
 					shootS10(t, browserCtx, dir10, vp.w, vp.h, theme, vp.name, kind)
+				})
+			}
+			for _, kind := range []string{"14a", "14b", "14b2", "14c", "14d", "14e", "14f", "14f2", "14g", "14h", "14i", "14j", "14k", "14l", "14m"} {
+				kind := kind
+				t.Run("s20-"+kind+"-"+theme+"-"+vp.name, func(t *testing.T) {
+					shootS20(t, browserCtx, dir20, vp.w, vp.h, theme, vp.name, kind)
 				})
 			}
 		}
@@ -663,7 +673,7 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 	t.Cleanup(ts.Close)
 	token := sessionToken(t, h, user.ID)
 	ctx := longTab(t, browser, 3*time.Minute)
-	pageURL := ts.URL + "/new-agent"
+	pageURL := ts.URL + "/new-agent?advanced=1"
 	steps := []chromedp.Action{
 		network.Enable(),
 		chromedp.ActionFunc(func(ctx context.Context) error {

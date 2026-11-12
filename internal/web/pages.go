@@ -1,7 +1,6 @@
 package web
 
 import (
-	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -71,6 +70,10 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	agent, err := s.store.GetAgent(r.Context(), user.ID, id)
 	if s.missing(w, err) {
 		return nil
+	}
+	s.maybeGreet(r.Context(), user.ID, agent.ID)
+	if fresh, ferr := s.store.GetAgent(r.Context(), user.ID, id); ferr == nil {
+		agent = fresh
 	}
 	machine := s.syncMachine(r.Context(), user.ID, &agent)
 	if machine.LastWake != "" {
@@ -227,6 +230,9 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	if !s.applyPanel(w, r, user, agent, &p) {
 		return nil
 	}
+	if p.Page == "chat" {
+		s.attachBoot(r, user, agent, &p)
+	}
 	if status == 0 {
 		status = http.StatusOK
 	}
@@ -283,6 +289,27 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	thread, err := s.pickThread(r, user.ID, agent.ID)
 	if s.missing(w, err) {
+		return
+	}
+	if s.holdingForGreet(r.Context(), user.ID, agent.ID) {
+		msg, err := s.store.CreateOriginMessage(r.Context(), user.ID, thread.ID, "user", user.ID, body, "waiting")
+		if s.bad(w, err) {
+			return
+		}
+		if len(announced) > 0 {
+			_ = s.store.MarkAnnounced(r.Context(), user.ID, announced)
+		}
+		if r.Header.Get("HX-Request") == "true" {
+			av := presentAgent(agent, true, userLocation(user.Timezone))
+			msgs := presentMessages([]store.Message{msg}, av, s.store.Now(), userLocation(user.Timezone))
+			for i := range msgs {
+				msgs[i].ShowDay = false
+				msgs[i].Wait = "Waiting · sends when " + agent.Name + " is up"
+			}
+			s.render(w, http.StatusOK, "turn", page{CSRF: from(r).CSRF, Messages: msgs})
+			return
+		}
+		http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID), http.StatusSeeOther)
 		return
 	}
 	msg, err := s.store.CreateMessage(r.Context(), user.ID, thread.ID, "user", user.ID, body)
@@ -536,20 +563,11 @@ func (s *Server) newAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p, err := s.shell(r, user)
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
+	if r.URL.Query().Get("advanced") == "1" {
+		s.advancedForm(w, r, user)
 		return
 	}
-	form, err := s.blankForm(r.Context(), user)
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	p.Page = "new"
-	p.Title = "New agent"
-	p.AgentForm = form
-	s.render(w, http.StatusOK, "app", finish(p))
+	s.createChat(w, r, user)
 }
 
 func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
@@ -557,42 +575,11 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if r.FormValue("form") == "agent" {
-		s.saveNewAgent(w, r, user)
+	if r.FormValue("form") != "agent" {
+		http.Error(w, "Use the setup card to create an agent.\n", http.StatusBadRequest)
 		return
 	}
-	sec, err := s.store.SystemSection(r.Context(), user.ID, "agents")
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	agent, _, err := s.store.CreateAgent(r.Context(), user.ID, store.AgentInput{
-		SectionID: sec.ID,
-		Name:      r.FormValue("name"),
-		Title:     r.FormValue("title"),
-		Status:    "draft",
-		Color:     "c0",
-	})
-	if err != nil {
-		p, _ := s.shell(r, user)
-		p.Page = "new"
-		p.Title = "New agent"
-		f, ferr := s.blankForm(r.Context(), user)
-		if ferr != nil {
-			http.Error(w, "Error", http.StatusInternalServerError)
-			return
-		}
-		f.Name = r.FormValue("name")
-		f.Title = r.FormValue("title")
-		f.NameErr = "Choose a name that is not already used."
-		if errors.Is(err, store.ErrInvalid) {
-			f.NameErr = "Use a name up to 40 characters."
-		}
-		p.AgentForm = f
-		s.render(w, http.StatusBadRequest, "app", finish(p))
-		return
-	}
-	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID), http.StatusSeeOther)
+	s.saveNewAgent(w, r, user)
 }
 
 func (s *Server) createSection(w http.ResponseWriter, r *http.Request) {
@@ -721,6 +708,18 @@ func presentMessages(msgs []store.Message, agent agentView, now time.Time, loc *
 		v := msgView{ID: m.ID, Author: m.AuthorKind, Body: m.Body, Text: m.Body, Stamp: clockLabel(m.CreatedAt, loc), Day: day, At: m.CreatedAt, Origin: m.Origin}
 		if m.Origin == "routine" && m.AuthorKind == "user" {
 			v.Prompt = true
+		}
+		if m.Origin == "created" {
+			v.Sys = true
+		}
+		if m.Origin == "setup" {
+			v.Hide = true
+		}
+		if m.Origin == "waiting" {
+			v.Waiting = true
+		}
+		if m.Origin == "greet" {
+			v.Pre = true
 		}
 		if m.AuthorKind == "user" && !v.Prompt {
 			text, lines, names := splitUserBody(m.Body)

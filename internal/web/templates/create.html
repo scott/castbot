@@ -1,0 +1,115 @@
+{{define "createMain"}}
+<header class="ch-h nh">
+<a class="ibtn back" href="/" aria-label="Back to agents">{{template "backsvg" .}}</a>
+<span class="nh-ico" aria-hidden="true">{{template "mark" .}}</span>
+<span class="grow"><span class="nm">New agent</span><span class="sub">Describe it in chat. castbot sets it up.</span></span>
+{{if .Create.ShowAdvanced}}<a class="link advlink" href="/new-agent?advanced=1">Advanced</a>{{end}}
+<a class="ibtn nclose" href="/" aria-label="Close new agent (Esc)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></a>
+</header>
+<div class="ch-body nmain{{if not .Create.HasCard}} hero{{end}}"><div class="msgs" id="msgs">
+{{if not .Create.Turns}}
+<div class="nhero empty-chat">
+<span class="av cb lg" aria-hidden="true">{{template "mark" .}}</span>
+<h2>What should your new agent do?</h2>
+<p>Tell castbot in a sentence or two. Give it a name if you like, or castbot picks one. One message is enough.</p>
+<div class="sugs">
+{{range .Create.Examples}}<button class="pchip" type="button" data-fill="{{.Body}}">{{.Title}}</button>{{end}}
+</div>
+</div>
+{{else}}
+{{range .Create.Turns}}
+{{if .User}}<div class="m-user">{{.Body}}</div>
+{{else if .Reprompt}}<div class="m-agent cbm"><span class="av cb" aria-hidden="true">{{template "mark" $}}</span><div class="body"><p>{{.Body}}</p>{{if .Samples}}<ul class="tight">{{range .Samples}}<li>{{.}}</li>{{end}}</ul><p>You can also give it a name.</p>{{end}}</div></div>
+{{else if .KeyOut}}<div class="keyout" role="note"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/></svg><span>{{.Body}}</span></div>
+{{else if .Lead}}<div class="m-agent cbm"><span class="av cb" aria-hidden="true">{{template "mark" $}}</span><div class="body"><p>{{.Lead}}</p></div></div>
+{{end}}
+{{end}}
+{{end}}
+{{if .Create.HasCard}}{{template "setupCard" .}}{{end}}
+{{if .Create.Error}}<div class="banner err" role="alert"><span class="grow">{{.Create.Error}}</span></div>{{end}}
+</div></div>
+<form class="comp" id="composer" method="post" action="/new-agent/describe" data-create-compose="1">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<textarea class="ph" name="body" maxlength="8000" rows="1" placeholder="{{.Create.Placeholder}}" aria-label="Describe your agent"></textarea>
+<div class="row"><span class="hint">Enter to send</span><button class="btn pri sm" id="send-btn" data-send type="submit">Send</button></div>
+</form>
+<p class="nfoot"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/></svg><span>Do not paste passwords or keys here. Add them later in Settings, Secrets.</span>{{if .Create.ShowAdvanced}}<a class="link" href="/new-agent?advanced=1">Advanced</a>{{end}}</p>
+{{end}}
+
+{{define "setupCard"}}
+<section class="setup{{if .Create.Editing}} editing{{end}}" aria-label="Setup for {{.Create.Card.Name}}">
+{{if .Create.Editing}}
+<form method="post" action="/new-agent/save">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<div class="setup-eh"><span class="chip start"><span class="pip"></span>Editing</span><span class="t2">Change anything, then save. Or just reply in plain words.</span></div>
+<div class="efields">
+<div class="field"><span class="lab">Name</span><div class="inp"><input name="name" maxlength="40" value="{{.Create.Card.Name}}" aria-label="Name" required></div></div>
+<div class="field"><span class="lab">Job</span><textarea class="ta sm" name="job" maxlength="160" aria-label="Job">{{.Create.Card.Job}}</textarea></div>
+<div class="field"><span class="lab">Instructions</span><textarea class="ta" name="instructions" maxlength="8000" aria-label="Instructions">{{.Create.Card.Instructions}}</textarea><p class="help">This becomes instructions.md. Do not put keys here; add them in Settings, Secrets.</p></div>
+<div class="field"><span class="lab">Model</span><div class="selwrap"><select class="sel" name="model" aria-label="Model">{{range .Create.Card.Models}}<option value="{{.ID}}"{{if .On}} selected{{end}}>{{.Label}}</option>{{end}}</select></div></div>
+<div class="field"><span class="lab">Model key</span><p class="fineprint">From your vault. Values are never shown.{{if .Create.Card.KeyLabel}} {{.Create.Card.KeyLabel}}{{end}}</p></div>
+<div class="field"><span class="lab">Machine</span><div class="sugs">{{range .Create.Card.Sizes}}<label class="pchip"><input type="radio" name="size" value="{{.ID}}"{{if .On}} checked{{end}}>{{.Label}}</label>{{end}}</div></div>
+<div class="field"><span class="lab">Pause</span><div class="selwrap"><select class="sel" name="idle" aria-label="Pause after idle">{{range .Create.Card.Idles}}<option value="{{.Sec}}"{{if .On}} selected{{end}}>{{.Label}}</option>{{end}}</select></div><p class="help">Size and idle time are fixed once the machine exists.</p></div>
+</div>
+<div class="cacts"><button class="btn pri" type="submit">Save changes</button></div>
+<p class="cnote">Saving brings back the card with Create.</p>
+</form>
+<form method="post" action="/new-agent/cancel"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn" type="submit">Cancel</button></form>
+{{else}}
+<div class="setup-h"><span class="av c0" aria-hidden="true">{{.Create.Card.Letter}}</span><div class="grow"><span class="lab">Name</span><p class="sname{{if .Create.Card.Conflict}} bad{{end}}">{{.Create.Card.Name}}</p>{{if .Create.Card.Auto}}<span class="tag-auto">Picked by castbot. Rename it any time.</span>{{end}}</div></div>
+{{if .Create.Card.Conflict}}<p class="ferr"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16v.5"/></svg><span>{{.Create.Card.Block}}</span></p>{{end}}
+{{if not .Create.Card.HasKey}}<div class="keymiss"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/></svg><span class="grow"><b>Add a model key first.</b> Agents run on your own Provider A key, and you have not added one yet.</span><a class="btn sm" href="/settings/secrets">Add a key in Secrets</a></div>{{end}}
+<dl class="sgrid">
+<div><dt>Job</dt><dd>{{if .Create.Card.Job}}{{.Create.Card.Job}}{{else}}Not set yet. It will ask you after it starts.{{end}}</dd></div>
+<div><dt>Model</dt><dd>{{.Create.Card.ModelLabel}}</dd></div>
+<div class="wide"><dt>Instructions</dt><dd><span class="instr">{{.Create.Card.Instructions}}</span></dd></div>
+<div><dt>Machine</dt><dd>{{.Create.Card.SizeLabel}}<div class="t2">{{.Create.Card.HourCost}}</div></dd></div>
+<div><dt>Pause</dt><dd>{{.Create.Card.IdleLabel}}<div class="t2">{{.Create.Card.DayCost}}</div></dd></div>
+{{if .Create.Card.KeyLabel}}<div><dt>Model key</dt><dd>From your vault · {{.Create.Card.KeyLabel}}</dd></div>{{end}}
+</dl>
+{{if .Create.Card.Schedule}}<p class="rhint2"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span>You said {{.Create.Card.Schedule}}. Once {{.Create.Card.Name}} is running, it can set that up as a routine for you.</span></p>{{end}}
+<div class="setup-f">
+<form method="post" action="/new-agent/create">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<input type="hidden" name="confirm" value="card">
+<input type="hidden" name="draft" value="{{.Create.DraftID}}">
+<div class="cacts">
+<button class="btn pri{{if or .Create.Card.Conflict (not .Create.Card.HasKey)}} dis{{end}}" type="submit"{{if or .Create.Card.Conflict (not .Create.Card.HasKey)}} disabled aria-disabled="true"{{end}}{{if or .Create.Card.Conflict (not .Create.Card.HasKey)}} aria-describedby="cwhy"{{end}}>Create {{.Create.Card.Name}}</button>
+</div>
+</form>
+<div class="cacts">
+<form method="post" action="/new-agent/edit"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn" type="submit">Edit</button></form>
+<a class="btn" href="/new-agent?advanced=1">Advanced</a>
+</div>
+{{if .Create.Card.Why}}<p class="cwhy" id="cwhy"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16v.5"/></svg><span>{{.Create.Card.Why}}</span></p>{{end}}
+</div>
+{{end}}
+</section>
+{{end}}
+
+{{define "bootSlot"}}{{if .Boot.On}}{{template "bootCard" .}}{{end}}{{end}}
+
+{{define "bootCard"}}
+<div class="boot{{if .Boot.Failed}} err{{else if .Boot.Up}} done{{end}}" id="boot"{{if .Boot.Poll}} hx-get="/agents/{{.Agent.ID}}/boot" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+{{if .Boot.Up}}
+<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+<span><b>{{.Boot.Title}}</b> {{.Boot.Started}}</span>
+<a class="link" href="/agents/{{.Agent.ID}}?panel=machine">Machine details</a>
+{{else}}
+<div class="boot-h"><span class="ico" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12 15h5"/></svg></span><div class="grow"><h3>{{.Boot.Title}}</h3>{{if .Boot.Body}}<p class="t2">{{.Boot.Body}}</p>{{end}}</div></div>
+<ol class="steps">{{range .Boot.Steps}}<li class="step{{if .Done}} done{{end}}{{if .Now}} now{{end}}{{if .Bad}} bad{{end}}"><span class="s">{{if .Done}}<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>{{else if .Now}}<span class="spin"></span>{{else if .Bad}}<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>{{end}}</span><span class="grow">{{.Title}}{{if .Detail}}<span class="ssub">{{.Detail}}</span>{{end}}</span></li>{{end}}</ol>
+{{if .Boot.Foot}}<p class="fineprint">{{.Boot.Foot}}</p>{{end}}
+{{if .Boot.TryAgain}}<div class="boot-f"><form method="post" action="/agents/{{.Agent.ID}}/boot/retry"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">Try again</button></form><a class="btn sm" href="/agents/{{.Agent.ID}}?panel=machine">Machine details</a></div>{{end}}
+{{end}}
+</div>
+{{end}}
+
+{{define "bootPoll"}}{{template "bootCard" .}}{{end}}
+
+{{define "askJob"}}
+{{if .AskJob}}<div class="qreplies">
+<button class="pchip" type="button" data-fill="Watch a repo for new issues">Watch a repo for new issues</button>
+<button class="pchip" type="button" data-fill="Summarize my week">Summarize my week</button>
+<button class="pchip" type="button" data-fill="Draft replies to my inbox">Draft replies to my inbox</button>
+</div>{{end}}
+{{end}}

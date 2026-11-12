@@ -107,6 +107,11 @@ type Server struct {
 	uploadSlot map[string]chan struct{}
 	nameLock   map[string]*sync.Mutex
 	uploadLog  []string
+
+	describe  DescribeClient
+	bootFor   time.Duration
+	greetMu   sync.Mutex
+	greetRuns map[string]struct{}
 }
 
 // pauseSweeps stops the background approval ticker. Tests call the follow-up
@@ -127,6 +132,7 @@ func New(st *store.Store, key []byte, client runtime.Client) *Server {
 	})
 	s.runs.SetAfterRun(func(job run.Job, status string) {
 		s.settleRoutine(job, status)
+		s.settleGreetRun(job, status)
 		s.promoteAgent(context.Background(), job.UserID, job.AgentID)
 	})
 	s.runs.SetAfterRun(func(job run.Job, _ string) {
@@ -316,6 +322,12 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /new-agent", s.newAgent)
 	mux.HandleFunc("POST /new-agent", s.createAgent)
+	mux.HandleFunc("POST /new-agent/describe", s.describeAgent)
+	mux.HandleFunc("POST /new-agent/edit", s.editCreate)
+	mux.HandleFunc("POST /new-agent/save", s.saveCreate)
+	mux.HandleFunc("POST /new-agent/cancel", s.cancelCreate)
+	mux.HandleFunc("POST /new-agent/create", s.confirmCreate)
+	mux.HandleFunc("GET /new-agent/drafts/{id}", s.createDraft)
 	mux.HandleFunc("POST /new-agent/import", s.importNew)
 	mux.HandleFunc("GET /approvals/live", s.approvalsLive)
 	mux.HandleFunc("GET /approvals", s.redirectLegacy)
@@ -351,6 +363,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}/machine/wake", s.wakeMachine)
 	mux.HandleFunc("POST /agents/{id}/machine/delete", s.deleteMachine)
 	mux.HandleFunc("POST /agents/{id}/delete", s.deleteAgent)
+	mux.HandleFunc("GET /agents/{id}/boot", s.bootFragment)
+	mux.HandleFunc("POST /agents/{id}/boot/retry", s.retryBoot)
 	mux.HandleFunc("POST /agents/{id}/messages", s.postMessage)
 	mux.HandleFunc("POST /agents/{id}/cli", s.exportCLI)
 	mux.HandleFunc("POST /agents/{id}/cli/{token}/revoke", s.revokeCLI)

@@ -47,7 +47,8 @@ type msgView struct {
 	ShowDay                                               bool
 	HasCard                                               bool
 	Card                                                  cardView
-	Prompt, Marker, Hide                                  bool
+	Prompt, Marker, Hide, Waiting, Sys, Pre               bool
+	Wait                                                  string
 	Href, Pill, PillClass, Sub                            string
 	Chips                                                 []chipView
 	PathLines                                             []string
@@ -170,6 +171,9 @@ type page struct {
 	SearchQuery      string
 	SearchAgents     []agentView
 	FileHits         []fileHitView
+	Create           createView
+	Boot             bootView
+	AskJob           bool
 }
 
 func finish(p page) page {
@@ -182,6 +186,8 @@ func finish(p page) page {
 		p.BodyClass = "p-main"
 		p.ShowNav = true
 		p.Nav = "agents"
+	case "create":
+		p.BodyClass = "p-chat"
 	case "chat":
 		p.BodyClass = "p-chat"
 		if (p.Pane || p.Panel != "" || p.Vault.Panel) && !p.Run.On {
