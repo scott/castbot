@@ -1223,67 +1223,6 @@ button.sclose { font: inherit; cursor: pointer; }
   .pclose-ph { min-height: 44px; }
 }
 
-/* ---------- per-agent colors (issue 27) ----------
-   Avatar fills are the same in both themes. Bubble fill, border, and text
-   are literal hex. c0 is the legacy default and has no bubble. */
-.m-user.c1 { background: #52443c; border-color: #7e6050; color: #e7eef0; }
-.m-user.c2 { background: #354e4b; border-color: #4c716a; color: #e7eef0; }
-.m-user.c3 { background: #44455b; border-color: #666285; color: #e7eef0; }
-.m-user.c4 { background: #524d38; border-color: #7e7049; color: #e7eef0; }
-.m-user.c5 { background: #38495b; border-color: #526a85; color: #e7eef0; }
-.m-user.c6 { background: #4f3f48; border-color: #7a5865; color: #e7eef0; }
-.m-user.c7 { background: #3b503c; border-color: #577550; color: #e7eef0; }
-.m-user.c8 { background: #484a43; border-color: #6d6a5c; color: #e7eef0; }
-.m-user.c9 { background: #324f57; border-color: #48737f; color: #e7eef0; }
-.m-user.c1 *, .m-user.c2 *, .m-user.c3 *, .m-user.c4 *, .m-user.c5 *, .m-user.c6 *, .m-user.c7 *, .m-user.c8 *, .m-user.c9 * { color: inherit; }
-.m-user.c1 code, .m-user.c2 code, .m-user.c3 code, .m-user.c4 code, .m-user.c5 code, .m-user.c6 code, .m-user.c7 code, .m-user.c8 code, .m-user.c9 code { background: rgba(0,0,0,.18); color: inherit; border-radius: 4px; padding: 0 3px; }
-html.light .m-user.c1 { background: #ffe2d3; border-color: #ffcaad; color: #1b2226; }
-html.light .m-user.c2 { background: #d4f0e9; border-color: #b1e4d6; color: #1b2226; }
-html.light .m-user.c3 { background: #eae3ff; border-color: #d9ccff; color: #1b2226; }
-html.light .m-user.c4 { background: #ffefcc; border-color: #ffe2a2; color: #1b2226; }
-html.light .m-user.c5 { background: #d9eaff; border-color: #bad8ff; color: #1b2226; }
-html.light .m-user.c6 { background: #fbdbe4; border-color: #f8bccd; color: #1b2226; }
-html.light .m-user.c7 { background: #def3d3; border-color: #c1e9ad; color: #1b2226; }
-html.light .m-user.c8 { background: #f1eadc; border-color: #e4d9bf; color: #1b2226; }
-html.light .m-user.c9 { background: #d1f2fa; border-color: #aae6f6; color: #1b2226; }
-html.light .m-user.c1 code, html.light .m-user.c2 code, html.light .m-user.c3 code, html.light .m-user.c4 code, html.light .m-user.c5 code, html.light .m-user.c6 code, html.light .m-user.c7 code, html.light .m-user.c8 code, html.light .m-user.c9 code { background: rgba(0,0,0,.06); }
-.m-user.c1.queued { background: transparent; border-style: dashed; border-color: #7e6050; color: var(--tx2); }
-.m-user.c2.queued { background: transparent; border-style: dashed; border-color: #4c716a; color: var(--tx2); }
-.m-user.c3.queued { background: transparent; border-style: dashed; border-color: #666285; color: var(--tx2); }
-.m-user.c4.queued { background: transparent; border-style: dashed; border-color: #7e7049; color: var(--tx2); }
-.m-user.c5.queued { background: transparent; border-style: dashed; border-color: #526a85; color: var(--tx2); }
-.m-user.c6.queued { background: transparent; border-style: dashed; border-color: #7a5865; color: var(--tx2); }
-.m-user.c7.queued { background: transparent; border-style: dashed; border-color: #577550; color: var(--tx2); }
-.m-user.c8.queued { background: transparent; border-style: dashed; border-color: #6d6a5c; color: var(--tx2); }
-.m-user.c9.queued { background: transparent; border-style: dashed; border-color: #48737f; color: var(--tx2); }
-html.light .m-user.c1.queued { border-color: #ffcaad; }
-html.light .m-user.c2.queued { border-color: #b1e4d6; }
-html.light .m-user.c3.queued { border-color: #d9ccff; }
-html.light .m-user.c4.queued { border-color: #ffe2a2; }
-html.light .m-user.c5.queued { border-color: #bad8ff; }
-html.light .m-user.c6.queued { border-color: #f8bccd; }
-html.light .m-user.c7.queued { border-color: #c1e9ad; }
-html.light .m-user.c8.queued { border-color: #e4d9bf; }
-html.light .m-user.c9.queued { border-color: #aae6f6; }
-
-.swatches { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 8px; }
-.swatches legend { padding: 0; font-size: 13px; font-weight: 650; color: var(--tx2); }
-.swatch-row { display: flex; flex-wrap: nowrap; gap: 4px; }
-.swatch { position: relative; flex: 1 1 0; min-width: 0; display: grid; justify-items: center; gap: 4px; cursor: pointer; }
-.swatch input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
-.swatch .sq { width: 32px; height: 32px; border-radius: 10px; }
-.swatch .sq .check { display: none; width: 16px; height: 16px; }
-.swatch:has(input:checked) .sq { box-shadow: 0 0 0 2px var(--surf), 0 0 0 4px var(--tx); }
-.swatch:has(input:checked) .sq .check { display: block; }
-.swatch .nm { font-size: 12.5px; color: var(--tx2); white-space: nowrap; }
-.swatch:has(input:checked) .nm { color: var(--tx); font-weight: 650; }
-.swatch:has(input:focus-visible) .sq { outline: 2px solid var(--acc); outline-offset: 6px; }
-.swatches .help { font-size: 12.5px; color: var(--tx3); margin: 0; }
-@media (max-width: 760px) {
-  .swatch-row { display: grid; grid-template-columns: repeat(5, minmax(44px, 1fr)); gap: 8px 4px; }
-  .swatch { min-width: 44px; min-height: 44px; }
-}
-
 /* ---------- #22 agent markdown and activity ---------- */
 :root {
   --act-cycle: 800ms;
@@ -1373,8 +1312,7 @@ html.light .m-user.c9.queued { border-color: #aae6f6; }
 .msg-acts { display: flex; align-items: center; gap: 4px; }
 .msg-acts .stamp { margin-right: 4px; }
 .msg-acts .ibtn { width: 30px; height: 30px; border-radius: 8px; color: var(--tx3); }
-.m-user.plain { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
-.m-user.plain a { color: var(--acc); text-decoration: underline; text-underline-offset: 2px; }
+.m-user a { color: var(--acc); text-decoration: underline; text-underline-offset: 2px; }
 .m-agent .calm { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 4px 10px; align-items: start; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line2); background: var(--surf); font-size: 14px; color: var(--tx2); max-width: 100%; }
 .m-agent .calm .ico { grid-row: span 2; width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; background: var(--err-soft); color: var(--err); }
 .m-agent .calm .ico .i { width: 16px; height: 16px; }
@@ -1401,4 +1339,65 @@ html.light .m-user.c9.queued { border-color: #aae6f6; }
   .actico i:nth-child(1), .actico i:nth-child(2), .actico i:nth-child(3) { opacity: 1; }
   .actico.held i:nth-child(n) { opacity: var(--act-held); }
   .caret { animation: none; }
+}
+
+/* ---------- per-agent colors (issue 27) ----------
+   Avatar fills are the same in both themes. Bubble fill, border, and text
+   are literal hex. c0 is the legacy default and has no bubble. */
+.m-user.c1 { background: #52443c; border-color: #7e6050; color: #e7eef0; }
+.m-user.c2 { background: #354e4b; border-color: #4c716a; color: #e7eef0; }
+.m-user.c3 { background: #44455b; border-color: #666285; color: #e7eef0; }
+.m-user.c4 { background: #524d38; border-color: #7e7049; color: #e7eef0; }
+.m-user.c5 { background: #38495b; border-color: #526a85; color: #e7eef0; }
+.m-user.c6 { background: #4f3f48; border-color: #7a5865; color: #e7eef0; }
+.m-user.c7 { background: #3b503c; border-color: #577550; color: #e7eef0; }
+.m-user.c8 { background: #484a43; border-color: #6d6a5c; color: #e7eef0; }
+.m-user.c9 { background: #324f57; border-color: #48737f; color: #e7eef0; }
+.m-user.c1 *, .m-user.c2 *, .m-user.c3 *, .m-user.c4 *, .m-user.c5 *, .m-user.c6 *, .m-user.c7 *, .m-user.c8 *, .m-user.c9 * { color: inherit; }
+.m-user.c1 code, .m-user.c2 code, .m-user.c3 code, .m-user.c4 code, .m-user.c5 code, .m-user.c6 code, .m-user.c7 code, .m-user.c8 code, .m-user.c9 code { background: rgba(0,0,0,.18); color: inherit; border-radius: 4px; padding: 0 3px; }
+html.light .m-user.c1 { background: #ffe2d3; border-color: #ffcaad; color: #1b2226; }
+html.light .m-user.c2 { background: #d4f0e9; border-color: #b1e4d6; color: #1b2226; }
+html.light .m-user.c3 { background: #eae3ff; border-color: #d9ccff; color: #1b2226; }
+html.light .m-user.c4 { background: #ffefcc; border-color: #ffe2a2; color: #1b2226; }
+html.light .m-user.c5 { background: #d9eaff; border-color: #bad8ff; color: #1b2226; }
+html.light .m-user.c6 { background: #fbdbe4; border-color: #f8bccd; color: #1b2226; }
+html.light .m-user.c7 { background: #def3d3; border-color: #c1e9ad; color: #1b2226; }
+html.light .m-user.c8 { background: #f1eadc; border-color: #e4d9bf; color: #1b2226; }
+html.light .m-user.c9 { background: #d1f2fa; border-color: #aae6f6; color: #1b2226; }
+html.light .m-user.c1 code, html.light .m-user.c2 code, html.light .m-user.c3 code, html.light .m-user.c4 code, html.light .m-user.c5 code, html.light .m-user.c6 code, html.light .m-user.c7 code, html.light .m-user.c8 code, html.light .m-user.c9 code { background: rgba(0,0,0,.06); }
+.m-user.c1.queued { background: transparent; border-style: dashed; border-color: #7e6050; color: var(--tx2); }
+.m-user.c2.queued { background: transparent; border-style: dashed; border-color: #4c716a; color: var(--tx2); }
+.m-user.c3.queued { background: transparent; border-style: dashed; border-color: #666285; color: var(--tx2); }
+.m-user.c4.queued { background: transparent; border-style: dashed; border-color: #7e7049; color: var(--tx2); }
+.m-user.c5.queued { background: transparent; border-style: dashed; border-color: #526a85; color: var(--tx2); }
+.m-user.c6.queued { background: transparent; border-style: dashed; border-color: #7a5865; color: var(--tx2); }
+.m-user.c7.queued { background: transparent; border-style: dashed; border-color: #577550; color: var(--tx2); }
+.m-user.c8.queued { background: transparent; border-style: dashed; border-color: #6d6a5c; color: var(--tx2); }
+.m-user.c9.queued { background: transparent; border-style: dashed; border-color: #48737f; color: var(--tx2); }
+html.light .m-user.c1.queued { border-color: #ffcaad; }
+html.light .m-user.c2.queued { border-color: #b1e4d6; }
+html.light .m-user.c3.queued { border-color: #d9ccff; }
+html.light .m-user.c4.queued { border-color: #ffe2a2; }
+html.light .m-user.c5.queued { border-color: #bad8ff; }
+html.light .m-user.c6.queued { border-color: #f8bccd; }
+html.light .m-user.c7.queued { border-color: #c1e9ad; }
+html.light .m-user.c8.queued { border-color: #e4d9bf; }
+html.light .m-user.c9.queued { border-color: #aae6f6; }
+
+.swatches { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 8px; }
+.swatches legend { padding: 0; font-size: 13px; font-weight: 650; color: var(--tx2); }
+.swatch-row { display: flex; flex-wrap: nowrap; gap: 4px; }
+.swatch { position: relative; flex: 1 1 0; min-width: 0; display: grid; justify-items: center; gap: 4px; cursor: pointer; }
+.swatch input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
+.swatch .sq { width: 32px; height: 32px; border-radius: 10px; }
+.swatch .sq .check { display: none; width: 16px; height: 16px; }
+.swatch:has(input:checked) .sq { box-shadow: 0 0 0 2px var(--surf), 0 0 0 4px var(--tx); }
+.swatch:has(input:checked) .sq .check { display: block; }
+.swatch .nm { font-size: 12.5px; color: var(--tx2); white-space: nowrap; }
+.swatch:has(input:checked) .nm { color: var(--tx); font-weight: 650; }
+.swatch:has(input:focus-visible) .sq { outline: 2px solid var(--acc); outline-offset: 6px; }
+.swatches .help { font-size: 12.5px; color: var(--tx3); margin: 0; }
+@media (max-width: 760px) {
+  .swatch-row { display: grid; grid-template-columns: repeat(5, minmax(44px, 1fr)); gap: 8px 4px; }
+  .swatch { min-width: 44px; min-height: 44px; }
 }

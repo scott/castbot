@@ -157,7 +157,7 @@ func s22Shot(t *testing.T, theme, kind string) (*harness, string, string, string
 	case "15e3":
 		needle += `&&document.body.innerText.indexOf("did not wake up.")>=0&&document.body.innerText.indexOf("Try again")>=0`
 	case "15f":
-		needle += `&&document.body.innerText.indexOf("**pricing**")>=0&&document.body.innerText.indexOf("# fix these too")>=0&&!!document.querySelector(".m-user.plain a")`
+		needle += `&&document.body.innerText.indexOf("**pricing**")>=0&&document.body.innerText.indexOf("# fix these too")>=0&&!!document.querySelector(".m-user a")`
 	}
 	return h, "/agents/" + agent.ID, script, `(` + needle + `)`, user.ID
 }

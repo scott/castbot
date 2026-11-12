@@ -204,8 +204,9 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 		// A queued run is waiting for its goroutine. Start tracks the run
 		// before the response that names it, but a page read can still see
 		// the row in that gap. Failing it here would interrupt a brand-new
-		// run. A streaming run whose goroutine is gone still fails.
-		if !runTerminal(current.Status) && current.Status != "queued" && !s.runs.Watching(current.ID) {
+		// run. A waiting approval is the user's decision, not a dead stream.
+		// A streaming run whose goroutine is gone still fails.
+		if !runTerminal(current.Status) && current.Status != "queued" && current.Status != "waiting_approval" && !s.runs.Watching(current.ID) {
 			if orphaned {
 				return
 			}

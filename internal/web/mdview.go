@@ -271,7 +271,7 @@ func (s *Server) decorateAgent(ctx context.Context, userID string, v *agentView,
 		v.ActSub = ""
 		return
 	}
-	if !has {
+	if !has || s.isGreetRun(row.ID) {
 		return
 	}
 	fact := parseTool(row.ToolPayload)
