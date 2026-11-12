@@ -286,6 +286,15 @@ func TestShots(t *testing.T) {
 	t.Run("s19-sec-dark-1280", func(t *testing.T) { shootS19Secrets(t, browserCtx, 1280, 800) })
 	t.Run("s19-sec-dark-390", func(t *testing.T) { shootS19Secrets(t, browserCtx, 390, 844) })
 	t.Run("s19-back-dark-1280", func(t *testing.T) { shootS19Back(t, browserCtx) })
+	for _, vp := range []struct {
+		w, h int
+		name string
+	}{{1280, 800, "1280"}, {1440, 900, "1440"}} {
+		vp := vp
+		t.Run("s19-toggle-dark-"+vp.name, func(t *testing.T) {
+			shootPanelToggle(t, browserCtx, dir19, vp.w, vp.h, vp.name)
+		})
+	}
 }
 
 // shootDecisionBar clicks Approve on a live card and checks the waiting bar

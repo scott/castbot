@@ -862,8 +862,11 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!target || target.id !== "agent-panel") {
       return;
     }
-    syncPanelChrome(target);
-    armPanelLinks(target);
+    // outerHTML leaves detail.target on the detached placeholder.
+    // The pane class is restored on settle, so chrome is synced again then.
+    var panel = document.getElementById("agent-panel");
+    syncPanelChrome(panel);
+    armPanelLinks(panel);
     var elt = ev.detail.requestConfig && ev.detail.requestConfig.elt;
     var mode = elt && elt.getAttribute("data-hist-now");
     var href = elt && (elt.getAttribute("href") || elt.getAttribute("hx-get"));
@@ -877,7 +880,14 @@ document.addEventListener("DOMContentLoaded", function () {
       storeSet("castbot.panel", "open");
       storeSet("castbot.panelTab", panelName);
     }
-    focusPanelTab(target);
+    focusPanelTab(panel);
+  });
+  document.body.addEventListener("htmx:afterSettle", function (ev) {
+    var target = ev.detail && ev.detail.target;
+    if (!target || target.id !== "agent-panel") {
+      return;
+    }
+    syncPanelChrome(document.getElementById("agent-panel"));
   });
   document.body.addEventListener("htmx:afterRequest", function (ev) {
     var elt = ev.detail && ev.detail.elt;
