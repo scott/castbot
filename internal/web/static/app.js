@@ -556,7 +556,7 @@ function armPanelLinks(root) {
       continue;
     }
     var href = a.getAttribute("href") || "";
-    if (href.charAt(0) === "#" || href.indexOf("/agents/") !== 0 || href.indexOf("panel=") < 0) {
+    if (href.charAt(0) === "#" || href.indexOf("/agents/") !== 0 || href.indexOf("panel=") < 0 || href.indexOf("delete=1") >= 0) {
       continue;
     }
     a.setAttribute("hx-get", href);
