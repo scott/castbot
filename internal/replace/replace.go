@@ -1083,12 +1083,10 @@ func RetryCleanups(ctx context.Context, st *store.Store, h host.AgentHost) error
 		return err
 	}
 	for _, row := range expired {
-		if err := st.MarkCleanupAlerted(ctx, row.UserID, row.ID); err != nil {
+		kind, id := auditActor(row)
+		if err := st.RecordCleanupStopped(ctx, row, kind, id, ImageTag(row.OldImage), ImageTag(row.NewImage)); err != nil {
 			continue
 		}
-		_ = st.AddVMEventFor(ctx, row.UserID, row.AgentID, row.OldVMID, store.EventReplaceCleanup, 0)
-		kind, id := auditActor(row)
-		_ = st.WriteMachineAudit(ctx, row.UserID, kind, id, "machine.replace_cleanup_stopped", row.AgentID, ImageTag(row.OldImage), ImageTag(row.NewImage), row.Actor)
 	}
 	due, err := st.DueCleanups(ctx)
 	if err != nil {

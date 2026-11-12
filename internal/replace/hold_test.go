@@ -601,3 +601,86 @@ func TestReplaceCleanupStopsAfterADay(t *testing.T) {
 		t.Fatalf("audit lines %d", audits)
 	}
 }
+
+func TestReplaceCleanupStopCommitsTogether(t *testing.T) {
+	r := newRig(t, "running")
+	ctx := context.Background()
+	row, _, err := r.st.BeginReplacement(ctx, r.user.ID, r.agent.ID, "cli", "example.invalid/castbot-runtime:ff6d7ea", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.MarkCleanupPending(ctx, r.user.ID, row.ID, "copy", "copy"); err != nil {
+		t.Fatal(err)
+	}
+	row, err = r.st.GetReplacement(ctx, r.user.ID, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.st.FailCleanupWrite(true)
+	if err := r.st.RecordCleanupStopped(ctx, row, "cli", "cli", "old", "new"); err == nil {
+		t.Fatal("faulted write committed")
+	}
+	row, err = r.st.GetReplacement(ctx, r.user.ID, row.ID)
+	if err != nil || row.CleanupAlerted {
+		t.Fatalf("flag committed without the writes: %+v %v", row, err)
+	}
+	events, err := r.st.ListVMEvents(ctx, r.user.ID, r.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range events {
+		if ev.Kind == store.EventReplaceCleanup {
+			t.Fatal("event committed without the flag")
+		}
+	}
+	r.st.FailCleanupWrite(false)
+	if err := r.st.RecordCleanupStopped(ctx, row, "cli", "cli", "old", "new"); err != nil {
+		t.Fatal(err)
+	}
+	row, err = r.st.GetReplacement(ctx, r.user.ID, row.ID)
+	if err != nil || !row.CleanupAlerted || !row.CleanupPending {
+		t.Fatalf("row %+v %v", row, err)
+	}
+	stopped := 0
+	events, err = r.st.ListVMEvents(ctx, r.user.ID, r.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range events {
+		if ev.Kind == store.EventReplaceCleanup {
+			stopped++
+		}
+	}
+	if stopped != 1 {
+		t.Fatalf("events %d", stopped)
+	}
+	actions, err := r.st.AuditActions(ctx, r.user.ID, r.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audits := 0
+	for _, action := range actions {
+		if action == "machine.replace_cleanup_stopped" {
+			audits++
+		}
+	}
+	if audits != 1 {
+		t.Fatalf("audits %d", audits)
+	}
+	if err := r.st.RecordCleanupStopped(ctx, row, "cli", "cli", "old", "new"); err == nil {
+		t.Fatal("second stop wrote again")
+	}
+	events, err = r.st.ListVMEvents(ctx, r.user.ID, r.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped = 0
+	for _, ev := range events {
+		if ev.Kind == store.EventReplaceCleanup {
+			stopped++
+		}
+	}
+	if stopped != 1 {
+		t.Fatalf("events after second stop %d", stopped)
+	}
+}

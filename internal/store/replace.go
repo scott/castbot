@@ -552,14 +552,43 @@ func (s *Store) ExpiredCleanups(ctx context.Context) ([]Replacement, error) {
 	return out, rows.Err()
 }
 
-// MarkCleanupAlerted records that the 24 hour cleanup window was reported once.
-func (s *Store) MarkCleanupAlerted(ctx context.Context, userID, id string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE vm_replacements SET cleanup_alerted = 1, updated_at = ? WHERE id = ? AND user_id = ? AND cleanup_pending = 1 AND cleanup_alerted = 0`,
-		s.stamp(s.Now()), id, userID)
+// RecordCleanupStopped marks the 24 hour window closed and writes the event and audit row.
+// The flag, the event, and the audit commit together. A failure leaves the row unalerted so the next pass can try again.
+func (s *Store) RecordCleanupStopped(ctx context.Context, row Replacement, actorKind, actorID, fromTag, toTag string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	return rowsAffected(res)
+	defer tx.Rollback()
+	stamp := s.stamp(s.Now())
+	res, err := tx.ExecContext(ctx, `UPDATE vm_replacements SET cleanup_alerted = 1, updated_at = ? WHERE id = ? AND user_id = ? AND cleanup_pending = 1 AND cleanup_alerted = 0`,
+		stamp, row.ID, row.UserID)
+	if err != nil {
+		return err
+	}
+	if err := rowsAffected(res); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO vm_events(agent_vm_id, workspace_id, user_id, agent_id, kind, at, duration_ms)
+VALUES (?, ?, ?, ?, ?, ?, 0)`,
+		row.OldVMID, row.WorkspaceID, row.UserID, row.AgentID, EventReplaceCleanup, stamp); err != nil {
+		return err
+	}
+	detail, err := json.Marshal(map[string]string{
+		"actor": row.Actor,
+		"from":  fromTag,
+		"to":    toTag,
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.insertAudit(ctx, tx, row.WorkspaceID, row.UserID, actorKind, actorID, "machine.replace_cleanup_stopped", "agent:"+row.AgentID, string(detail)); err != nil {
+		return err
+	}
+	if s.cleanupWriteBlocked() {
+		return errors.New("cleanup write failed")
+	}
+	return tx.Commit()
 }
 
 // TouchReplacement records that the owner process is still working.
@@ -610,14 +639,14 @@ func (s *Store) SwitchReplacement(ctx context.Context, userID, id, token, health
 		vmState = "paused"
 		agentStatus = "paused"
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = 'replaced', deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+	if _, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = 'replaced', deleted_at = ?, state_gen = state_gen + 1 WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
 		stamp, row.OldVMID, userID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_vms(
   id, workspace_id, user_id, agent_id, microvm_id, name, endpoint, image_ref, state, failure,
-  agent_token, agent_token_hash, created_at, last_wake_at, created_running_at, observe_boot)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, 1)`,
+  agent_token, agent_token_hash, created_at, last_wake_at, created_running_at, observe_boot, state_gen)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, 1, 1)`,
 		row.NewVMID, row.WorkspaceID, userID, row.AgentID, row.NewMicro, row.NewName, row.NewEndpoint, row.NewImage, vmState,
 		token, hash, stamp, stamp, stamp); err != nil {
 		return err

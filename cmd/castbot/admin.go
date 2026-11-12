@@ -118,7 +118,7 @@ func adminReplace(args []string) int {
 		fmt.Fprintln(os.Stderr, "No machine host is configured.")
 		return 1
 	}
-	m, err := host.New(host.Options{Token: cfg.MachineToken})
+	m, err := newMachineHost(host.Options{Token: cfg.MachineToken})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "machine host did not start")
 		return 1
@@ -179,6 +179,10 @@ func runReplace(ctx context.Context, st *store.Store, h host.AgentHost, opt repl
 	}
 	fmt.Fprintln(os.Stderr, "replace failed")
 	return 1
+}
+
+var newMachineHost = func(opt host.Options) (host.AgentHost, error) {
+	return host.New(opt)
 }
 
 func interruptContext() (context.Context, context.CancelFunc) {

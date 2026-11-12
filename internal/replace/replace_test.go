@@ -110,9 +110,28 @@ func makeUser(t *testing.T, s *store.Store, email, name string) store.User {
 	return u
 }
 
+func countsMatch(before, after int) bool {
+	return after == before
+}
+
 func TestReplaceCopiesMemoryAndDeletesOldAfterHealth(t *testing.T) {
 	r := newRig(t, "running")
 	ctx := context.Background()
+	if _, err := r.st.IngestJournal(ctx, r.user.ID, r.agent.ID, []store.JournalEntry{{
+		Seq: 1, SessionID: "kept", Caller: "control_plane", Kind: "request", Text: "keep this turn",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.st.IssueCLIToken(ctx, r.user.ID, r.agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := r.st.CreateThread(ctx, r.user.ID, "dm", r.agent.ID, "Kept")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.st.CreateMessage(ctx, r.user.ID, thread.ID, "user", r.user.ID, "keep this"); err != nil {
+		t.Fatal(err)
+	}
 	before, err := r.st.CountAgentRows(ctx, r.user.ID, r.agent.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +178,12 @@ func TestReplaceCopiesMemoryAndDeletesOldAfterHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if countsMatch(1, 2) {
+		t.Fatal("a higher count was accepted")
+	}
+	if before["messages"] < 1 || before["journal_entries"] < 1 || before["cli_tokens"] < 1 {
+		t.Fatalf("fixture counts %#v", before)
+	}
 	for k, v := range before {
 		if k == "audit_log" {
 			if after[k] <= v {
@@ -166,7 +191,7 @@ func TestReplaceCopiesMemoryAndDeletesOldAfterHealth(t *testing.T) {
 			}
 			continue
 		}
-		if after[k] != v {
+		if !countsMatch(v, after[k]) {
 			t.Fatalf("%s %d -> %d", k, v, after[k])
 		}
 	}
@@ -209,6 +234,18 @@ func TestReplaceWakesPausedMachineOnce(t *testing.T) {
 	}
 	if pauses != 1 {
 		t.Fatalf("pauses %d", pauses)
+	}
+	pushAt, pauseAt := -1, -1
+	for i, call := range r.fake.Calls {
+		if call == "push-cli" && pushAt < 0 {
+			pushAt = i
+		}
+		if call == "pause" && pauseAt < 0 {
+			pauseAt = i
+		}
+	}
+	if pushAt < 0 || pauseAt < 0 || pushAt >= pauseAt {
+		t.Fatalf("push-cli at %d pause at %d calls %v", pushAt, pauseAt, r.fake.Calls)
 	}
 	if len(r.fake.Deletes) != 1 || r.fake.Deletes[0] != "vm-old" {
 		t.Fatalf("deletes %#v", r.fake.Deletes)

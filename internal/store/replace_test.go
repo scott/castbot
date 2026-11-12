@@ -32,6 +32,13 @@ func TestReplaceMigration(t *testing.T) {
 			t.Fatalf("column %s: %v", col, err)
 		}
 	}
+	var col string
+	if err := st.db.QueryRow(`SELECT name FROM pragma_table_info('vm_replacements') WHERE name = 'cleanup_pending'`).Scan(&col); err != nil || col != "cleanup_pending" {
+		t.Fatalf("cleanup_pending %s %v", col, err)
+	}
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 14`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("version 14 count %d %v", n, err)
+	}
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -130,6 +137,11 @@ func TestReplaceLockAndTokenBinding(t *testing.T) {
 	if !found {
 		t.Fatal("event filed on the live row")
 	}
+	beforeLive, err := st.LiveVM(ctx, owner.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeGen := beforeLive.StateGen
 	if err := st.SwitchReplacement(ctx, owner.ID, row.ID, next, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -139,9 +151,19 @@ func TestReplaceLockAndTokenBinding(t *testing.T) {
 	if _, err := st.ReplacementToken(ctx, owner.ID, row.ID); err != ErrNotFound {
 		t.Fatal("staged token kept")
 	}
+	var retiredGen int64
+	if err := st.db.QueryRow(`SELECT state_gen FROM agent_vms WHERE id = ?`, row.OldVMID).Scan(&retiredGen); err != nil {
+		t.Fatal(err)
+	}
+	if retiredGen != beforeGen+1 {
+		t.Fatalf("retired state_gen %d, was %d", retiredGen, beforeGen)
+	}
 	live, err := st.LiveVM(ctx, owner.ID, agent.ID)
 	if err != nil || live.ID != row.NewVMID {
 		t.Fatalf("switched row %+v %v", live, err)
+	}
+	if live.StateGen != 1 {
+		t.Fatalf("new state_gen %d", live.StateGen)
 	}
 	_, got, err := st.VMCredentials(ctx, owner.ID, agent.ID)
 	if err != nil || got != next {
@@ -227,8 +249,20 @@ func TestDeleteRevokesAgentToken(t *testing.T) {
 	if err := st.SaveVMToken(ctx, agent.ID, token); err != nil {
 		t.Fatal(err)
 	}
+	before, err := st.LiveVM(ctx, owner.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := st.MarkVMDeleted(ctx, owner.ID, agent.ID); err != nil {
 		t.Fatal(err)
+	}
+	var state string
+	var gen int64
+	if err := st.db.QueryRow(`SELECT state, state_gen FROM agent_vms WHERE id = ?`, before.ID).Scan(&state, &gen); err != nil {
+		t.Fatal(err)
+	}
+	if state != "deleted" || gen != before.StateGen+1 {
+		t.Fatalf("deleted row %s gen %d, was %d", state, gen, before.StateGen)
 	}
 	if _, err := st.UserForAgentToken(ctx, agent.ID, token); err != ErrNotFound {
 		t.Fatalf("revoked token %v", err)

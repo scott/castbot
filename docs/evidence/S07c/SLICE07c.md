@@ -8,7 +8,7 @@ The guest HTTP API is unchanged, so this slice does not need a new runtime image
 
 ## What the tests show
 
-`TestReplaceMigration` opens a database twice and checks schema version 14, `vm_replacements`, `vm_replacement_tokens`, `agent_tokens.agent_vm_id`, and `agent_tokens.revoked_at`. `TestReplaceLockAndTokenBinding` keeps a second replace out, leaves the live token unchanged while the new token is staged, and shows the switch revokes the old token. `TestReplacePrecheckLines` covers the reply, approval, starting, and already-running lines. `TestDeleteRevokesAgentToken` shows an ordinary delete revokes the machine token.
+`TestReplaceMigration` opens a database twice and checks schema version 15, `vm_replacements`, `cleanup_pending`, `vm_replacement_tokens`, `agent_tokens.agent_vm_id`, and `agent_tokens.revoked_at`. Version 14 stays the carry-forward migration. `TestReplaceLockAndTokenBinding` keeps a second replace out, leaves the live token unchanged while the new token is staged, and shows the switch revokes the old token. `TestReplacePrecheckLines` covers the reply, approval, starting, and already-running lines. `TestDeleteRevokesAgentToken` shows an ordinary delete revokes the machine token.
 
 `TestReplaceCopiesMemoryAndDeletesOldAfterHealth` copies memory and files, reloads, and deletes the old machine only after health. It also checks every owned row count stays equal, except `audit_log`, which must grow. `TestReplaceWakesPausedMachineOnce` wakes a paused machine once, pushes CLI hashes, then pauses the new machine, and leaves it paused at the host. The fake resumes a paused machine on any guest call, so a push after the pause fails that test. A later failure does not change the agent status.
 

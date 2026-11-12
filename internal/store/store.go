@@ -44,12 +44,13 @@ const (
 
 // Store scopes every owned-row query by the caller's user id.
 type Store struct {
-	db       *sql.DB
-	clockMu  sync.RWMutex
-	now      func() time.Time
-	stepFail string
-	argon    auth.Params
-	dummy    string
+	db                *sql.DB
+	clockMu           sync.RWMutex
+	now               func() time.Time
+	stepFail          string
+	cleanupWriteFault bool
+	argon             auth.Params
+	dummy             string
 
 	// restartWanted is the first moment a bundle or secret reload had to wait,
 	// keyed by user and agent. It is process memory, so a restart of this
@@ -140,6 +141,19 @@ func (s *Store) stepUpdateBlocked(step string) bool {
 	s.clockMu.RLock()
 	defer s.clockMu.RUnlock()
 	return s.stepFail != "" && s.stepFail == step
+}
+
+// FailCleanupWrite makes RecordCleanupStopped fail before its commit. Tests use it.
+func (s *Store) FailCleanupWrite(on bool) {
+	s.clockMu.Lock()
+	s.cleanupWriteFault = on
+	s.clockMu.Unlock()
+}
+
+func (s *Store) cleanupWriteBlocked() bool {
+	s.clockMu.RLock()
+	defer s.clockMu.RUnlock()
+	return s.cleanupWriteFault
 }
 
 // Argon returns the password hashing parameters this store was opened with.
