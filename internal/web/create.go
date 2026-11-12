@@ -774,6 +774,7 @@ func (s *Server) advancedForm(w http.ResponseWriter, r *http.Request, user store
 		form.Job = card.Job
 		form.Instructions = card.Instructions
 		form.Model = card.Model
+		form.keepModel()
 		form.Size = card.Size
 		form.Idle = card.Idle
 		if store.ValidAgentColor(card.Color) {
