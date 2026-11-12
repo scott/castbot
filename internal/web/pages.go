@@ -1,7 +1,6 @@
 package web
 
 import (
-	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -576,42 +575,11 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if r.FormValue("form") == "agent" {
-		s.saveNewAgent(w, r, user)
+	if r.FormValue("form") != "agent" {
+		http.Error(w, "Use the setup card to create an agent.\n", http.StatusBadRequest)
 		return
 	}
-	sec, err := s.store.SystemSection(r.Context(), user.ID, "agents")
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	agent, _, err := s.store.CreateAgent(r.Context(), user.ID, store.AgentInput{
-		SectionID: sec.ID,
-		Name:      r.FormValue("name"),
-		Title:     r.FormValue("title"),
-		Status:    "draft",
-		Color:     "c0",
-	})
-	if err != nil {
-		p, _ := s.shell(r, user)
-		p.Page = "new"
-		p.Title = "New agent"
-		f, ferr := s.blankForm(r.Context(), user)
-		if ferr != nil {
-			http.Error(w, "Error", http.StatusInternalServerError)
-			return
-		}
-		f.Name = r.FormValue("name")
-		f.Title = r.FormValue("title")
-		f.NameErr = "Choose a name that is not already used."
-		if errors.Is(err, store.ErrInvalid) {
-			f.NameErr = "Use a name up to 40 characters."
-		}
-		p.AgentForm = f
-		s.render(w, http.StatusBadRequest, "app", finish(p))
-		return
-	}
-	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID), http.StatusSeeOther)
+	s.saveNewAgent(w, r, user)
 }
 
 func (s *Server) createSection(w http.ResponseWriter, r *http.Request) {

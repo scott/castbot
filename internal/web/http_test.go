@@ -411,19 +411,12 @@ func TestCSRFThemeEchoAndSessions(t *testing.T) {
 	if !strings.Contains(body, `class="acct on"`) {
 		t.Fatal("account button")
 	}
-	code, _, _ = h.do(http.MethodPost, "/new-agent", h.form(url.Values{"name": {"Echo"}, "title": {"Helper"}}), ip, nil)
-	if code != http.StatusSeeOther {
-		t.Fatal(code)
-	}
-	agents, err := h.st.ListAgents(context.Background(), user.ID)
-	if err != nil || len(agents) != 1 {
-		t.Fatal(err, len(agents))
-	}
-	code, body, _ = h.do(http.MethodPost, "/agents/"+agents[0].ID+"/messages", h.form(url.Values{"body": {"hello there"}}), ip, map[string]string{"HX-Request": "true"})
+	agent := h.newAgent(ip, "Echo")
+	code, body, _ = h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {"hello there"}}), ip, map[string]string{"HX-Request": "true"})
 	if code != 200 || !strings.Contains(body, `sse-connect="/runs/`) || !strings.Contains(body, "hello there") || !strings.Contains(body, "Replying") {
 		t.Fatalf("echo %d %s", code, body)
 	}
-	body = h.poll(ip, "/agents/"+agents[0].ID, "You said: hello there")
+	body = h.poll(ip, "/agents/"+agent.ID, "You said: hello there")
 	if !strings.Contains(body, "You said: hello there") {
 		t.Fatalf("stored reply missing: %s", body)
 	}
@@ -745,7 +738,7 @@ func TestDenverClock(t *testing.T) {
 	h := newHarness(t)
 	now := time.Date(2026, 11, 10, 1, 1, 0, 0, time.UTC)
 	h.st.SetNow(func() time.Time { return now })
-	user, secret := h.account("clock@example.com", "Clock User", "correct-horse-1")
+	_, secret := h.account("clock@example.com", "Clock User", "correct-horse-1")
 	ip := "203.0.113.200:9"
 	h.login("clock@example.com", "correct-horse-1", secret, ip, false)
 	_, body, _ := h.do(http.MethodGet, "/settings", "", ip, nil)
@@ -755,16 +748,9 @@ func TestDenverClock(t *testing.T) {
 	if strings.Contains(body, "Nov 10") {
 		t.Fatal("settings still used UTC")
 	}
-	code, _, _ := h.do(http.MethodPost, "/new-agent", h.form(url.Values{"name": {"Echo"}, "title": {"Helper"}}), ip, nil)
-	if code != http.StatusSeeOther {
-		t.Fatal(code)
-	}
-	agents, err := h.st.ListAgents(context.Background(), user.ID)
-	if err != nil || len(agents) != 1 {
-		t.Fatal(err)
-	}
-	_, body, _ = h.do(http.MethodPost, "/agents/"+agents[0].ID+"/messages", h.form(url.Values{"body": {"hello there"}}), ip, nil)
-	body = h.poll(ip, "/agents/"+agents[0].ID, "6:01 PM")
+	agent := h.newAgent(ip, "Echo")
+	_, body, _ = h.do(http.MethodPost, "/agents/"+agent.ID+"/messages", h.form(url.Values{"body": {"hello there"}}), ip, nil)
+	body = h.poll(ip, "/agents/"+agent.ID, "6:01 PM")
 	if !strings.Contains(body, "6:01 PM") || strings.Contains(body, "1:01 AM") {
 		t.Fatalf("message clock: %s", body)
 	}

@@ -153,9 +153,9 @@ func s20Drive(t *testing.T, ctx context.Context, kind string, gate *s20Gate, fak
 		s20Send(t, ctx, "Make me an agent called Atlas that checks example-org/docs for broken links.", `(document.body.innerText||'').indexOf('already have an agent named Atlas')>=0 && (document.body.innerText||'').indexOf('Atlas Spanish')>=0 && document.querySelector('.cacts button.btn.pri').disabled && !!document.querySelector('form[action="/new-agent/edit"] button')`)
 	case "14m":
 		s20Send(t, ctx, s20Scout, s20Card("Create Scout", "Small, 1 vCPU / 2 GiB"))
-		s20Click(t, ctx, `document.querySelector('.cacts button.btn.pri').click()`, `(document.body.innerText||'').indexOf('did not start')>=0 && (document.body.innerText||'').indexOf('Try again')>=0`)
+		s20Click(t, ctx, `document.querySelector('.cacts button.btn.pri').click()`, `(document.body.innerText||'').indexOf('did not start')>=0 && (document.body.innerText||'').indexOf('Try again')>=0 && (document.body.innerText||'').indexOf('Machine details')>=0`)
 		s20Chat(t, ctx, "Please start with docs/guides.")
-		s20Reload(t, ctx, `(document.body.innerText||'').indexOf('did not start')>=0 && (document.body.innerText||'').indexOf('Not sent yet')>=0`)
+		s20Reload(t, ctx, `(document.body.innerText||'').indexOf('did not start')>=0 && (document.body.innerText||'').indexOf('Not sent yet')>=0 && (document.body.innerText||'').indexOf('Machine details')>=0`)
 	default:
 		t.Fatalf("kind %s", kind)
 	}

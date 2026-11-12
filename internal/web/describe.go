@@ -18,23 +18,12 @@ type Proposal struct {
 }
 
 // DescribeClient turns a redacted description into a setup.
-// Tests pass a fake. The default client does not dial a provider.
+// Tests and screenshots pass a fake. The default client calls the provider.
 type DescribeClient interface {
 	Describe(ctx context.Context, text string) (Proposal, error)
 }
 
 var errDescribeDown = errors.New("describe unavailable")
-
-// envDescribe reads a setup without a network call.
-// It refuses when the server has no provider key, and it never logs the text.
-type envDescribe struct{}
-
-func (envDescribe) Describe(_ context.Context, text string) (Proposal, error) {
-	if !serverProviderKeySet() {
-		return Proposal{}, errDescribeDown
-	}
-	return localProposal(text), nil
-}
 
 func serverProviderKeySet() bool {
 	for _, slot := range modelSlots() {
@@ -55,7 +44,7 @@ func (s *Server) describer() DescribeClient {
 	if c != nil {
 		return c
 	}
-	return envDescribe{}
+	return providerDescribe{}
 }
 
 // SetDescribe installs the client that reads a new-agent description.

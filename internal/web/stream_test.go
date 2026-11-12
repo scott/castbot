@@ -389,22 +389,23 @@ func TestRetryDoesNotDuplicateTheUserMessage(t *testing.T) {
 
 func (h *harness) newAgent(ip, name string) store.Agent {
 	h.t.Helper()
-	code, _, hdr := h.do(http.MethodPost, "/new-agent", h.form(url.Values{"name": {name}, "title": {"Helper"}}), ip, nil)
-	if code != http.StatusSeeOther {
-		h.t.Fatalf("agent %d %s", code, hdr.Get("Location"))
-	}
+	_ = ip
 	user := h.currentUser()
-	agents, err := h.st.ListAgents(context.Background(), user)
+	sec, err := h.st.SystemSection(context.Background(), user, "agents")
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	for _, agent := range agents {
-		if agent.Name == name {
-			return agent
-		}
+	agent, _, err := h.st.CreateAgent(context.Background(), user, store.AgentInput{
+		SectionID: sec.ID,
+		Name:      name,
+		Title:     "Helper",
+		Status:    "draft",
+		Color:     "c0",
+	})
+	if err != nil {
+		h.t.Fatal(err)
 	}
-	h.t.Fatal("agent missing")
-	return store.Agent{}
+	return agent
 }
 
 func (h *harness) currentUser() string {

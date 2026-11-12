@@ -2,17 +2,17 @@
 
 New agent opens a chat with castbot. One description becomes a setup card. Create on that card saves the agent, starts its machine, and lands in the agent's chat. There is no separate machine step and no create button outside the card.
 
-The describe step uses a fake client in tests and screenshots. It does not call a model provider. The agent's own key stays in the user's vault. castbot does not copy a server key into the agent.
+The describe step calls the server's provider with the server key. Tests and screenshots inject a fake client and do not call a provider. The agent's own key stays in the user's vault. castbot does not copy a server key into the agent.
 
 ## What the tests show
 
 `TestMigrateV19GreetedAtAndDrafts` adds `greeted_at` and `create_drafts` at schema version 19, backfills existing agents only when the column is new, and refuses a second greeting.
 
-`TestDescribeUsesTheFake` reads the description with the injected client. `TestDescribeDoesNotDial` fails the setup step when no server key is set and does not open a connection. `TestAutoName` picks a short unused name. `TestNameFromText` keeps a name the person wrote. `TestNameConflict` disables Create when the name is taken and still allows Edit.
+`TestDescribeUsesTheFake` reads the description with the injected client. `TestDescribeCallsProvider` checks the chat request against a local server: the key is only in the Authorization header, and a pasted token is not in the body. `TestDescribeDoesNotDial` clears every server key variable and does not open a connection. `TestAutoName` picks a short unused name. `TestNameFromText` keeps a name the person wrote. `TestNameConflict` disables Create when the name is taken and still allows Edit. `TestBareCreateRefused` rejects a name-only create.
 
 `TestConfirmOnlyOnTheCard` creates only from the card's confirm. `TestAdvancedCreateStarts` and `TestCreateRedirectsWithoutAMachineStep` start a Small machine (1 vCPU, 2 GiB, pause after 15 minutes) and redirect to `/agents/{id}`. `TestStartingUpHoldsTheWaitingMessage` stores a message typed during boot and does not start a run for it.
 
-`TestGreetOnce` greets once across a reload. `TestGreetingWithAJob` starts the job in that same turn and mentions a message that was waiting. `TestGreetingWithoutAJob` asks for a job and offers three replies. `TestBootFailureAndTryAgain` shows the 4 minute failure, and Try again makes a new machine without a second hello.
+`TestGreetOnce` greets once across a reload. `TestGreetingWithAJob` starts the job in that same turn and mentions a message that was waiting. `TestGreetingWithoutAJob` asks for a job and offers three replies. `TestBootFailureAndTryAgain` shows the 4 minute failure with Try again and Machine details, and Try again makes a new machine without a second hello.
 
 `TestNoSecretsInInstructionsOrLogs` strips a pasted token before the client sees it, stores the redacted text, and keeps it out of instructions and logs. `TestNoServerKeyLent` blocks Create until the user adds a vault key. `TestRepromptUnclear` answers "hi" with examples and no card. `TestDraftExpiresAfter24Hours` drops a draft after a day. `TestCreateAuthzAndCSRF` returns 404 for another user's draft and 403 for a bad CSRF token.
 

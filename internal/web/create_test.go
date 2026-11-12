@@ -487,7 +487,7 @@ func TestBootFailureAndTryAgain(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID, "", ip, nil)
-	if code != 200 || !strings.Contains(body, "did not start") || !strings.Contains(body, "4 minutes") || !strings.Contains(body, "Try again") || !strings.Contains(body, "says hello only once") {
+	if code != 200 || !strings.Contains(body, "did not start") || !strings.Contains(body, "4 minutes") || !strings.Contains(body, "Try again") || !strings.Contains(body, "Machine details") || !strings.Contains(body, "?panel=machine") || !strings.Contains(body, "says hello only once") {
 		t.Fatalf("failure card\n%s", body)
 	}
 	fake.WaitCreate = nil
@@ -646,24 +646,6 @@ func TestCreateAuthzAndCSRF(t *testing.T) {
 	code, body, _ := h.do(http.MethodPost, "/new-agent/describe", "body=Check+example-org/docs+for+broken+links", bip, nil)
 	if code != http.StatusForbidden || !strings.Contains(body, "The form expired.") {
 		t.Fatalf("csrf %d %s", code, body)
-	}
-}
-
-func TestDescribeDoesNotDial(t *testing.T) {
-	prev := http.DefaultTransport
-	http.DefaultTransport = roundTripper(func(*http.Request) (*http.Response, error) {
-		t.Fatal("describe dialed")
-		return nil, errors.New("dialed")
-	})
-	t.Cleanup(func() { http.DefaultTransport = prev })
-	t.Setenv("CASTBOT_PROVIDER_KEY_OPENROUTER", "server-side-demo")
-	prop, err := (envDescribe{}).Describe(context.Background(), "Check example-org/docs for broken links every morning.")
-	if err != nil || prop.Job == "" || strings.Contains(prop.Instructions, "server-side-demo") {
-		t.Fatalf("%+v %v", prop, err)
-	}
-	t.Setenv("CASTBOT_PROVIDER_KEY_OPENROUTER", "")
-	if _, err := (envDescribe{}).Describe(context.Background(), "Check example-org/docs for broken links every morning."); err == nil {
-		t.Fatal("missing server key still described")
 	}
 }
 

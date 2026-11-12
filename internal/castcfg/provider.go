@@ -91,6 +91,46 @@ func ProviderSecretFrom(model, vault string) (castEnv, value, missing string) {
 	return ProviderSecret(model)
 }
 
+// ChatCompletions is the OpenAI-compatible chat URL and the model id that
+// provider expects. The key is not part of either value.
+func ChatCompletions(model string) (endpoint, apiModel string, ok bool) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "", "", false
+	}
+	var list []provider
+	if err := json.Unmarshal(manifestJSON, &list); err != nil {
+		return "", "", false
+	}
+	var best provider
+	bestLen := -1
+	prefix := ""
+	found := false
+	for _, p := range list {
+		if p.Impl == "reserved" || p.Key == "" || strings.TrimSpace(p.BaseURL) == "" {
+			continue
+		}
+		for _, pre := range p.Prefixes {
+			if pre == "" || !strings.HasPrefix(model, pre) || len(pre) <= bestLen {
+				continue
+			}
+			bestLen = len(pre)
+			found = true
+			best = p
+			prefix = pre
+		}
+	}
+	if !found {
+		return "", "", false
+	}
+	endpoint = strings.TrimRight(strings.TrimSpace(best.BaseURL), "/") + "/chat/completions"
+	apiModel = strings.TrimPrefix(model, prefix)
+	if apiModel == "" || strings.ContainsAny(endpoint, " \t") {
+		return "", "", false
+	}
+	return endpoint, apiModel, true
+}
+
 // KeyedProvider is one manifest provider that needs a key.
 type KeyedProvider struct {
 	Key    string

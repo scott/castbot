@@ -1,6 +1,7 @@
 package castcfg
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -25,6 +26,16 @@ func TestInferenceKeylessOllama(t *testing.T) {
 	env, value, missing := ProviderSecret("ollama/qwen3")
 	if env != "" || value != "" || missing != "" {
 		t.Fatalf("%q %q %q", env, value, missing)
+	}
+}
+
+func TestChatCompletionsStripsThePrefix(t *testing.T) {
+	endpoint, apiModel, ok := ChatCompletions("openrouter/minimax/minimax-m2.5")
+	if !ok || apiModel != "minimax/minimax-m2.5" || !strings.HasSuffix(endpoint, "/chat/completions") {
+		t.Fatalf("%q %q %v", endpoint, apiModel, ok)
+	}
+	if strings.Contains(endpoint, "CASTBOT") || strings.Contains(apiModel, "sk-") {
+		t.Fatal("endpoint carried a key")
 	}
 }
 

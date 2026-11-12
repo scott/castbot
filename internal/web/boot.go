@@ -205,17 +205,32 @@ func greetCopy(first, name, job, schedule string, waiting []string) string {
 	}
 	extra := "I am starting on it now."
 	if len(waiting) > 0 {
-		ask := strings.TrimSpace(waiting[0])
-		if len(ask) > 180 {
-			ask = ask[:180]
-		}
-		extra = "You asked me to start with " + ask + ", so I am starting there now."
+		extra = "You asked me to start with " + greetAsk(waiting[0]) + ", so I am starting there now."
 	}
 	msg := "Hi " + first + ", I am " + name + ". Nice to meet you, and thanks for setting me up.\n\nMy job: " + job + " " + extra
 	if schedule != "" {
 		msg += " You said " + schedule + ". I can set that up as a routine for you."
 	}
 	return msg
+}
+
+func greetAsk(raw string) string {
+	ask := strings.TrimSpace(raw)
+	lower := strings.ToLower(ask)
+	for _, prefix := range []string{"please start with ", "please begin with ", "start with ", "begin with "} {
+		if strings.HasPrefix(lower, prefix) {
+			ask = strings.TrimSpace(ask[len(prefix):])
+			break
+		}
+	}
+	ask = strings.Trim(ask, " .")
+	if ask == "" {
+		ask = strings.Trim(strings.TrimSpace(raw), " .")
+	}
+	if len(ask) > 180 {
+		ask = ask[:180]
+	}
+	return ask
 }
 
 func firstName(name string) string {
