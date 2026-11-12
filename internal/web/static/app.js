@@ -246,11 +246,22 @@
     function announceCopy(btn) {
       var live = document.getElementById("copy-status");
       if (live) live.textContent = "Copied";
-      if (btn) btn.classList.add("done");
+      if (!btn) return;
+      btn.classList.add("done");
+      var svg = btn.querySelector("svg");
+      var label = btn.querySelector("span");
+      var old = svg ? svg.innerHTML : "";
+      var oldLabel = label ? label.textContent : "";
+      if (svg) {
+        svg.innerHTML = '<path d="M4.5 12.5l5 5L19.5 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
+      }
+      if (label && oldLabel === "Copy") label.textContent = "Copied";
       window.setTimeout(function () {
-        if (btn) btn.classList.remove("done");
+        btn.classList.remove("done");
+        if (svg) svg.innerHTML = old;
+        if (label && oldLabel) label.textContent = oldLabel;
         if (live) live.textContent = "";
-      }, 2000);
+      }, 1500);
     }
 
     var themeForm = document.getElementById("theme-form");

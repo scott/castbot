@@ -208,7 +208,14 @@ func fixLink(n *nethtml.Node) {
 }
 
 func schemeOK(raw string) bool {
-	raw = strings.TrimSpace(raw)
+	// Decode entities and drop spaces so "&#106;avascript:" cannot stay a link.
+	raw = html.UnescapeString(strings.TrimSpace(raw))
+	raw = strings.Map(func(r rune) rune {
+		if r <= 32 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, raw)
 	low := strings.ToLower(raw)
 	return strings.HasPrefix(low, "http://") || strings.HasPrefix(low, "https://") || strings.HasPrefix(low, "mailto:")
 }

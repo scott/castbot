@@ -280,6 +280,28 @@ func TestStreamResumeNoDuplicateBlocks(t *testing.T) {
 	_ = tail
 }
 
+func TestN4EntityJavaScriptStripped(t *testing.T) {
+	samples := []string{
+		`[x](&#106;avascript:alert(1))`,
+		`[x](&#x6A;avascript:alert(1))`,
+		`[x](&#X6a;avascript:alert(1))`,
+		`[x](java&#115;cript:alert(1))`,
+		`[x](&#106;ava&#115;cript:alert(1))`,
+		`[x](javascript&#58;alert(1))`,
+		`[x](JaVaScRiPt:alert(1))`,
+		"<script>alert(1)</script>",
+		`<img src=x onerror=alert(1)>`,
+		`<a href="javascript:alert(1)">x</a>`,
+		`<a href="&#106;avascript:alert(1)">x</a>`,
+	}
+	for _, src := range samples {
+		got := strings.ToLower(Render(src))
+		if strings.Contains(got, "javascript:") || strings.Contains(got, "<script") || strings.Contains(got, "onerror") {
+			t.Fatalf("payload survived %q -> %s", src, got)
+		}
+	}
+}
+
 func TestUserPlain(t *testing.T) {
 	samples := []string{
 		"Before you push, check:\n- the **pricing** lines in docs/faq.md\n- the GITHUB_TOKEN note in docs/setup_guide.md\n- links like https://example.org/docs/pricing\n\nThanks!",

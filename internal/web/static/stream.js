@@ -39,7 +39,9 @@
     var bubble = t && t.closest ? t.closest(".pending") : null;
     if (bubble && id) {
       bubble.setAttribute("data-seq", id);
-      bubble.setAttribute("sse-connect", "/runs/" + bubble.id.slice(4) + "/events?after=" + id);
+      // A plain id is frame 0. Keep the dot so a reconnect does not skip the rest of the batch.
+      var resume = id.indexOf(".") >= 0 ? id : id + ".0";
+      bubble.setAttribute("sse-connect", "/runs/" + bubble.id.slice(4) + "/events?after=" + resume);
     }
     if (d.type === "fail") settle();
     else if ((t && t.closest && t.closest("#msgs")) || d.type === "done") scroll();
@@ -63,6 +65,9 @@
     var sample = reconnectNode();
     var acts = document.querySelectorAll(".pending .act-hold");
     for (var i = 0; i < acts.length; i++) {
+      if (!acts[i].hasAttribute("data-hold")) {
+        acts[i].setAttribute("data-hold", acts[i].hidden ? "1" : "0");
+      }
       acts[i].hidden = false;
       var act = acts[i].querySelector(".act");
       if (act && sample && !act.getAttribute("data-prev")) {
@@ -92,6 +97,11 @@
     if (sub && sub.getAttribute("data-prev")) {
       sub.innerHTML = sub.getAttribute("data-prev");
       sub.removeAttribute("data-prev");
+    }
+    var holds = document.querySelectorAll(".pending .act-hold");
+    for (var h = 0; h < holds.length; h++) {
+      if (holds[h].getAttribute("data-hold") === "1") holds[h].hidden = true;
+      holds[h].removeAttribute("data-hold");
     }
   }
   document.addEventListener("htmx:sseError", function (ev) {

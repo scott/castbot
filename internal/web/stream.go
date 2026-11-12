@@ -106,7 +106,8 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	flush := func() { _ = rc.Flush() }
 	flush()
 
-	after := streamCursor(r)
+	cur := streamCursor(r)
+	after := cur.listAfter()
 	signals, unsub := s.runs.Hub.Subscribe(runRow.ID)
 	defer unsub()
 	sentTerminal := false
@@ -141,18 +142,35 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			flush()
 		}
+		delivered := false
 		for _, ev := range events {
-			if err := s.writeRunEvent(r.Context(), w, user, runRow, ev, from(r).CSRF); err != nil {
+			n, err := s.writeRunEvent(r.Context(), w, user, runRow, ev, from(r).CSRF, cur.skip(ev.Seq))
+			if err != nil {
 				return
 			}
 			after = ev.Seq
-			flush()
-			if ev.Kind == "done" || ev.Kind == "error" {
+			if n > 0 {
+				delivered = true
+				flush()
+			}
+			if n > 0 && (ev.Kind == "done" || ev.Kind == "error") {
 				sentTerminal = true
 			}
 		}
 		if sentTerminal {
-			_ = writeSSE(w, 0, "stop", "")
+			_ = writeSSE(w, "", "stop", "")
+			flush()
+			return
+		}
+		// A plain Last-Event-ID already consumed a one-frame terminal event.
+		// The list is not empty, but nothing new was written, so resend the
+		// closing card the same way a cursor past the end does.
+		if !delivered && batchTerminal(events) {
+			if err := s.writeCaughtUp(r.Context(), w, user, runRow, from(r).CSRF); err != nil {
+				return
+			}
+			flush()
+			_ = writeSSE(w, "", "stop", "")
 			flush()
 			return
 		}
@@ -179,7 +197,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flush()
-			_ = writeSSE(w, 0, "stop", "")
+			_ = writeSSE(w, "", "stop", "")
 			flush()
 			return
 		}
@@ -216,27 +234,78 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func streamCursor(r *http.Request) int {
-	after := 0
-	if n, ok := parseSeq(r.URL.Query().Get("after")); ok && n > after {
-		after = n
-	}
-	if n, ok := parseSeq(r.Header.Get("Last-Event-ID")); ok && n > after {
-		after = n
-	}
-	return after
+// resumePos is how far the browser got inside one store sequence.
+// A text event is several frames (text, tail, each closed block, tools, act)
+// that share one store seq. A plain query after=N means the page already
+// painted every frame of N. A Last-Event-ID of N means only frame 0 arrived.
+// A dotted id N.k means frame k arrived, so later frames of N must be resent.
+type resumePos struct {
+	seq   int
+	part  int
+	whole bool
 }
 
-func parseSeq(raw string) (int, bool) {
+func streamCursor(r *http.Request) resumePos {
+	q, qOK := parseResume(r.URL.Query().Get("after"), true)
+	h, hOK := parseResume(r.Header.Get("Last-Event-ID"), false)
+	if !qOK {
+		return h
+	}
+	if !hOK || !h.after(q) {
+		return q
+	}
+	return h
+}
+
+func parseResume(raw string, query bool) (resumePos, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return 0, false
+		return resumePos{}, false
+	}
+	if i := strings.IndexByte(raw, '.'); i >= 0 {
+		seq, err1 := strconv.Atoi(raw[:i])
+		part, err2 := strconv.Atoi(raw[i+1:])
+		if err1 != nil || err2 != nil || seq <= 0 || part < 0 || strings.Contains(raw[i+1:], ".") {
+			return resumePos{}, false
+		}
+		return resumePos{seq: seq, part: part}, true
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n <= 0 {
-		return 0, false
+		return resumePos{}, false
 	}
-	return n, true
+	if query {
+		return resumePos{seq: n, whole: true}, true
+	}
+	return resumePos{seq: n, part: 0}, true
+}
+
+func (p resumePos) after(o resumePos) bool {
+	if p.seq != o.seq {
+		return p.seq > o.seq
+	}
+	if p.whole != o.whole {
+		return p.whole
+	}
+	return p.part > o.part
+}
+
+func (p resumePos) listAfter() int {
+	if p.seq <= 0 {
+		return 0
+	}
+	if p.whole {
+		return p.seq
+	}
+	return p.seq - 1
+}
+
+// skip is the last frame index already delivered for this seq, or -1 to send all.
+func (p resumePos) skip(seq int) int {
+	if !p.whole && p.seq == seq {
+		return p.part
+	}
+	return -1
 }
 
 func runTerminal(status string) bool {
@@ -262,62 +331,73 @@ func (s *Server) writeCaughtUp(ctx context.Context, w http.ResponseWriter, user 
 	if last == nil {
 		return nil
 	}
-	return s.writeRunEvent(ctx, w, user, runRow, *last, csrf)
+	_, err = s.writeRunEvent(ctx, w, user, runRow, *last, csrf, -1)
+	return err
 }
 
-func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, ev store.RunEvent, csrf string) error {
+func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, ev store.RunEvent, csrf string, fromPart int) (n int, err error) {
+	fw := &frameWriter{w: w, seq: ev.Seq, from: fromPart}
+	defer func() { n = fw.sent }()
 	switch ev.Kind {
 	case "text":
 		var payload struct {
 			Text string `json:"text"`
 		}
-		if err := json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
-			return err
+		if err = json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
+			return
 		}
-		if err := writeSSE(w, ev.Seq, "text", html.EscapeString(payload.Text)); err != nil {
-			return err
+		if err = fw.write("text", html.EscapeString(payload.Text)); err != nil {
+			return
 		}
-		return s.writeMarkdownProgress(ctx, w, user, runRow, ev, csrf)
+		err = s.writeMarkdownProgress(ctx, fw, user, runRow, ev, csrf)
+		return
 	case "tool":
-		if err := writeSSE(w, ev.Seq, "note", ""); err != nil {
-			return err
+		if err = fw.write("note", ""); err != nil {
+			return
 		}
-		return s.writeMarkdownProgress(ctx, w, user, runRow, ev, csrf)
+		err = s.writeMarkdownProgress(ctx, fw, user, runRow, ev, csrf)
+		return
 	case "error":
 		var payload struct {
 			Message string `json:"message"`
 		}
-		if err := json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
-			return err
+		if err = json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
+			return
 		}
-		body, err := execTemplate("runError", s.calmLive(ctx, user, runRow, payload.Message, csrf))
+		var body string
+		body, err = execTemplate("runError", s.calmLive(ctx, user, runRow, payload.Message, csrf))
 		if err != nil {
-			return err
+			return
 		}
 		body += `<div id="tail-` + html.EscapeString(runRow.ID) + `" class="act-hold" hidden hx-swap-oob="outerHTML"></div>`
 		body += s.sideOOB(ctx, user, runRow.AgentID)
 		clearDwell(runRow.ID)
-		return writeSSE(w, ev.Seq, "fail", body)
+		err = fw.write("fail", body)
+		return
 	case "done":
 		var payload struct {
 			MessageID string `json:"messageId"`
 		}
-		if err := json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
-			return err
+		if err = json.Unmarshal([]byte(ev.Payload), &payload); err != nil {
+			return
 		}
-		return s.writeDone(ctx, w, user, runRow, ev.Seq, payload.MessageID, csrf)
+		err = s.writeDone(ctx, fw, user, runRow, payload.MessageID, csrf)
+		return
 	case "permission":
-		body, err := s.cardsHTML(ctx, user, runRow.ID, csrf)
+		var body string
+		body, err = s.cardsHTML(ctx, user, runRow.ID, csrf)
 		if err != nil {
-			return err
+			return
 		}
-		return writeSSE(w, ev.Seq, "card", body)
+		err = fw.write("card", body)
+		return
 	default:
-		return writeSSE(w, ev.Seq, "note", "")
+		err = fw.write("note", "")
+		return
 	}
 }
 
-func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, seq int, messageID, csrf string) error {
+func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User, runRow store.Run, messageID, csrf string) error {
 	msg, err := s.store.GetMessage(ctx, user.ID, messageID)
 	if err != nil {
 		return err
@@ -329,7 +409,7 @@ func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user stor
 	views := presentMessages([]store.Message{msg}, agent, s.store.Now(), userLocation(user.Timezone))
 	s.linkMentionedFiles(ctx, user.ID, runRow.AgentID, views)
 	if len(views) == 0 {
-		return writeSSE(w, seq, "done", "")
+		return fw.write("done", "")
 	}
 	views[0].ShowDay = false
 	cards, err := s.cardsFor(ctx, user, runRow.ID, csrf)
@@ -345,7 +425,7 @@ func (s *Server) writeDone(ctx context.Context, w http.ResponseWriter, user stor
 	}
 	body += s.sideOOB(ctx, user, runRow.AgentID)
 	clearDwell(runRow.ID)
-	return writeSSE(w, seq, "done", body)
+	return fw.write("done", body)
 }
 
 func (s *Server) calmLive(ctx context.Context, user store.User, runRow store.Run, message, csrf string) liveView {
@@ -362,7 +442,7 @@ func (s *Server) calmLive(ctx context.Context, user store.User, runRow store.Run
 	}
 }
 
-func (s *Server) writeMarkdownProgress(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, ev store.RunEvent, csrf string) error {
+func (s *Server) writeMarkdownProgress(ctx context.Context, fw *frameWriter, user store.User, runRow store.Run, ev store.RunEvent, csrf string) error {
 	events, err := s.store.ListRunEvents(ctx, user.ID, runRow.ID, 0)
 	if err != nil {
 		return err
@@ -400,22 +480,52 @@ func (s *Server) writeMarkdownProgress(ctx context.Context, w http.ResponseWrite
 	} else {
 		inner = strings.ReplaceAll(inner, `<span class="caret" aria-hidden="true"></span>`, "")
 	}
-	if err := writeSSE(w, ev.Seq, "tail", inner); err != nil {
+	if err := fw.write("tail", inner); err != nil {
 		return err
 	}
 	for i := len(prev); i < len(closed); i++ {
-		if err := writeSSE(w, ev.Seq, "block", md.Render(closed[i].Raw)); err != nil {
+		if err := fw.write("block", md.Render(closed[i].Raw)); err != nil {
 			return err
 		}
 	}
-	if err := writeSSE(w, ev.Seq, "tools", tools); err != nil {
+	if err := fw.write("tools", tools); err != nil {
 		return err
 	}
 	slot := actSlotHTML(current.ID, actRowHTML(out, elapsed), out.HideThread)
-	if err := writeSSE(w, ev.Seq, "act", slot); err != nil {
+	if err := fw.write("act", slot); err != nil {
 		return err
 	}
 	return nil
+}
+
+// frameWriter gives each SSE frame of one store seq its own id.
+// Frame 0 keeps the plain integer so existing text cursors still parse.
+// Later frames use seq.part. A resume that saw only an earlier part
+// skips those frames and sends the rest, including a block that closed
+// in the same batch.
+type frameWriter struct {
+	w    io.Writer
+	seq  int
+	part int
+	from int
+	sent int
+}
+
+func (f *frameWriter) write(event, data string) error {
+	id := ""
+	if f.seq > 0 {
+		id = strconv.Itoa(f.seq)
+		if f.part > 0 {
+			id += "." + strconv.Itoa(f.part)
+		}
+	}
+	part := f.part
+	f.part++
+	if part <= f.from {
+		return nil
+	}
+	f.sent++
+	return writeSSE(f.w, id, event, data)
 }
 
 func batchTerminal(events []store.RunEvent) bool {
@@ -432,18 +542,18 @@ func (s *Server) writeLiveCards(ctx context.Context, w http.ResponseWriter, user
 	if err != nil || cards == "" || cards == *last {
 		return nil
 	}
-	if err := writeSSE(w, 0, "card", cards); err != nil {
+	if err := writeSSE(w, "", "card", cards); err != nil {
 		return err
 	}
 	*last = cards
 	return nil
 }
 
-func writeSSE(w http.ResponseWriter, id int, event, data string) error {
+func writeSSE(w io.Writer, id, event, data string) error {
 	var b strings.Builder
-	if id > 0 {
+	if id != "" && id != "0" {
 		b.WriteString("id: ")
-		b.WriteString(strconv.Itoa(id))
+		b.WriteString(id)
 		b.WriteByte('\n')
 	}
 	if event != "" {
