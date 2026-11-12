@@ -110,6 +110,20 @@ func TestShots(t *testing.T) {
 	t.Run("agentform-return-1280", func(t *testing.T) {
 		shootEditReturn(t, browserCtx, 1280, 800)
 	})
+	dir42 := filepath.Join("..", "..", "docs", "evidence", "issue42")
+	if err := os.MkdirAll(dir42, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, theme := range []string{"dark", "light"} {
+		for _, vp := range []struct {
+			w, h int
+			name string
+		}{{1280, 800, "1280"}, {390, 844, "390"}} {
+			t.Run("resume-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootPausedOpen(t, browserCtx, dir42, vp.w, vp.h, theme, vp.name)
+			})
+		}
+	}
 	dir06 := filepath.Join("..", "..", "docs", "evidence", "S06")
 	if err := os.MkdirAll(dir06, 0o755); err != nil {
 		t.Fatal(err)
@@ -808,10 +822,12 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 		t.Fatal(err)
 	}
 	label := modelLabel(model)
-	editWait(t, ctx, "edit form", `pageText().indexOf('Cancel')>=0 && pageText().indexOf('`+label+`')>=0 && (document.querySelector('select[name="model"]')||{}).value==='`+model+`'`)
-	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var sum=document.querySelector('.sum');var cancel=document.querySelector('.acts a.btn');if(window.innerWidth<700 && sum && cancel){cancel.scrollIntoView({block:'center'});}else{var m=document.querySelector('.main');if(m)m.scrollTop=0;window.scrollTo(0,0);}})()`), nil)); err != nil {
-		t.Fatal(err)
-	}
+	editWait(t, ctx, "edit form", `!!document.querySelector('a.sclose[href]') && pageText().indexOf('Cancel')<0 && pageText().indexOf('`+label+`')>=0 && (document.querySelector('select[name="model"]')||{}).value==='`+model+`'`)
+	waitVisibleClose(t, ctx)
+	frameEditForm(t, ctx)
+	assertEditClose(t, ctx)
+	assertModelLabelShown(t, ctx, label)
+	shotPage(t, ctx, filepath.Join(dir, "editform-"+theme+"-"+name+".png"))
 	shotPage(t, ctx, filepath.Join(dir, "edit-"+theme+"-"+name+".png"))
 	if err := chromedp.Run(ctx, chromedp.Click(`form.na button.pri`, chromedp.ByQuery)); err != nil && !containsNav(err) {
 		t.Fatal(err)

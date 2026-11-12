@@ -96,6 +96,12 @@ func shootS27(t *testing.T, browser context.Context, dir string, width, height i
 	if kind == "chat" && (!strings.Contains(html, `class="m-user c4"`) || strings.Count(html, `class="m-user c4"`) != 2) {
 		t.Fatal("chat bubbles")
 	}
+	if kind == "edit" {
+		frameEditForm(t, ctx)
+		waitVisibleClose(t, ctx)
+		assertEditClose(t, ctx)
+		assertModelLabelShown(t, ctx, modelLabel(model))
+	}
 	assertNoSideScroll(t, ctx)
 	assertShotClean(t, ctx)
 	var dashes string
