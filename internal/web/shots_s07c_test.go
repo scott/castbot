@@ -17,7 +17,6 @@ import (
 	"github.com/scott/castbot/internal/store"
 )
 
-
 func shootNoMachineComposer(t *testing.T, browser context.Context, dir string, width, height int, theme, name string) {
 	t.Helper()
 	h := newHarness(t)
