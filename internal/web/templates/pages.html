@@ -149,13 +149,18 @@
 {{end}}
 
 {{define "approvalCard"}}
-<div class="appr{{if .Approved}} done{{end}}{{if not .Pending}} settled{{end}}" id="appr-{{.ID}}"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>
+{{if .Fold}}<details class="appr appr-fold{{if .Approved}} done{{end}} settled" id="appr-{{.ID}}"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>
+<summary class="appr-sum"><span class="ico" aria-hidden="true">{{if .Approved}}{{template "checksvg" .}}{{else if eq .Fold "Denied"}}{{template "xsvg" .}}{{else}}<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>{{end}}</span><span class="st">{{.Fold}}</span><span class="tn">{{.Tool}}</span>{{if .When}}<span class="stamp">{{.When}}</span>{{end}}<svg class="i sm chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></summary>
+<div class="appr-more">{{template "approvalCardBody" .}}</div>
+</details>{{else}}<div class="appr{{if .Approved}} done{{end}}{{if not .Pending}} settled{{end}}" id="appr-{{.ID}}"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>{{template "approvalCardBody" .}}</div>{{end}}
+{{end}}
+
+{{define "approvalCardBody"}}
 <div class="appr-h"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg></span><h3>{{.Tool}}</h3>{{if .When}}<span class="stamp">{{.When}}</span>{{end}}</div>
 {{if .From}}<p class="stamp">{{.From}}</p>{{end}}
 {{if .Args}}<dl class="kv">{{range .Args}}<dt>{{.Key}}</dt><dd>{{if .Hidden}}<span class="faint">Hidden</span>{{else if .Long}}<details><summary>{{.Short}}</summary><pre class="cmd">{{.Value}}</pre></details>{{else}}<span class="mono">{{.Value}}</span>{{end}}</dd>{{end}}</dl>{{end}}
 {{if .Extra}}<p class="expline"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>{{.Extra}}</p>{{end}}
 {{if .Pending}}<div class="appr-f"><form method="post" action="{{if .ApproveURL}}{{.ApproveURL}}{{else}}/runs/{{.RunID}}/approvals/{{.ID}}/approve{{end}}" hx-post="{{if .ApproveURL}}{{.ApproveURL}}{{else}}/runs/{{.RunID}}/approvals/{{.ID}}/approve{{end}}" hx-target="#appr-{{.ID}}" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">Approve</button></form><form method="post" action="{{if .DenyURL}}{{.DenyURL}}{{else}}/runs/{{.RunID}}/approvals/{{.ID}}/deny{{end}}" hx-post="{{if .DenyURL}}{{.DenyURL}}{{else}}/runs/{{.RunID}}/approvals/{{.ID}}/deny{{end}}" hx-target="#appr-{{.ID}}" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn danger sm" type="submit">Deny</button></form></div>{{else if .Line}}<p class="stamp">{{.Line}}</p>{{end}}
-</div>
 {{end}}
 
 {{define "secretCard"}}
