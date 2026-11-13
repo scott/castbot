@@ -75,16 +75,20 @@ type liveView struct {
 	Failed, HideAct                                 bool
 	After                                           int
 	Cards                                           []cardView
+	SecretCards                                     []cardView
 	HTML, Blocks, Tail, Act, Tools, Side            template.HTML
 	CalmTitle, CalmLine, CalmRetry, CalmSecond      string
 	CalmWake                                        bool
 }
 
 type cardView struct {
-	ID, RunID, Tool, Line, CSRF, When, At string
-	Extra, From                           string
-	Args                                  []argView
-	Pending, ReadOnly, Approved           bool
+	ID, RunID, Tool, Line, CSRF, When, At      string
+	Extra, From, Reason                        string
+	SubmitURL, DeclineURL, ApproveURL, DenyURL string
+	FieldLabel, SubmitLabel                    string
+	Args                                       []argView
+	Pending, ReadOnly, Approved, Secret        bool
+	NeedsValue                                 bool
 }
 
 type chromeView struct {
@@ -169,6 +173,7 @@ type page struct {
 	Threads          []threadView
 	ThreadID         string
 	Cards            []cardView
+	SecretCards      []cardView
 	Text             string
 	RoleLine         string
 	PasswordOn       string

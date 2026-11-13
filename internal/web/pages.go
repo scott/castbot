@@ -162,6 +162,11 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 			}
 			p.Messages = weaveCards(p.Messages, cards, live)
 		}
+		if len(p.Lives) == 0 {
+			secrets := s.secretCardViews(r.Context(), user, agent.ID, from(r).CSRF)
+			connects := s.connectCardViews(r.Context(), user, agent.ID, from(r).CSRF)
+			p.Messages = weaveCards(p.Messages, append(connects, secrets...), map[string]bool{})
+		}
 	}
 	panelAsk := requestedPanel(r)
 	if wantsConfirm(r) {

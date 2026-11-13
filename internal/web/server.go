@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
@@ -114,6 +115,9 @@ type Server struct {
 	bootFor   time.Duration
 	greetMu   sync.Mutex
 	greetRuns map[string]struct{}
+
+	connectDial *connect.Dial
+	mcp         *connect.Pool
 }
 
 // pauseSweeps stops the background approval ticker. Tests call the follow-up
@@ -397,6 +401,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /agents/{id}/secrets", s.ownerSecrets)
 	mux.HandleFunc("POST /agents/{id}/secrets/grant", s.vaultGrant)
 	mux.HandleFunc("POST /agents/{id}/secrets/revoke", s.vaultRevoke)
+	mux.HandleFunc("POST /agents/{id}/secret-requests/{req}/submit", s.submitSecret)
+	mux.HandleFunc("POST /agents/{id}/secret-requests/{req}/decline", s.declineSecret)
+	mux.HandleFunc("POST /agents/{id}/connect-approvals/{approval}/approve", s.approveConnectCard)
+	mux.HandleFunc("POST /agents/{id}/connect-approvals/{approval}/deny", s.denyConnectCard)
+	mux.HandleFunc("POST /agents/{id}/connections/{connection}/revoke", s.revokeConnection)
+	mux.HandleFunc("GET /api/castlet/agents/{id}/egress", s.machineEgressStatus)
+	mux.HandleFunc("POST /api/castlet/agents/{id}/egress/http", s.machineEgressHTTP)
+	mux.HandleFunc("POST /api/castlet/agents/{id}/egress/git", s.machineEgressGit)
+	mux.HandleFunc("POST /api/castlet/agents/{id}/egress/mcp", s.machineEgressMCP)
+	mux.HandleFunc("POST /api/castlet/agents/{id}/egress/secret-request", s.machineSecretRequest)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/bootstrap", s.bootstrap)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/bundle", s.machineBundle)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/secrets", s.machineSecrets)

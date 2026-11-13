@@ -660,8 +660,10 @@ func (s *Server) presentApproval(row store.Approval, user store.User, csrf strin
 	loc := userLocation(user.Timezone)
 	view := cardView{
 		ID: row.ID, RunID: row.RunID, Tool: row.Tool, CSRF: csrf,
-		Args: approvalArgs(row.Arguments, row.Redacted),
-		When: clockLabel(row.CreatedAt, loc),
+		Args:       approvalArgs(row.Arguments, row.Redacted),
+		When:       clockLabel(row.CreatedAt, loc),
+		ApproveURL: "/runs/" + url.PathEscape(row.RunID) + "/approvals/" + url.PathEscape(row.ID) + "/approve",
+		DenyURL:    "/runs/" + url.PathEscape(row.RunID) + "/approvals/" + url.PathEscape(row.ID) + "/deny",
 	}
 	if view.Tool == "" {
 		view.Tool = "Approval"
@@ -783,10 +785,15 @@ func (s *Server) cardsHTML(ctx context.Context, user store.User, runID, csrf str
 	if err != nil {
 		return "", err
 	}
-	if len(cards) == 0 {
+	var secrets []cardView
+	if runRow, err := s.store.GetRun(ctx, user.ID, runID); err == nil {
+		secrets = s.secretCardViews(ctx, user, runRow.AgentID, csrf)
+		cards = append(cards, s.connectCardViews(ctx, user, runRow.AgentID, csrf)...)
+	}
+	if len(cards) == 0 && len(secrets) == 0 {
 		return "", nil
 	}
-	body, err := execTemplate("approvalCards", page{Cards: cards})
+	body, err := execTemplate("liveCards", page{Cards: cards, SecretCards: secrets})
 	if err != nil {
 		return "", err
 	}

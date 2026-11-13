@@ -312,6 +312,24 @@ func TestShots(t *testing.T) {
 			shootPanelToggle(t, browserCtx, dir19, vp.w, vp.h, vp.name)
 		})
 	}
+	dirT2 := filepath.Join("..", "..", "docs", "evidence", "T2")
+	if err := os.MkdirAll(dirT2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, theme := range []string{"light", "dark"} {
+		for _, vp := range []struct {
+			w, h int
+			name string
+		}{{1280, 800, "1280"}, {390, 844, "390"}} {
+			theme, vp := theme, vp
+			t.Run("t2-conn-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootT2Connections(t, browserCtx, dirT2, vp.w, vp.h, theme, vp.name)
+			})
+			t.Run("t2-secret-"+theme+"-"+vp.name, func(t *testing.T) {
+				shootT2Secret(t, browserCtx, dirT2, vp.w, vp.h, theme, vp.name)
+			})
+		}
+	}
 }
 
 // shootDecisionBar clicks Approve on a live card and checks the waiting bar

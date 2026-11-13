@@ -4,6 +4,8 @@ Each person has a vault. A secret is an environment variable for the agents they
 
 The guest receives a granted secret, and the model key for that agent's model, only when it starts or reloads. The value stays in memory and in the runtime environment. It is not written into the bundle, the page, the audit log, or a screenshot.
 
+A connection token is not one of these grants. GitHub and DigitalOcean tokens stay in the vault and are used only by the host proxy. See [connections.md](connections.md).
+
 Replacing, granting, revoking, or deleting reloads each running agent that has the secret. A paused agent is not woken. An agent that is replying, or waiting on an approval, reloads after that finishes. If a reload fails, the new value stays saved and that agent keeps the previous value until a retry works.
 
 `CASTBOT_PROVIDER_KEY_*` is still the fallback when the vault has no row for that provider. The newest vault row wins. A deploy that already sets the process environment keeps working until someone saves a key in Settings.

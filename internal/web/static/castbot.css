@@ -385,6 +385,13 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 .na { display: grid; grid-template-columns: minmax(0,1fr) 340px; gap: 28px; padding: 0 32px 40px; align-items: start; }
 .na-form { display: grid; gap: 18px; min-width: 0; }
 .na-form .err { color: var(--err); font-size: 12.5px; }
+.conn { display: grid; gap: 8px; min-width: 0; }
+.conn label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.secret-in { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
+.appr.secret { grid-template-columns: minmax(0, 1fr); align-items: start; }
+.appr.secret .field { min-width: 0; }
+.appr.secret p { margin: 0; }
+.appr.secret form { min-width: 0; }
 .toolrow { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 8px; align-items: center; min-width: 0; }
 .toolrow label { display: flex; align-items: center; gap: 8px; min-height: 44px; min-width: 0; }
 .toolrow .selwrap { min-width: 0; }

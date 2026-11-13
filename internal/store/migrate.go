@@ -475,6 +475,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV21(); err != nil {
 		return err
 	}
+	// Version 22 is connections: vault kind, proxy grants, secret cards.
+	if err := s.migrateV22(); err != nil {
+		return err
+	}
 	return nil
 }
 

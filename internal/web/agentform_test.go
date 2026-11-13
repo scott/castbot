@@ -558,7 +558,7 @@ func TestTamperedPostCannotAddAModelOrTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(bundle.YAML, "not_a_tool") || strings.Contains(bundle.YAML, "not/in/manifest") || strings.Contains(bundle.YAML, "always-allow") || !strings.Contains(bundle.YAML, "bash: ask") || !strings.Contains(bundle.YAML, model) {
+	if strings.Contains(bundle.YAML, "not_a_tool") || strings.Contains(bundle.YAML, "not/in/manifest") || strings.Contains(bundle.YAML, "bash: always-allow") || !strings.Contains(bundle.YAML, "bash: ask") || !strings.Contains(bundle.YAML, model) {
 		t.Fatalf("tampered yaml\n%s", bundle.YAML)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -22,6 +23,8 @@ type AgentBundle struct {
 	YAML         string
 	Instructions string
 	CreatedAt    string
+	// Extras are mcp shim files. They hold commands only, never a token.
+	Extras map[string]string
 }
 
 // SecretFixture is one secret granted to an agent.
@@ -43,24 +46,57 @@ func (s *Store) PutBundle(ctx context.Context, userID, agentID, version, yaml, i
 	if err != nil {
 		return AgentBundle{}, err
 	}
-	raw, sum, err := bundle.Archive(yaml, instructions)
+	return s.putBundle(ctx, agent, version, yaml, instructions, nil)
+}
+
+// PutBundleFiles saves a bundle and its mcp shim files.
+// The sha256 covers those files. Shim files must not contain a token.
+func (s *Store) PutBundleFiles(ctx context.Context, userID, agentID, version, yaml, instructions string, extras map[string]string) (AgentBundle, error) {
+	version = strings.TrimSpace(version)
+	if version == "" || len(version) > 64 {
+		return AgentBundle{}, ErrInvalid
+	}
+	agent, err := s.GetAgent(ctx, userID, agentID)
+	if err != nil {
+		return AgentBundle{}, err
+	}
+	return s.putBundle(ctx, agent, version, yaml, instructions, extras)
+}
+
+func (s *Store) putBundle(ctx context.Context, agent Agent, version, yaml, instructions string, extras map[string]string) (AgentBundle, error) {
+	var raw []byte
+	var sum string
+	var err error
+	if len(extras) == 0 {
+		raw, sum, err = bundle.Archive(yaml, instructions)
+	} else {
+		raw, sum, err = bundle.ArchiveFiles(yaml, instructions, extras)
+	}
 	if err != nil {
 		return AgentBundle{}, ErrInvalid
 	}
 	_ = raw
+	extraJSON := ""
+	if len(extras) > 0 {
+		buf, err := json.Marshal(extras)
+		if err != nil {
+			return AgentBundle{}, err
+		}
+		extraJSON = string(buf)
+	}
 	stamp := s.stamp(s.Now())
-	_, err = s.db.ExecContext(ctx, `INSERT INTO agent_bundles(agent_id, version, workspace_id, user_id, sha256, agent_yaml, instructions_md, created_by, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(agent_id, version) DO UPDATE SET sha256 = excluded.sha256, agent_yaml = excluded.agent_yaml, instructions_md = excluded.instructions_md, created_at = excluded.created_at
+	_, err = s.db.ExecContext(ctx, `INSERT INTO agent_bundles(agent_id, version, workspace_id, user_id, sha256, agent_yaml, instructions_md, created_by, created_at, extras_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(agent_id, version) DO UPDATE SET sha256 = excluded.sha256, agent_yaml = excluded.agent_yaml, instructions_md = excluded.instructions_md, created_at = excluded.created_at, extras_json = excluded.extras_json
 WHERE agent_bundles.user_id = excluded.user_id`,
-		agentID, version, agent.WorkspaceID, userID, sum, yaml, instructions, userID, stamp)
+		agent.ID, version, agent.WorkspaceID, agent.UserID, sum, yaml, instructions, agent.UserID, stamp, extraJSON)
 	if err != nil {
 		return AgentBundle{}, err
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE agents SET bundle_version = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, version, agentID, userID); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE agents SET bundle_version = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, version, agent.ID, agent.UserID); err != nil {
 		return AgentBundle{}, err
 	}
-	return s.LatestBundle(ctx, userID, agentID)
+	return s.LatestBundle(ctx, agent.UserID, agent.ID)
 }
 
 // SetPendingBundle records a bundle version that still has to be reloaded
@@ -185,11 +221,17 @@ func (s *Store) LatestBundle(ctx context.Context, userID, agentID string) (Agent
 		return AgentBundle{}, err
 	}
 	var b AgentBundle
-	err := s.db.QueryRowContext(ctx, `SELECT agent_id, version, workspace_id, user_id, sha256, agent_yaml, instructions_md, created_at
+	var extras string
+	err := s.db.QueryRowContext(ctx, `SELECT agent_id, version, workspace_id, user_id, sha256, agent_yaml, instructions_md, created_at, extras_json
 FROM agent_bundles WHERE user_id = ? AND agent_id = ? ORDER BY created_at DESC, version DESC LIMIT 1`, userID, agentID).
-		Scan(&b.AgentID, &b.Version, &b.WorkspaceID, &b.UserID, &b.SHA256, &b.YAML, &b.Instructions, &b.CreatedAt)
+		Scan(&b.AgentID, &b.Version, &b.WorkspaceID, &b.UserID, &b.SHA256, &b.YAML, &b.Instructions, &b.CreatedAt, &extras)
 	if err != nil {
 		return AgentBundle{}, scanErr(err)
+	}
+	if strings.TrimSpace(extras) != "" {
+		if err := json.Unmarshal([]byte(extras), &b.Extras); err != nil {
+			return AgentBundle{}, err
+		}
 	}
 	return b, nil
 }

@@ -2,8 +2,10 @@ package castcfg
 
 import (
 	"errors"
+	"sort"
 	"strings"
 
+	"github.com/scott/castbot/internal/connect"
 	"gopkg.in/yaml.v3"
 )
 
@@ -82,7 +84,7 @@ func ParseYAML(text string) (Spec, error) {
 			if perms := mapChild(harness, "permissions"); perms != nil {
 				for i := 0; i+1 < len(perms.Content); i += 2 {
 					key := strings.TrimSpace(perms.Content[i].Value)
-					if key == "" || key == "mcp" || key == "*" {
+					if key == "" || strings.ContainsAny(key, "\r\n") {
 						continue
 					}
 					val := strings.TrimSpace(perms.Content[i+1].Value)
@@ -155,7 +157,9 @@ func RenderYAML(spec Spec) ([]byte, error) {
 	tools := ensureChild(root, "tools")
 	setSeq(tools, "builtin", spec.Tools)
 	var perms permList
+	seen := map[string]bool{}
 	for _, tool := range Tools() {
+		seen[tool.Name] = true
 		level, ok := spec.Permissions[tool.Name]
 		if !ok {
 			continue
@@ -165,6 +169,21 @@ func RenderYAML(spec Spec) ([]byte, error) {
 			continue
 		}
 		perms = append(perms, permItem{Name: tool.Name, Level: norm})
+	}
+	var extra []string
+	for name := range spec.Permissions {
+		if seen[name] || name == "" || strings.ContainsAny(name, "\r\n ") {
+			continue
+		}
+		extra = append(extra, name)
+	}
+	sort.Strings(extra)
+	for _, name := range extra {
+		norm, good := NormalizeLevel(spec.Permissions[name])
+		if !good {
+			continue
+		}
+		perms = append(perms, permItem{Name: name, Level: norm})
 	}
 	if len(perms) == 0 {
 		if harness := mapChild(root, "harness"); harness != nil {
@@ -196,7 +215,120 @@ func Agree(form, parsed Spec) bool {
 			return false
 		}
 	}
-	return len(form.Permissions) == len(parsed.Permissions)
+	if len(form.Permissions) != len(parsed.Permissions) {
+		return false
+	}
+	for name, level := range form.Permissions {
+		if parsed.Permissions[name] != level {
+			return false
+		}
+	}
+	return true
+}
+
+// SetMCPServers writes tools.mcp into Kept. Unknown servers stay.
+// GitHub, DigitalOcean, and request_secret are names only. Their commands
+// live in mcp/<name>.yaml, which has no token and no environment.
+func SetMCPServers(spec *Spec, enabled []string) error {
+	var doc yaml.Node
+	if len(strings.TrimSpace(string(spec.Kept))) > 0 {
+		if err := yaml.Unmarshal(spec.Kept, &doc); err != nil {
+			return err
+		}
+		if err := rejectAliases(&doc); err != nil {
+			return err
+		}
+		if err := rejectDuplicates(&doc, ""); err != nil {
+			return err
+		}
+	}
+	root := ensureMapping(&doc)
+	tools := ensureChild(root, "tools")
+	setKey(tools, "mcp", mcpListNode(mapGet(tools, "mcp"), enabled))
+	raw, err := yaml.Marshal(&doc)
+	if err != nil {
+		return err
+	}
+	if len(raw) > maxKept {
+		return ErrTooLarge
+	}
+	spec.Kept = raw
+	return nil
+}
+
+func mcpListNode(old *yaml.Node, enabled []string) *yaml.Node {
+	var existing []string
+	nodes := map[string]*yaml.Node{}
+	if old != nil {
+		switch old.Kind {
+		case yaml.SequenceNode:
+			for _, item := range old.Content {
+				name := mcpItemName(item)
+				if name == "" {
+					continue
+				}
+				existing = append(existing, name)
+				nodes[name] = item
+			}
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(old.Content); i += 2 {
+				name := strings.TrimSpace(old.Content[i].Value)
+				if name == "" {
+					continue
+				}
+				existing = append(existing, name)
+				nodes[name] = old.Content[i+1]
+			}
+		}
+	}
+	names := connect.ServerNames(existing, enabled)
+	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	ours := map[string]bool{connect.RequestTool: true, connect.GitHub: true, connect.DigitalOcean: true}
+	for _, name := range names {
+		if node, ok := nodes[name]; ok && !ours[name] {
+			seq.Content = append(seq.Content, mcpKeep(name, node))
+			continue
+		}
+		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name})
+	}
+	return seq
+}
+
+func mcpItemName(n *yaml.Node) string {
+	if n == nil {
+		return ""
+	}
+	if n.Kind == yaml.ScalarNode {
+		return strings.TrimSpace(n.Value)
+	}
+	if n.Kind == yaml.MappingNode {
+		if name := mapScalar(n, "name"); name != "" {
+			return name
+		}
+		return mapScalar(n, "server")
+	}
+	return ""
+}
+
+func mcpKeep(name string, node *yaml.Node) *yaml.Node {
+	if node == nil {
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}
+	}
+	if node.Kind == yaml.ScalarNode {
+		return node
+	}
+	if node.Kind == yaml.MappingNode && mapScalar(node, "name") != "" {
+		return node
+	}
+	item := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	item.Content = append(item.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "name"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name},
+	)
+	if node.Kind == yaml.MappingNode {
+		item.Content = append(item.Content, node.Content...)
+	}
+	return item
 }
 
 // SummarizeKept lists the skills, runtime, and MCP commands a save will keep.
@@ -802,7 +934,7 @@ func scrubNode(n *yaml.Node, path string, removed *[]string) {
 			if path != "" {
 				child = path + "." + keyNode.Value
 			}
-			if secretKey(keyNode.Value) {
+			if secretKey(keyNode.Value) && !permissionLevel(path, val) {
 				kept, ok := scrubSecret(val, child, removed)
 				if ok {
 					next = append(next, keyNode, kept)
@@ -814,6 +946,14 @@ func scrubNode(n *yaml.Node, path string, removed *[]string) {
 		}
 		n.Content = next
 	}
+}
+
+func permissionLevel(path string, val *yaml.Node) bool {
+	if path != "harness.permissions" || val == nil || val.Kind != yaml.ScalarNode {
+		return false
+	}
+	_, ok := NormalizeLevel(val.Value)
+	return ok
 }
 
 func scrubSecret(val *yaml.Node, path string, removed *[]string) (*yaml.Node, bool) {

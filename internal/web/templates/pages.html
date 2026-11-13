@@ -135,10 +135,11 @@
 {{end}}
 
 {{define "messages"}}
-{{range .Messages}}{{if not .Hide}}{{if .ShowDay}}<div class="day">{{.Day}}</div>{{end}}{{if .Sys}}<div class="sysline" id="m-{{.ID}}">{{.Body}}</div>{{else if .Marker}}<a class="rmark" href="{{.Href}}"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span><span class="grow"><span class="t1">{{.Body}}</span><span class="t2">{{.Sub}}</span></span><span class="rst {{.PillClass}}">{{.Pill}}</span><span class="open">Open thread</span></a>{{else if .HasCard}}{{template "approvalCard" .Card}}{{else if .Prompt}}<div class="rprompt" id="m-{{.ID}}"><span class="lab"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Routine prompt, sent by castbot</span>{{.Body}}</div>{{else if eq .Author "system"}}<div class="m-note" id="m-{{.ID}}">{{.Body}}</div>{{else if eq .Author "user"}}<div class="m-user{{if .Color}} {{.Color}}{{end}}{{if .Waiting}} waiting{{end}}" id="m-{{.ID}}">{{range .Chips}}<span class="fchip"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg><span class="fn">{{.Name}}</span></span>{{end}}{{if .HTML}}{{.HTML}}{{else}}{{.Text}}{{end}}</div>{{if .Wait}}<div class="wait" id="wait-{{.ID}}">{{.Wait}}</div>{{end}}{{range .PathLines}}<div class="pathline"><span>{{.}}</span></div>{{end}}{{else}}<div class="m-agent" id="m-{{.ID}}"><span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span><div class="body">{{if .HTML}}<div class="md">{{.HTML}}</div>{{else}}<p{{if .Pre}} class="pre"{{end}}>{{.Body}}</p>{{end}}{{if .File}}<div class="facts"><a class="fout" href="{{.File.Open}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg><span class="grow"><span class="t1">{{.File.Name}}</span><span class="t2">{{.File.Meta}}</span></span></a><a class="ibtn line fdl" href="{{.File.Download}}" aria-label="Download {{.File.Name}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg></a></div>{{end}}{{if .Stamp}}<div class="msg-acts"><span class="stamp">{{.Stamp}}</span><button class="ibtn" type="button" aria-label="Copy message as markdown" data-md="{{.Copy}}"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5H4v11h4"/></svg></button></div>{{end}}</div></div>{{end}}{{end}}{{end}}
+{{range .Messages}}{{if not .Hide}}{{if .ShowDay}}<div class="day">{{.Day}}</div>{{end}}{{if .Sys}}<div class="sysline" id="m-{{.ID}}">{{.Body}}</div>{{else if .Marker}}<a class="rmark" href="{{.Href}}"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span><span class="grow"><span class="t1">{{.Body}}</span><span class="t2">{{.Sub}}</span></span><span class="rst {{.PillClass}}">{{.Pill}}</span><span class="open">Open thread</span></a>{{else if .HasCard}}{{if .Card.Secret}}{{template "secretCard" .Card}}{{else}}{{template "approvalCard" .Card}}{{end}}{{else if .Prompt}}<div class="rprompt" id="m-{{.ID}}"><span class="lab"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Routine prompt, sent by castbot</span>{{.Body}}</div>{{else if eq .Author "system"}}<div class="m-note" id="m-{{.ID}}">{{.Body}}</div>{{else if eq .Author "user"}}<div class="m-user{{if .Color}} {{.Color}}{{end}}{{if .Waiting}} waiting{{end}}" id="m-{{.ID}}">{{range .Chips}}<span class="fchip"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg><span class="fn">{{.Name}}</span></span>{{end}}{{if .HTML}}{{.HTML}}{{else}}{{.Text}}{{end}}</div>{{if .Wait}}<div class="wait" id="wait-{{.ID}}">{{.Wait}}</div>{{end}}{{range .PathLines}}<div class="pathline"><span>{{.}}</span></div>{{end}}{{else}}<div class="m-agent" id="m-{{.ID}}"><span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span><div class="body">{{if .HTML}}<div class="md">{{.HTML}}</div>{{else}}<p{{if .Pre}} class="pre"{{end}}>{{.Body}}</p>{{end}}{{if .File}}<div class="facts"><a class="fout" href="{{.File.Open}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg><span class="grow"><span class="t1">{{.File.Name}}</span><span class="t2">{{.File.Meta}}</span></span></a><a class="ibtn line fdl" href="{{.File.Download}}" aria-label="Download {{.File.Name}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg></a></div>{{end}}{{if .Stamp}}<div class="msg-acts"><span class="stamp">{{.Stamp}}</span><button class="ibtn" type="button" aria-label="Copy message as markdown" data-md="{{.Copy}}"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5H4v11h4"/></svg></button></div>{{end}}</div></div>{{end}}{{end}}{{end}}
 {{end}}
 
 {{define "approvalCards"}}{{range .Cards}}{{template "approvalCard" .}}{{end}}{{end}}
+{{define "liveCards"}}{{range .Cards}}{{template "approvalCard" .}}{{end}}{{range .SecretCards}}{{template "secretCard" .}}{{end}}{{end}}
 
 {{define "approvalChrome"}}
 <div id="pending-bar" class="pending-bar" hx-swap-oob="outerHTML"{{if eq .AgentApprovals 0}} hidden{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span class="grow">{{if eq .AgentApprovals 1}}1 approval waiting{{else if gt .AgentApprovals 1}}{{.AgentApprovals}} approvals waiting{{end}}</span><a class="btn sm" href="/agents/{{.AgentID}}?panel=approvals" data-open-panel>Review</a></div>
@@ -153,17 +154,26 @@
 {{if .From}}<p class="stamp">{{.From}}</p>{{end}}
 {{if .Args}}<dl class="kv">{{range .Args}}<dt>{{.Key}}</dt><dd>{{if .Hidden}}<span class="faint">Hidden</span>{{else if .Long}}<details><summary>{{.Short}}</summary><pre class="cmd">{{.Value}}</pre></details>{{else}}<span class="mono">{{.Value}}</span>{{end}}</dd>{{end}}</dl>{{end}}
 {{if .Extra}}<p class="expline"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>{{.Extra}}</p>{{end}}
-{{if .Pending}}<div class="appr-f"><form method="post" action="/runs/{{.RunID}}/approvals/{{.ID}}/approve" hx-post="/runs/{{.RunID}}/approvals/{{.ID}}/approve" hx-target="#appr-{{.ID}}" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">Approve</button></form><form method="post" action="/runs/{{.RunID}}/approvals/{{.ID}}/deny" hx-post="/runs/{{.RunID}}/approvals/{{.ID}}/deny" hx-target="#appr-{{.ID}}" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn danger sm" type="submit">Deny</button></form></div>{{else if .Line}}<p class="stamp">{{.Line}}</p>{{end}}
+{{if .Pending}}<div class="appr-f"><form method="post" action="{{if .ApproveURL}}{{.ApproveURL}}{{else}}/runs/{{.RunID}}/approvals/{{.ID}}/approve{{end}}" hx-post="{{if .ApproveURL}}{{.ApproveURL}}{{else}}/runs/{{.RunID}}/approvals/{{.ID}}/approve{{end}}" hx-target="#appr-{{.ID}}" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit">Approve</button></form><form method="post" action="{{if .DenyURL}}{{.DenyURL}}{{else}}/runs/{{.RunID}}/approvals/{{.ID}}/deny{{end}}" hx-post="{{if .DenyURL}}{{.DenyURL}}{{else}}/runs/{{.RunID}}/approvals/{{.ID}}/deny{{end}}" hx-target="#appr-{{.ID}}" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn danger sm" type="submit">Deny</button></form></div>{{else if .Line}}<p class="stamp">{{.Line}}</p>{{end}}
 </div>
 {{end}}
 
-{{define "doneTurn"}}{{template "approvalCards" .}}{{template "messages" .}}{{end}}
+{{define "secretCard"}}
+<div class="appr secret" id="secret-{{.ID}}">
+<div class="appr-h"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3"/><rect x="5" y="10" width="14" height="10" rx="2"/></svg></span><h3>{{.Tool}}</h3>{{if .When}}<span class="stamp">{{.When}}</span>{{end}}</div>
+{{if .Reason}}<p>{{.Reason}}</p>{{end}}
+{{if .Extra}}<p class="fineprint">{{.Extra}}</p>{{end}}
+{{if .Pending}}<form method="post" action="{{.SubmitURL}}" hx-post="{{.SubmitURL}}" hx-target="#secret-{{.ID}}" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><div class="field"><span class="lab">{{.FieldLabel}}{{if not .NeedsValue}} <span class="opt">optional</span>{{end}}</span><div class="inp"><input class="secret-in" type="password" name="value" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="{{.FieldLabel}}"></div></div>{{if .Line}}<p class="err">{{.Line}}</p>{{end}}<div class="appr-f"><button class="btn pri sm" type="submit">{{.SubmitLabel}}</button></div></form><form method="post" action="{{.DeclineURL}}" hx-post="{{.DeclineURL}}" hx-target="#secret-{{.ID}}" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Decline</button></form>{{else if .Line}}<p class="stamp">{{.Line}}</p>{{end}}
+</div>
+{{end}}
+
+{{define "doneTurn"}}{{template "liveCards" .}}{{template "messages" .}}{{end}}
 
 {{define "pending"}}
 <div class="m-agent pending" id="run-{{.RunID}}" hx-ext="sse" sse-connect="/runs/{{.RunID}}/events{{if gt .After 0}}?after={{.After}}{{end}}" sse-swap="done" hx-swap="outerHTML" sse-close="stop">
 <span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span>
 <div class="body">
-<div class="cards" sse-swap="card" hx-swap="innerHTML">{{template "approvalCards" .}}</div>
+<div class="cards" sse-swap="card" hx-swap="innerHTML">{{template "liveCards" .}}</div>
 <p class="stream" sse-swap="text" hx-swap="beforeend" hidden></p>
 <div class="tools" sse-swap="tools" hx-swap="innerHTML">{{.Tools}}</div>
 <div class="md" id="md-{{.RunID}}" aria-busy="true" sse-swap="block" hx-swap="beforeend">{{.Blocks}}</div>
@@ -288,6 +298,7 @@
 {{if .AgentForm.Advanced}}<input type="hidden" name="confirm" value="advanced"><input type="hidden" name="size" value="{{if .AgentForm.Size}}{{.AgentForm.Size}}{{else}}1:2048{{end}}"><input type="hidden" name="idle" value="{{if .AgentForm.Idle}}{{.AgentForm.Idle}}{{else}}900{{end}}">{{end}}
 <input type="hidden" name="version" value="{{.AgentForm.Version}}">
 <input type="hidden" name="draft" value="{{.AgentForm.DraftID}}">
+<input type="hidden" name="scopes" value="{{.AgentForm.Scopes}}">
 <div class="na-form">
 {{if .AgentForm.Prefill}}<section class="card prefill"><div class="card-h"><h3>From your chat</h3></div><div class="field"><span class="lab">Job</span><textarea class="ta sm" name="job" maxlength="160" aria-label="Job">{{.AgentForm.Job}}</textarea></div><p class="help">Saved as instructions.md. Do not put keys here; add them in Secrets below.</p>{{if .AgentForm.KeyLine}}<p class="fineprint">{{.AgentForm.KeyLine}}</p>{{end}}</section>{{end}}
 {{if .AgentForm.Notice}}<div class="banner ok" role="status"><span class="grow">{{.AgentForm.Notice}}</span></div>{{end}}
@@ -325,6 +336,16 @@
 {{if .AgentForm.ToolErr}}<p class="err">{{.AgentForm.ToolErr}}</p>{{end}}
 {{range .AgentForm.Tools}}<div class="toolrow"><label><input type="checkbox" name="tool" value="{{.Name}}"{{if .On}} checked{{end}}> {{.Name}}</label><div class="selwrap"><select class="sel" name="perm_{{.Name}}" aria-label="{{.Name}} permission"><option value="ask"{{if eq .Level "ask"}} selected{{end}}>Ask</option><option value="always-allow"{{if eq .Level "always-allow"}} selected{{end}}>Always allow</option><option value="deny"{{if eq .Level "deny"}} selected{{end}}>Deny</option></select></div></div>{{end}}
 </section>
+{{if .AgentForm.Editing}}<section class="card" id="connections">
+<div class="card-h"><span class="num">5</span><h3>Connections</h3></div>
+<p class="fineprint">GitHub and DigitalOcean only. The token stays in your vault. The agent asks for it in chat and never sees the value.</p>
+{{range .AgentForm.Connections}}<div class="conn">
+<label><input type="checkbox" name="connection" value="{{.ID}}"{{if .On}} checked{{end}}> {{.Title}}</label>
+<p class="fineprint">{{.Detail}}</p>
+{{if .HasSecret}}<p class="fineprint">A token is saved. Leave the field blank to keep it.</p>{{end}}
+<div class="field"><span class="lab">{{.TokenLabel}}</span><div class="inp"><input class="secret-in" type="password" name="token_{{.ID}}" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="{{.TokenLabel}}"></div></div>
+</div>{{end}}
+</section>{{end}}
 <div class="acts"><button class="btn pri" type="submit">{{.AgentForm.Submit}}</button></div>
 {{if .AgentForm.Advanced}}<p class="fineprint">The machine starts as soon as you create. You land in {{if .AgentForm.Name}}{{.AgentForm.Name}}{{else}}the agent{{end}}'s chat.</p>{{end}}
 {{if .AgentForm.KeyLine}}<p class="fineprint">{{.AgentForm.KeyLine}}</p><p class="help">Secrets you add here are saved in your vault (Settings, Secrets) and given to this agent. Changing one later reloads the agent, no new machine.</p>{{end}}
