@@ -124,13 +124,13 @@ func assertNoSecrets(t *testing.T, line string) {
 }
 
 func durationMS(line string) int {
-	const key = "duration_ms="
-	i := strings.Index(line, key)
+	const marker = "duration_ms="
+	i := strings.Index(line, marker)
 	if i < 0 {
 		return -1
 	}
 	n := 0
-	for _, c := range line[i+len(key):] {
+	for _, c := range line[i+len(marker):] {
 		if c < '0' || c > '9' {
 			break
 		}
