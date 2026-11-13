@@ -443,7 +443,7 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
-	return s.wrap(mux)
+	return s.logRequests(s.wrap(mux))
 }
 
 func postLimit(path string) int64 {
