@@ -5,9 +5,11 @@
 <meta name="csrf-token" content="{{.CSRF}}">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false}'>
 <title>{{if gt .Approvals 0}}({{.Approvals}}) {{end}}{{.Title}} · castbot</title>
-<link rel="stylesheet" href="/static/castbot.css">
-<link rel="stylesheet" href="/static/create.css">
-<script src="/static/app.js"></script>
+<link rel="preload" href="{{static "fonts/hanken-grotesk.woff2"}}" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{{static "fonts/bricolage-grotesque.woff2"}}" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{static "castbot.css"}}">
+<link rel="stylesheet" href="{{static "create.css"}}">
+<script src="{{static "app.js"}}"></script>
 </head>
 {{end}}
 
@@ -48,7 +50,7 @@
 {{define "docClose"}}
 <p class="auth-foot">castbot is invite only for now. Ask the person who runs your castbot for an invite.</p>
 </main></div>
-<script src="/static/htmx.min.js"></script>
+<script src="{{static "htmx.min.js"}}"></script>
 </body>
 </html>
 {{end}}
@@ -465,12 +467,12 @@
 {{if .Routines.Delete.On}}{{template "routineDelete" .}}{{end}}
 <div id="copy-status" class="visually-hidden" role="status" aria-live="polite"></div>
 <template id="act-reconnect"><div class="act" role="status" aria-live="polite"><span class="actico slow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="lbl">Reconnecting</span></div></template>
-<script src="/static/htmx.min.js"></script>
-<script src="/static/sse.js"></script>
-<script src="/static/stream.js"></script>
-<script src="/static/secrets.js"></script>
-<script src="/static/files.js"></script>
-<script src="/static/create.js"></script>
+<script src="{{static "htmx.min.js"}}"></script>
+<script src="{{static "sse.js"}}"></script>
+<script src="{{static "stream.js"}}"></script>
+<script src="{{static "secrets.js"}}"></script>
+<script src="{{static "files.js"}}"></script>
+<script src="{{static "create.js"}}"></script>
 </body>
 </html>
 {{end}}
