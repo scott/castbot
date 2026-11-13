@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/store"
@@ -33,6 +34,7 @@ func shootS20(t *testing.T, browser context.Context, dir string, width, height i
 		t.Fatal(err)
 	}
 	s20Drive(t, ctx, kind, release, fake)
+	s20Composer(t, ctx)
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var el=document.querySelector('.setup, .boot, .nhero, .card.prefill, .keyout');if(el)el.scrollIntoView({block:'start'});})()`), nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +191,94 @@ func s20ArriveStarting(t *testing.T, ctx context.Context, text string, withWait 
 
 func s20Send(t *testing.T, ctx context.Context, text, needle string) {
 	t.Helper()
-	s20Click(t, ctx, s20Fill("#composer textarea", text)+`var btn=document.getElementById('send-btn');if(btn){btn.disabled=false;btn.click();}`, needle)
+	script := s20Fill("#composer textarea", text) + `
+var ta=document.querySelector('#composer textarea');
+if(ta) ta.style.height='120px';
+window.__createKept=false;
+document.body.addEventListener('htmx:beforeRequest',function(ev){
+  var box=document.querySelector('#composer textarea');
+  if(ev.detail&&ev.detail.elt&&ev.detail.elt.id==='composer'&&box) window.__createKept=box.value.length>0&&box.style.height==='120px';
+},{once:true});
+var btn=document.getElementById('send-btn');if(btn){btn.disabled=false;btn.click();}`
+	cleared := `(function(){var ta=document.querySelector('#composer textarea');return !!ta && ta.value==='' && ta.style.height==='';})()`
+	s20Click(t, ctx, script, needle+` && window.__createKept && `+cleared)
+}
+
+func shootCreateKeep(t *testing.T, browser context.Context) {
+	t.Helper()
+	h, _, _ := s20Lab(t, "dark", "keep")
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	ctx := tab(t, browser)
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, s20User), ts.URL+"/new-agent", 1280, 800)...); err != nil {
+		t.Fatal(err)
+	}
+	s20Wait(t, ctx, `!!document.querySelector('[data-create-compose] textarea')`)
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := network.Enable().Do(ctx); err != nil {
+			return err
+		}
+		return network.SetBlockedURLS([]string{"*new-agent/describe*"}).Do(ctx)
+	})); err != nil {
+		t.Fatal(err)
+	}
+	s20Click(t, ctx, `
+var form=document.getElementById('composer');
+var ta=form.querySelector('textarea');
+ta.value='Keep this if the send fails';
+ta.dispatchEvent(new Event('input',{bubbles:true}));
+ta.style.height='120px';
+window.__createDone=false;
+window.__createOK=null;
+document.body.addEventListener('htmx:afterRequest',function(ev){
+  if(!(ev.detail&&ev.detail.elt&&ev.detail.elt.id==='composer')) return;
+  window.__createDone=true;
+  window.__createOK=!!ev.detail.successful;
+},{once:true});
+var btn=document.getElementById('send-btn');
+if(btn){btn.disabled=false;btn.click();}
+`, `window.__createDone===true && window.__createOK===false && (function(){var ta=document.querySelector('#composer textarea');return !!ta && ta.value==='Keep this if the send fails' && ta.style.height==='120px' && !document.querySelector('.setup');})()`)
+}
+
+func s20Composer(t *testing.T, ctx context.Context) {
+	t.Helper()
+	var bad string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){
+		var form=document.querySelector('[data-create-compose]');
+		if(!form || location.pathname!=='/new-agent') return '';
+		var main=document.querySelector('main.main');
+		var wrap=form.closest('.comp-wrap');
+		if(!main || !wrap) return 'missing wrap';
+		var fr=form.getBoundingClientRect();
+		var mr=main.getBoundingClientRect();
+		var wr=wrap.getBoundingClientRect();
+		var center=Math.abs((fr.left+fr.right)/2 - (mr.left+mr.right)/2);
+		var wide=mr.width>800;
+		var widthOk=fr.width<=760 && fr.width>=200 && (!wide || fr.width<mr.width-80);
+		var centerOk=center<16;
+		var card=document.querySelector('.setup');
+		var cardOk=true;
+		if(card){
+			var cr=card.getBoundingClientRect();
+			cardOk=Math.abs(cr.left-fr.left)<20 && Math.abs(cr.width-fr.width)<24;
+		}
+		var hero=document.querySelector('.nmain.hero');
+		var gap=mr.bottom-wr.bottom;
+		var placeOk=hero ? gap>36 : gap<40;
+		var adv=document.querySelector('.nfoot .link');
+		var advOk=true;
+		if(adv){
+			var ar=adv.getBoundingClientRect();
+			advOk=ar.right<=wr.right+2 && ar.left>=wr.left-2;
+		}
+		if(widthOk && centerOk && cardOk && placeOk && advOk) return '';
+		return 'w='+Math.round(fr.width)+' center='+Math.round(center)+' gap='+Math.round(gap)+' width='+widthOk+' mid='+centerOk+' card='+cardOk+' place='+placeOk+' adv='+advOk;
+	})()`), &bad)); err != nil {
+		t.Fatal(err)
+	}
+	if bad != "" {
+		t.Fatalf("composer %s", bad)
+	}
 }
 
 func s20Chat(t *testing.T, ctx context.Context, text string) {

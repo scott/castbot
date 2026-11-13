@@ -268,6 +268,11 @@ func TestShots(t *testing.T) {
 					shootS20(t, browserCtx, dir20, vp.w, vp.h, theme, vp.name, kind)
 				})
 			}
+			if theme == "dark" && vp.name == "1280" {
+				t.Run("s20-keep", func(t *testing.T) {
+					shootCreateKeep(t, browserCtx)
+				})
+			}
 			for _, kind := range []string{"chat", "list", "advanced", "edit"} {
 				kind := kind
 				t.Run("s27-"+kind+"-"+theme+"-"+vp.name, func(t *testing.T) {

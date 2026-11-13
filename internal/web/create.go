@@ -103,11 +103,19 @@ func exampleChips() []chipFill {
 }
 
 func (s *Server) createChat(w http.ResponseWriter, r *http.Request, user store.User) {
+	p, ok := s.createPage(w, r, user)
+	if !ok {
+		return
+	}
+	s.render(w, http.StatusOK, "app", finish(p))
+}
+
+func (s *Server) createPage(w http.ResponseWriter, r *http.Request, user store.User) (page, bool) {
 	_ = s.store.DropStaleCreateDrafts(r.Context())
 	p, err := s.shell(r, user)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
-		return
+		return page{}, false
 	}
 	p.Page = "create"
 	p.Title = "New agent"
@@ -120,7 +128,7 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request, user store.U
 		view = s.presentDraft(r.Context(), user, doc, id)
 	}
 	p.Create = view
-	s.render(w, http.StatusOK, "app", finish(p))
+	return p, true
 }
 
 func (s *Server) loadDraft(ctx context.Context, userID string) (draftDoc, string, error) {
@@ -476,7 +484,11 @@ func (s *Server) replyDescribe(w http.ResponseWriter, r *http.Request, user stor
 
 func (s *Server) showCreate(w http.ResponseWriter, r *http.Request, user store.User) {
 	if r.Header.Get("HX-Request") == "true" {
-		s.createChat(w, r, user)
+		p, ok := s.createPage(w, r, user)
+		if !ok {
+			return
+		}
+		s.render(w, http.StatusOK, "createSwap", finish(p))
 		return
 	}
 	http.Redirect(w, r, "/new-agent", http.StatusSeeOther)

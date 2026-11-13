@@ -855,6 +855,62 @@ func TestCreateAuthzAndCSRF(t *testing.T) {
 	}
 }
 
+func TestDescribeHTMXSwapsThePane(t *testing.T) {
+	h, _, _ := createLab(t)
+	_, secret := h.account("hx-describe@example.com", "Alex Rivera", "correct-horse-1")
+	ip := "203.0.113.253:9"
+	h.login("hx-describe@example.com", "correct-horse-1", secret, ip, false)
+	code, body, _ := h.do(http.MethodGet, "/new-agent", "", ip, nil)
+	if code != 200 {
+		t.Fatalf("get %d", code)
+	}
+	for _, want := range []string{
+		`class="comp-wrap"`,
+		`data-create-compose="1"`,
+		`hx-post="/new-agent/describe"`,
+		`hx-target="#nmain"`,
+		`hx-select="#nmain"`,
+		`hx-swap="outerHTML"`,
+		`hx-push-url="false"`,
+		`id="nmain"`,
+		`id="create-adv"`,
+		`id="nfoot"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("page missing %s", want)
+		}
+	}
+	if strings.Contains(body, `hx-swap-oob=`) {
+		t.Fatal("the first page should not mark swaps out of band")
+	}
+	code, body, _ = h.do(http.MethodPost, "/new-agent/describe", h.form(urlValues("Check example-org/docs for broken links every morning.")), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 {
+		t.Fatalf("hx %d %s", code, snippet(body))
+	}
+	if strings.Contains(body, "<textarea") || strings.Contains(body, "hx-post=") || strings.Contains(body, "<html") {
+		t.Fatal("swap included the composer or a full document")
+	}
+	for _, want := range []string{
+		`id="nmain"`,
+		`data-placeholder="Reply to change something`,
+		`hx-swap-oob="outerHTML"`,
+		"Create Scout",
+		"broken links",
+		`id="create-adv"`,
+		`id="nfoot"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("swap missing %s\n%s", want, snippet(body))
+		}
+	}
+	if strings.Contains(body, "nmain hero") {
+		t.Fatal("setup card still uses the empty hero layout")
+	}
+	if !strings.Contains(body, `id="create-adv" hx-swap-oob="outerHTML"></span>`) {
+		t.Fatal("header Advanced link stayed after the first message")
+	}
+}
+
 type roundTripper func(*http.Request) (*http.Response, error)
 
 func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
