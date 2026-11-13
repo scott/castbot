@@ -4,7 +4,7 @@
 <a class="who-btn" href="/agents/{{.Agent.ID}}?panel=agent" data-open-panel data-panel-tab hx-get="/agents/{{.Agent.ID}}?panel=agent" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" aria-label="Open {{.Agent.Name}}"><span class="av {{.Agent.Color}}" aria-hidden="true">{{.Agent.Letter}}<span class="dot {{.Agent.Dot}}" id="hd-dot"></span></span><span class="grow"><span class="nm">{{.Agent.Name}}</span><span class="sub">{{.Agent.Title}}{{if .Agent.Model}} · {{.Agent.Model}}{{end}}</span></span></a>
 <a class="vmchip" id="vmchip" href="/agents/{{.Agent.ID}}?panel=machine" data-open-panel data-panel-tab hx-get="/agents/{{.Agent.ID}}?panel=machine" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" aria-label="Open machine"><span class="chip {{.Agent.ChipClass}}"><span class="pip"></span>{{.Agent.ChipLabel}}{{if .Agent.ChipMeta}} <span class="meta">{{.Agent.ChipMeta}}</span>{{end}}</span></a>
 <span class="hsp"></span>
-{{if gt .Agent.Approvals 0}}<a class="apill" href="/agents/{{.Agent.ID}}?panel=approvals" data-open-panel data-panel-tab hx-get="/agents/{{.Agent.ID}}?panel=approvals" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" aria-label="{{if eq .Agent.Approvals 1}}1 approval waiting. Open approvals{{else}}{{.Agent.Approvals}} approvals waiting. Open approvals{{end}}"><span class="n">{{.Agent.Approvals}}</span><span class="w"> approval{{if gt .Agent.Approvals 1}}s{{end}}</span></a>{{end}}
+<span id="approval-pill">{{template "approvalPill" .}}</span>
 <a class="ibtn ptoggle{{if .Pane}} on{{end}}" data-panel-toggle href="/agents/{{.Agent.ID}}?panel=agent" data-open-panel hx-get="/agents/{{.Agent.ID}}?panel=agent" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" aria-expanded="{{if .Pane}}true{{else}}false{{end}}" aria-controls="agent-panel" aria-label="Agent panel"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></a>
 </header>
 {{end}}
@@ -14,7 +14,7 @@
 <a data-panel-tab href="/agents/{{.Agent.ID}}?panel=agent" hx-get="/agents/{{.Agent.ID}}?panel=agent" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false"{{if eq .Panel "agent"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/></svg><span>Agent</span></a>
 <a data-panel-tab href="/agents/{{.Agent.ID}}?panel=machine" hx-get="/agents/{{.Agent.ID}}?panel=machine" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false"{{if eq .Panel "machine"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12 15h5"/></svg><span>Machine</span></a>
 <a data-panel-tab href="/agents/{{.Agent.ID}}?panel=secrets" hx-get="/agents/{{.Agent.ID}}?panel=secrets" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false"{{if or (eq .Panel "secrets") .Vault.Panel}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/></svg><span>Secrets</span></a>
-<a data-panel-tab href="/agents/{{.Agent.ID}}?panel=approvals" hx-get="/agents/{{.Agent.ID}}?panel=approvals" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false"{{if eq .Panel "approvals"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span>Approvals</span>{{if gt .Agent.Approvals 0}}<span class="tbadge">{{.Agent.Approvals}}</span>{{end}}</a>
+<a data-panel-tab href="/agents/{{.Agent.ID}}?panel=approvals" hx-get="/agents/{{.Agent.ID}}?panel=approvals" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false"{{if eq .Panel "approvals"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span>Approvals</span><span id="approvals-count" class="tbadge"{{if eq .Agent.Approvals 0}} hidden{{end}}>{{if gt .Agent.Approvals 0}}{{.Agent.Approvals}}{{end}}</span></a>
 <a data-panel-tab href="/agents/{{.Agent.ID}}?panel=routines" hx-get="/agents/{{.Agent.ID}}?panel=routines" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false"{{if or (eq .Panel "routines") (and .Routines.On (eq .Panel "routines"))}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span>Routines</span></a>
 <a data-panel-tab href="/agents/{{.Agent.ID}}?panel=files" hx-get="/agents/{{.Agent.ID}}?panel=files" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false"{{if eq .Panel "files"}} class="on" aria-current="page"{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10.5h-17z"/></svg><span>Files</span></a>
 </nav>
@@ -47,12 +47,28 @@
 {{template "panelChrome" .}}
 <div class="pbody">
 <section class="psec">
-{{if .ApprovalsWaiting}}<div class="psec-h"><h4>Waiting on you</h4></div>{{range .ApprovalsWaiting}}{{template "approvalCard" .}}<a class="inchat" href="#appr-{{.ID}}">Show in chat</a>{{end}}{{else}}<div class="pempty"><b>Nothing is waiting.</b><span>When {{.Agent.Name}} needs a yes or no, it shows here and in the chat.</span></div>{{end}}
-{{if .ApprovalsEarlier}}<div class="psec-h"><h4>Earlier</h4></div><ul class="ahist">{{range .ApprovalsEarlier}}<li class="ah{{if .OK}} ok{{else}} no{{end}}"><span class="grow"><span class="t1 mono">{{.Tool}}</span><span class="t2">{{.Line}}{{if .When}} · {{.When}}{{end}}</span></span></li>{{end}}</ul>{{end}}
+{{template "approvalsBody" .}}
 <p class="fineprint">Only {{.Agent.Name}}'s approvals. Decisions are kept in the audit log.</p>
 </section>
 </div>
 </aside>
+{{end}}
+
+{{define "approvalPill"}}
+{{if gt .Agent.Approvals 0}}<a class="apill" href="/agents/{{.Agent.ID}}?panel=approvals" data-open-panel data-panel-tab hx-get="/agents/{{.Agent.ID}}?panel=approvals" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" aria-label="{{if eq .Agent.Approvals 1}}1 approval waiting. Open approvals{{else}}{{.Agent.Approvals}} approvals waiting. Open approvals{{end}}"><span class="n">{{.Agent.Approvals}}</span><span class="w"> approval{{if gt .Agent.Approvals 1}}s{{end}}</span></a>{{end}}
+{{end}}
+
+{{define "approvalsBody"}}
+<div id="approvals-pane"{{if .SwapOOB}} hx-swap-oob="outerHTML"{{end}}>
+{{if .ApprovalsWaiting}}<div class="psec-h"><h4>Waiting on you</h4></div>{{range .ApprovalsWaiting}}{{template "approvalCard" .}}<a class="inchat" href="#appr-{{.ID}}">Show in chat</a>{{end}}{{else}}<div class="pempty"><b>Nothing is waiting.</b><span>When {{.Agent.Name}} needs a yes or no, it shows here and in the chat.</span></div>{{end}}
+{{if .ApprovalsEarlier}}<div class="psec-h"><h4>Earlier</h4></div><ul class="ahist">{{range .ApprovalsEarlier}}<li class="ah{{if .OK}} ok{{else}} no{{end}}"><span class="grow"><span class="t1 mono">{{.Tool}}</span><span class="t2">{{.Line}}{{if .When}} · {{.When}}{{end}}</span></span></li>{{end}}</ul>{{end}}
+</div>
+{{end}}
+
+{{define "approvalsSync"}}
+{{template "approvalsBody" .}}
+<span id="approvals-count" class="tbadge" hx-swap-oob="outerHTML"{{if eq .Agent.Approvals 0}} hidden{{end}}>{{if gt .Agent.Approvals 0}}{{.Agent.Approvals}}{{end}}</span>
+<span id="approval-pill" hx-swap-oob="outerHTML">{{template "approvalPill" .}}</span>
 {{end}}
 
 {{define "homePick"}}

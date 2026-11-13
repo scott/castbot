@@ -1341,6 +1341,119 @@ func mustAgent(t *testing.T, h *harness, userID string) store.Agent {
 	return rows[0]
 }
 
+func TestDecisionSyncsPaneAndChatCard(t *testing.T) {
+	h, _, user, agent, ip := newAsk(t, nil, nil)
+	live := httptest.NewServer(h.srv.Handler())
+	t.Cleanup(live.Close)
+	sendPrompt(t, h, agent, ip, "go")
+	ap := waitPending(t, h, user.ID)
+
+	page := h.poll(ip, "/agents/"+agent.ID+"?panel=approvals", ">Approve<")
+	if strings.Count(page, `id="appr-`+ap.ID+`"`) < 2 {
+		t.Fatal("chat and pane should each show the pending card")
+	}
+	if !strings.Contains(page, `hx-target="#appr-`+ap.ID+`"`) || !strings.Contains(page, `id="approvals-pane"`) {
+		t.Fatal("pane form does not target the in-chat card")
+	}
+	if !strings.Contains(page, `id="approvals-count"`) || !strings.Contains(page, `class="tbadge"`) {
+		t.Fatal("approvals tab is missing its count")
+	}
+
+	code, body := postDecision(h, ap, ip, true)
+	if code != http.StatusOK {
+		t.Fatalf("approve %d %s", code, body)
+	}
+	primary, _, _ := strings.Cut(body, `hx-swap-oob`)
+	if !strings.Contains(primary, `id="appr-`+ap.ID+`"`) || !strings.Contains(primary, "Approved by you") || strings.Contains(primary, ">Approve<") {
+		t.Fatalf("in-chat card %s", primary)
+	}
+	if !strings.Contains(body, `id="appr-`+ap.ID+`" hx-swap-oob="outerHTML"`) {
+		t.Fatal("response does not settle every copy of the card")
+	}
+	pane := between(body, `id="approvals-pane"`, `id="approvals-count"`)
+	if pane == "" || strings.Contains(pane, ">Approve<") || strings.Contains(pane, `id="appr-`+ap.ID+`"`) || !strings.Contains(pane, "Nothing is waiting") {
+		t.Fatalf("pane still pending %s", pane)
+	}
+	if !strings.Contains(pane, "Earlier") || !strings.Contains(pane, "bash") {
+		t.Fatalf("pane missing the decided row %s", pane)
+	}
+	badge := between(body, `id="approvals-count"`, `id="approval-pill"`)
+	if !strings.Contains(badge, "hidden") || strings.Contains(badge, ">1<") {
+		t.Fatalf("count badge %s", badge)
+	}
+	pill := between(body, `id="approval-pill"`, "")
+	if strings.Contains(pill, `class="apill"`) {
+		t.Fatalf("header pill still counts a pending approval %s", pill)
+	}
+
+	// A second decision, this time the one the pane form posts, settles
+	// the in-chat card. The stream includes the pane on the frame where
+	// the list changes, and leaves it off later card frames.
+	h.waitRuns(user.ID, agentThread(t, h, user.ID, agent.ID))
+	sendPrompt(t, h, agent, ip, "again")
+	ap = waitPending(t, h, user.ID)
+	var once sync.Once
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	events, err := readSSE(ctx, live.URL+"/runs/"+ap.RunID+"/events", h.cookieList(), "", func(batch []sseEvent) bool {
+		for _, ev := range batch {
+			if ev.Event == "card" && strings.Contains(ev.Data, ">Deny<") {
+				once.Do(func() {
+					go postDecision(h, ap, ip, false)
+				})
+			}
+		}
+		settled, done := false, false
+		for _, ev := range batch {
+			if ev.Event == "approvals" && strings.Contains(ev.Data, "Nothing is waiting") {
+				settled = true
+			}
+			if ev.Event == "done" {
+				done = true
+			}
+		}
+		return settled && done
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paneN := 0
+	cardSettled := false
+	for _, ev := range events {
+		if ev.Event == "card" && strings.Contains(ev.Data, `id="appr-`+ap.ID+`"`) && strings.Contains(ev.Data, "Denied") && !strings.Contains(ev.Data, ">Deny<") {
+			cardSettled = true
+		}
+		if ev.Event != "approvals" {
+			continue
+		}
+		paneN++
+		pane := between(ev.Data, `id="approvals-pane"`, `id="approvals-count"`)
+		if strings.Contains(pane, ">Deny<") || strings.Contains(pane, `id="appr-`+ap.ID+`"`) || !strings.Contains(pane, "Nothing is waiting") {
+			t.Fatalf("stream pane %s", pane)
+		}
+	}
+	if paneN != 1 || !cardSettled {
+		t.Fatalf("pane frames %d card settled %v", paneN, cardSettled)
+	}
+	_ = user
+}
+
+func between(s, start, end string) string {
+	i := strings.Index(s, start)
+	if i < 0 {
+		return ""
+	}
+	s = s[i:]
+	if end == "" {
+		return s
+	}
+	j := strings.Index(s[len(start):], end)
+	if j < 0 {
+		return s
+	}
+	return s[:len(start)+j]
+}
+
 func assertNoSecret(t *testing.T, h *harness, userID string) {
 	t.Helper()
 	rows, err := h.st.ListAudit(context.Background(), userID)

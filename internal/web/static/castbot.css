@@ -1192,6 +1192,8 @@ a.vmchip { display: inline-flex; align-items: center; text-decoration: none; col
 .glance .t1 { font-weight: 650; }
 .glance .t2 { font-size: 12.5px; color: var(--tx3); }
 .tbadge { position: absolute; top: 3px; left: calc(50% + 6px); min-width: 18px; height: 18px; border-radius: 9px; padding: 0 5px; font: 750 11px var(--ui); background: var(--acc); color: var(--acc-ink); display: inline-flex; align-items: center; justify-content: center; }
+.tbadge[hidden] { display: none; }
+#approval-pill { display: contents; }
 .pane .ptabs a { position: relative; }
 #agent-panel[hidden], .s19toast[hidden] { display: none !important; }
 .s19toast { gap: 10px; border-color: var(--acc-line); white-space: normal; }

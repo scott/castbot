@@ -114,6 +114,10 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	orphaned := false
 	lastKA := time.Now()
 	lastCards := ""
+	// Seed the pane with what the page already painted. An approvals
+	// frame is sent only after that list changes, so activity ticks
+	// do not swap the pane.
+	lastPane, _ := s.approvalsSyncHTML(r.Context(), user, runRow.AgentID, from(r).CSRF)
 	for {
 		if err := r.Context().Err(); err != nil {
 			return
@@ -137,7 +141,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 		// swap then closes this stream. Send the bar and badges first, while
 		// the listener is still attached, and again on the done event.
 		if batchTerminal(events) {
-			if err := s.writeLiveCards(r.Context(), w, user, runRow, from(r).CSRF, &lastCards); err != nil {
+			if err := s.writeLiveCards(r.Context(), w, user, runRow, from(r).CSRF, &lastCards, &lastPane); err != nil {
 				return
 			}
 			flush()
@@ -174,7 +178,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			flush()
 			return
 		}
-		if err := s.writeLiveCards(r.Context(), w, user, runRow, from(r).CSRF, &lastCards); err != nil {
+		if err := s.writeLiveCards(r.Context(), w, user, runRow, from(r).CSRF, &lastCards, &lastPane); err != nil {
 			return
 		}
 		flush()
@@ -540,7 +544,15 @@ func batchTerminal(events []store.RunEvent) bool {
 	return false
 }
 
-func (s *Server) writeLiveCards(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, csrf string, last *string) error {
+func (s *Server) writeLiveCards(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, csrf string, last, lastPane *string) error {
+	if lastPane != nil {
+		if next, perr := s.approvalsSyncHTML(ctx, user, runRow.AgentID, csrf); perr == nil && next != *lastPane {
+			if err := writeSSE(w, "", "approvals", next); err != nil {
+				return err
+			}
+			*lastPane = next
+		}
+	}
 	cards, err := s.cardsHTML(ctx, user, runRow.ID, csrf)
 	if err != nil || cards == "" || cards == *last {
 		return nil

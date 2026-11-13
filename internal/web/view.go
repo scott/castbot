@@ -87,7 +87,7 @@ type cardView struct {
 	SubmitURL, DeclineURL, ApproveURL, DenyURL string
 	FieldLabel, SubmitLabel                    string
 	Args                                       []argView
-	Pending, ReadOnly, Approved, Secret        bool
+	Pending, ReadOnly, Approved, Secret, OOB   bool
 	NeedsValue                                 bool
 }
 
@@ -191,6 +191,7 @@ type page struct {
 	Boot             bootView
 	AskJob           bool
 	AutoResume       bool
+	SwapOOB          bool
 	ResumeAct        template.HTML
 	ResumeErr        string
 	ResumePoll       bool
