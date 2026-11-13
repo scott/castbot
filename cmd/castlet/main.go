@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,11 +37,21 @@ func main() {
 	if err != nil {
 		log.Fatal("castlet did not start")
 	}
+	egressAddr, err := castlet.LoopbackAddr(env("CASTLET_EGRESS_ADDR", "127.0.0.1:8090"))
+	if err != nil {
+		log.Fatal("castlet egress must listen on 127.0.0.1")
+	}
+	egressLn, err := net.Listen("tcp", egressAddr)
+	if err != nil {
+		log.Fatal("castlet egress did not start")
+	}
+	egressSrv := &http.Server{Handler: http.HandlerFunc(sup.ServeEgress), ReadHeaderTimeout: 10 * time.Second}
 	srv := &http.Server{Addr: cfg.Addr, Handler: sup, ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { _ = egressSrv.Serve(egressLn) }()
 	go func() {
 		if err := sup.Boot(ctx); err != nil {
 			log.Printf("boot failed: %s", publicErr(err))
@@ -58,6 +69,7 @@ func main() {
 		sup.Close()
 		shut, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
+		_ = egressSrv.Shutdown(shut)
 		_ = srv.Shutdown(shut)
 	}
 }

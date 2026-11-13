@@ -52,6 +52,35 @@ func TestModelsComeFromTheManifest(t *testing.T) {
 	}
 }
 
+func TestCatalogWriteToolsAsk(t *testing.T) {
+	want := []Tool{
+		{Name: "bash", Write: true},
+		{Name: "read"},
+		{Name: "glob"},
+		{Name: "git_status"},
+		{Name: "git_commit", Write: true},
+		{Name: "git_push", Write: true},
+		{Name: "git_log"},
+		{Name: "git_diff"},
+		{Name: "git_add", Write: true},
+	}
+	got := Tools()
+	if len(got) != len(want) {
+		t.Fatalf("%d tools", len(got))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tool %d got %+v", i, got[i])
+		}
+		if got[i].Write && DefaultLevel(got[i].Name) != "ask" {
+			t.Fatalf("%s default", got[i].Name)
+		}
+		if !got[i].Write && DefaultLevel(got[i].Name) != "always-allow" {
+			t.Fatalf("%s default", got[i].Name)
+		}
+	}
+}
+
 func TestRenderDropsSecretsAndAsksForWrites(t *testing.T) {
 	spec, err := ParseYAML("name: Atlas\ndescription: Helper\nversion: 2.0\nbrain:\n  model: openrouter/not-real\n  instructions_file: instructions.md\ntools:\n  builtin: [bash, glob, git_push, custom_tool]\nharness:\n  permissions:\n    bash: allow\n    git_push: always-ask\nenv:\n  API_KEY: super-secret-value\n")
 	if err != nil {
