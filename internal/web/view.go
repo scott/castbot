@@ -195,6 +195,8 @@ type page struct {
 	ResumeAct        template.HTML
 	ResumeErr        string
 	ResumePoll       bool
+	ResumeChrome     bool
+	ResumeClearAct   bool
 }
 
 func finish(p page) page {

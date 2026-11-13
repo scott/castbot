@@ -204,13 +204,15 @@ func (s *Server) machineSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func chromeSame(r *http.Request, v agentView) bool {
-	q := r.URL.Query()
-	if _, ok := q["dot"]; !ok {
+	if err := r.ParseForm(); err != nil {
 		return false
 	}
-	return q.Get("dot") == v.Dot &&
-		q.Get("chip") == v.ChipClass &&
-		q.Get("label") == v.ChipLabel &&
-		q.Get("sub") == v.Sub &&
-		q.Get("subc") == v.SubClass
+	if _, ok := r.Form["dot"]; !ok {
+		return false
+	}
+	return r.Form.Get("dot") == v.Dot &&
+		r.Form.Get("chip") == v.ChipClass &&
+		r.Form.Get("label") == v.ChipLabel &&
+		r.Form.Get("sub") == v.Sub &&
+		r.Form.Get("subc") == v.SubClass
 }

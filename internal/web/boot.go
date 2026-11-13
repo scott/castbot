@@ -420,22 +420,14 @@ func (s *Server) bootFragment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	p, err := s.shell(r, user)
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
+	p := page{
+		Agent: agentView{ID: agent.ID, Name: agent.Name},
+		CSRF:  from(r).CSRF,
 	}
-	p.Agent = s.paintAgent(r.Context(), user.ID, agent, true, userLocation(user.Timezone))
-	p.HasAgent = true
 	p.Boot = s.bootCard(r.Context(), user, agent)
 	p.Boot.Fragment = true
 	if p.Boot.Up {
 		w.Header().Set("HX-Redirect", "/agents/"+url.PathEscape(agent.ID))
-	}
-	if th, err := s.store.DMThread(r.Context(), user.ID, agent.ID); err == nil {
-		if msgs, err := s.store.ListMessages(r.Context(), user.ID, th.ID); err == nil {
-			p.Messages = presentMessages(msgs, p.Agent, s.store.Now(), userLocation(user.Timezone))
-		}
 	}
 	s.render(w, http.StatusOK, "bootPoll", p)
 }

@@ -176,11 +176,18 @@ func (s *Server) writeResume(w http.ResponseWriter, r *http.Request, user store.
 	}
 	p := page{Agent: s.paintAgent(r.Context(), user.ID, agent, true, userLocation(user.Timezone))}
 	p.ResumeErr = message
+	// act=1 means the waking row is already on the page. Leaving it out
+	// keeps the act-in animation from starting over on every poll.
 	if message == "" && poll && agent.Activity == "Waking" {
 		markWaking(&p.Agent)
 		p.ResumePoll = true
-		p.ResumeAct = actRowHTML(activityOut{Label: "Waking up"}, "")
+		if r.FormValue("act") != "1" {
+			p.ResumeAct = actRowHTML(activityOut{Label: "Waking up"}, "")
+		}
+	} else {
+		p.ResumeClearAct = true
 	}
+	p.ResumeChrome = !chromeSame(r, p.Agent)
 	_ = s.render(w, http.StatusOK, "resumeLive", p)
 }
 

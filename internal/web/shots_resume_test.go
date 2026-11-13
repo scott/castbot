@@ -54,7 +54,7 @@ func shootPausedOpen(t *testing.T, browser context.Context, dir string, width, h
 	if err := chromedp.Run(ctx, chromedp.Click(`a.ag[data-name="Atlas"]`, chromedp.ByQuery)); err != nil && !containsNav(err) {
 		t.Fatal(err)
 	}
-	editWait(t, ctx, "waking", `location.pathname==='/agents/`+atlas.ID+`' && (document.body.innerText||'').indexOf('Waking up')>=0 && !!document.querySelector('#resume-live .actico') && document.getElementById('resume-live').classList.contains('htmx-request')`)
+	editWait(t, ctx, "waking", `location.pathname==='/agents/`+atlas.ID+`' && (document.body.innerText||'').indexOf('Waking up')>=0 && !!document.querySelector('#resume-act .actico') && document.getElementById('resume-live').classList.contains('htmx-request')`)
 	if err := chromedp.Run(ctx, chromedp.Sleep(450*time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
