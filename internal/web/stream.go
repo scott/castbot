@@ -118,6 +118,10 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	// frame is sent only after that list changes, so activity ticks
 	// do not swap the pane.
 	lastPane, _ := s.approvalsSyncHTML(r.Context(), user, runRow.AgentID, from(r).CSRF)
+	st := &liveSend{run: runRow}
+	if err := s.primeLive(r.Context(), user, st, cur); err != nil {
+		return
+	}
 	for {
 		if err := r.Context().Err(); err != nil {
 			return
@@ -148,7 +152,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		delivered := false
 		for _, ev := range events {
-			n, err := s.writeRunEvent(r.Context(), w, user, runRow, ev, from(r).CSRF, cur.skip(ev.Seq))
+			n, err := s.writeRunEvent(r.Context(), w, user, runRow, ev, from(r).CSRF, cur.skip(ev.Seq), st)
 			if err != nil {
 				return
 			}
@@ -170,7 +174,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 		// The list is not empty, but nothing new was written, so resend the
 		// closing card the same way a cursor past the end does.
 		if !delivered && batchTerminal(events) {
-			if err := s.writeCaughtUp(r.Context(), w, user, runRow, from(r).CSRF); err != nil {
+			if err := s.writeCaughtUp(r.Context(), w, user, runRow, from(r).CSRF, st); err != nil {
 				return
 			}
 			flush()
@@ -181,15 +185,14 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 		if err := s.writeLiveCards(r.Context(), w, user, runRow, from(r).CSRF, &lastCards, &lastPane); err != nil {
 			return
 		}
-		flush()
-		current, err := s.store.GetRun(r.Context(), user.ID, runRow.ID)
-		if err != nil {
+		if err := s.refreshLive(r.Context(), user, st); err != nil {
 			return
 		}
+		flush()
 		// Status and the terminal event commit together. A list from before
 		// that commit can be empty while this read already sees done or
 		// failed, so look once more before telling the browser to stop.
-		if runTerminal(current.Status) && len(events) == 0 {
+		if runTerminal(st.run.Status) && len(events) == 0 {
 			more, err := s.store.ListRunEvents(r.Context(), user.ID, runRow.ID, after)
 			if err != nil {
 				return
@@ -197,7 +200,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			if len(more) > 0 {
 				continue
 			}
-			if err := s.writeCaughtUp(r.Context(), w, user, current, from(r).CSRF); err != nil {
+			if err := s.writeCaughtUp(r.Context(), w, user, st.run, from(r).CSRF, st); err != nil {
 				return
 			}
 			flush()
@@ -210,21 +213,27 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 		// the row in that gap. Failing it here would interrupt a brand-new
 		// run. A waiting approval is the user's decision, not a dead stream.
 		// A streaming run whose goroutine is gone still fails.
-		if !runTerminal(current.Status) && current.Status != "queued" && current.Status != "waiting_approval" && !s.runs.Watching(current.ID) {
+		if !runTerminal(st.run.Status) && st.run.Status != "queued" && st.run.Status != "waiting_approval" && !s.runs.Watching(st.run.ID) {
 			if orphaned {
 				return
 			}
 			orphaned = true
-			_, _ = s.store.FailRun(context.Background(), user.ID, current.ID, run.Interrupted, current.StreamOffset)
+			_, _ = s.store.FailRun(context.Background(), user.ID, st.run.ID, run.Interrupted, st.run.StreamOffset)
 			continue
+		}
+		if !runTerminal(st.run.Status) {
+			if err := s.syncActivity(w, st); err != nil {
+				return
+			}
+			flush()
 		}
 		select {
 		case <-r.Context().Done():
 			return
 		case <-s.runs.Done():
-			if !orphaned && !runTerminal(current.Status) {
+			if !orphaned && !runTerminal(st.run.Status) {
 				orphaned = true
-				_, _ = s.store.FailRun(context.Background(), user.ID, current.ID, run.Interrupted, current.StreamOffset)
+				_, _ = s.store.FailRun(context.Background(), user.ID, st.run.ID, run.Interrupted, st.run.StreamOffset)
 			}
 			timer := time.NewTimer(20 * time.Millisecond)
 			select {
@@ -322,7 +331,7 @@ func runTerminal(status string) bool {
 	}
 }
 
-func (s *Server) writeCaughtUp(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, csrf string) error {
+func (s *Server) writeCaughtUp(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, csrf string, st *liveSend) error {
 	events, err := s.store.ListRunEvents(ctx, user.ID, runRow.ID, 0)
 	if err != nil {
 		return err
@@ -336,11 +345,11 @@ func (s *Server) writeCaughtUp(ctx context.Context, w http.ResponseWriter, user 
 	if last == nil {
 		return nil
 	}
-	_, err = s.writeRunEvent(ctx, w, user, runRow, *last, csrf, -1)
+	_, err = s.writeRunEvent(ctx, w, user, runRow, *last, csrf, -1, st)
 	return err
 }
 
-func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, ev store.RunEvent, csrf string, fromPart int) (n int, err error) {
+func (s *Server) writeRunEvent(ctx context.Context, w io.Writer, user store.User, runRow store.Run, ev store.RunEvent, csrf string, fromPart int, st *liveSend) (n int, err error) {
 	fw := &frameWriter{w: w, seq: ev.Seq, from: fromPart}
 	defer func() { n = fw.sent }()
 	switch ev.Kind {
@@ -354,13 +363,13 @@ func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user 
 		if err = fw.write("text", html.EscapeString(payload.Text)); err != nil {
 			return
 		}
-		err = s.writeMarkdownProgress(ctx, fw, user, runRow, ev, csrf)
+		err = s.writeMarkdownProgress(fw, st, ev)
 		return
 	case "tool":
 		if err = fw.write("note", ""); err != nil {
 			return
 		}
-		err = s.writeMarkdownProgress(ctx, fw, user, runRow, ev, csrf)
+		err = s.writeMarkdownProgress(fw, st, ev)
 		return
 	case "error":
 		var payload struct {
@@ -389,12 +398,16 @@ func (s *Server) writeRunEvent(ctx context.Context, w http.ResponseWriter, user 
 		err = s.writeDone(ctx, fw, user, runRow, payload.MessageID, csrf)
 		return
 	case "permission":
+		st.pending = true
 		var body string
 		body, err = s.cardsHTML(ctx, user, runRow.ID, csrf)
 		if err != nil {
 			return
 		}
-		err = fw.write("card", body)
+		if err = fw.write("card", body); err != nil {
+			return
+		}
+		err = s.writeLiveActivity(fw, st)
 		return
 	default:
 		err = fw.write("note", "")
@@ -449,33 +462,12 @@ func (s *Server) calmLive(ctx context.Context, user store.User, runRow store.Run
 	}
 }
 
-func (s *Server) writeMarkdownProgress(ctx context.Context, fw *frameWriter, user store.User, runRow store.Run, ev store.RunEvent, csrf string) error {
-	events, err := s.store.ListRunEvents(ctx, user.ID, runRow.ID, 0)
-	if err != nil {
-		return err
-	}
-	before, through := textBefore(events, ev.Seq)
+func (s *Server) writeMarkdownProgress(fw *frameWriter, st *liveSend, ev store.RunEvent) error {
+	before := st.fold.apply(ev)
+	through := st.fold.body()
 	prev, _ := md.Split(before)
 	closed, tail := md.Split(through)
-	_, _, tools, fact, _ := foldRun(events)
-	pending := runRow.Status == "waiting_approval"
-	if rows, err := s.store.ListRunApprovals(ctx, user.ID, runRow.ID); err == nil {
-		for _, row := range rows {
-			if row.Status == "pending" {
-				pending = true
-				break
-			}
-		}
-	}
-	current := runRow
-	if row, err := s.store.GetRun(ctx, user.ID, runRow.ID); err == nil {
-		current = row
-	}
-	out := s.activityFor(ctx, user.ID, current, through, fact, pending)
-	elapsed := ""
-	if started, perr := time.Parse(time.RFC3339, current.StartedAt); perr == nil {
-		elapsed, _ = formatElapsed(s.store.Now().Sub(started))
-	}
+	out, elapsed := s.activityNow(st)
 	inner := ""
 	if strings.TrimSpace(tail.Raw) != "" {
 		inner = md.RenderTail(tail)
@@ -495,14 +487,19 @@ func (s *Server) writeMarkdownProgress(ctx context.Context, fw *frameWriter, use
 			return err
 		}
 	}
-	if err := fw.write("tools", tools); err != nil {
-		return err
+	tools := st.fold.toolsHTML()
+	if tools != st.lastTools {
+		if err := fw.write("tools", tools); err != nil {
+			return err
+		}
+		st.lastTools = tools
 	}
-	slot := actSlotHTML(current.ID, actRowHTML(out, elapsed), out.HideThread)
-	if err := fw.write("act", slot); err != nil {
-		return err
-	}
-	return nil
+	return st.putAct(fw, fw.w, out, elapsed)
+}
+
+func (s *Server) writeLiveActivity(fw *frameWriter, st *liveSend) error {
+	out, elapsed := s.activityNow(st)
+	return st.putAct(fw, fw.w, out, elapsed)
 }
 
 // frameWriter gives each SSE frame of one store seq its own id.

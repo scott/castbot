@@ -1288,6 +1288,14 @@ button.sclose, a.sclose { font: inherit; cursor: pointer; text-decoration: none;
 .actico.sm { grid-template-columns: repeat(2, var(--act-dot-sm)); grid-auto-rows: var(--act-dot-sm); gap: var(--act-gap-sm); width: var(--act-box-sm); height: var(--act-box-sm); }
 .actico.sm i { width: var(--act-dot-sm); height: var(--act-dot-sm); }
 .act { display: inline-flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--act-label-size); font-weight: 600; color: var(--act-label); animation: act-in var(--act-fade) ease-out var(--act-show-delay) both; }
+.act .actxt { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.act:has(.actmode[data-mode="held"]) .actico i { animation: none; opacity: var(--act-held); }
+.act:has(.actmode[data-mode="slow"]) .actico i { animation-duration: var(--act-cycle-slow); }
+.act:has(.actmode[data-mode="slow"]) .actico i:nth-child(2) { animation-delay: calc(var(--act-cycle-slow) * -5 / 6); }
+.act:has(.actmode[data-mode="slow"]) .actico i:nth-child(4) { animation-delay: calc(var(--act-cycle-slow) * -4 / 6); }
+.act:has(.actmode[data-mode="slow"]) .actico i:nth-child(6) { animation-delay: calc(var(--act-cycle-slow) * -3 / 6); }
+.act:has(.actmode[data-mode="slow"]) .actico i:nth-child(5) { animation-delay: calc(var(--act-cycle-slow) * -2 / 6); }
+.act:has(.actmode[data-mode="slow"]) .actico i:nth-child(3) { animation-delay: calc(var(--act-cycle-slow) * -1 / 6); }
 @keyframes act-in { from { opacity: 0; } to { opacity: 1; } }
 .act .lbl { color: var(--act-label); }
 .act .el { color: var(--tx3); font-weight: 500; }
@@ -1361,6 +1369,8 @@ button.sclose, a.sclose { font: inherit; cursor: pointer; text-decoration: none;
 @media (prefers-reduced-motion: reduce) {
   .act { animation: none; }
   .actico i, .actico.slow i { animation: none; }
+  .act:has(.actmode[data-mode="held"]) .actico i,
+  .act:has(.actmode[data-mode="slow"]) .actico i { animation: none; }
   .actico i:nth-child(n) { opacity: var(--act-dim); }
   .actico i:nth-child(1), .actico i:nth-child(2), .actico i:nth-child(3) { opacity: 1; }
   .actico.held i:nth-child(n) { opacity: var(--act-held); }

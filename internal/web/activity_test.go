@@ -79,7 +79,7 @@ func TestRedStampGone(t *testing.T) {
 	if !strings.Contains(body, `class="act"`) || !strings.Contains(body, "Thinking") || !strings.Contains(body, `aria-live="polite"`) {
 		t.Fatalf("indicator %s", body)
 	}
-	if !strings.Contains(body, `sse-swap="block"`) || !strings.Contains(body, `sse-swap="tail"`) {
+	if !strings.Contains(body, `sse-swap="block"`) || !strings.Contains(body, `sse-swap="tail"`) || !strings.Contains(body, `sse-swap="actxt"`) {
 		t.Fatalf("stream swaps %s", body)
 	}
 }
@@ -150,6 +150,7 @@ func TestReducedMotionCSS(t *testing.T) {
 		"--act-min-dwell: 600ms",
 		"prefers-reduced-motion: reduce",
 		".actico.held i:nth-child(n) { opacity: var(--act-held); }",
+		`.act:has(.actmode[data-mode="held"]) .actico i { animation: none; opacity: var(--act-held); }`,
 		".actico i:nth-child(1), .actico i:nth-child(2), .actico i:nth-child(3) { opacity: 1; }",
 		".actico i, .actico.slow i { animation: none; }",
 		".caret { animation: none; }",

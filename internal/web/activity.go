@@ -117,10 +117,17 @@ func actIcons(mode string, small bool) string {
 	return `<span class="` + cls + `" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>`
 }
 
-func actRowHTML(out activityOut, elapsed string) template.HTML {
+// actCopyHTML is the label, the elapsed clock, and the hint.
+// The live stream swaps this fragment on its own so the activity row
+// stays mounted. The mode marker is in here too: the icon keeps its
+// element, and CSS reads the marker to hold or slow the pulse.
+func actCopyHTML(out activityOut, elapsed string) string {
 	var b strings.Builder
-	b.WriteString(`<div class="act" role="status" aria-live="polite">`)
-	b.WriteString(actIcons(out.Mode, false))
+	if out.Mode != "" {
+		b.WriteString(`<span class="actmode" data-mode="`)
+		b.WriteString(html.EscapeString(out.Mode))
+		b.WriteString(`" hidden></span>`)
+	}
 	b.WriteString(`<span class="lbl">`)
 	b.WriteString(html.EscapeString(out.Label))
 	b.WriteString(`</span>`)
@@ -134,7 +141,16 @@ func actRowHTML(out activityOut, elapsed string) template.HTML {
 		b.WriteString(html.EscapeString("· " + out.Hint))
 		b.WriteString(`</span>`)
 	}
-	b.WriteString(`</div>`)
+	return b.String()
+}
+
+func actRowHTML(out activityOut, elapsed string) template.HTML {
+	var b strings.Builder
+	b.WriteString(`<div class="act" role="status" aria-live="polite">`)
+	b.WriteString(actIcons("", false))
+	b.WriteString(`<span class="actxt" sse-swap="actxt" hx-swap="innerHTML">`)
+	b.WriteString(actCopyHTML(out, elapsed))
+	b.WriteString(`</span></div>`)
 	return template.HTML(b.String())
 }
 

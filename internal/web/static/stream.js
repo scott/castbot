@@ -91,6 +91,9 @@
       if (prev) {
         acts[i].innerHTML = prev;
         acts[i].removeAttribute("data-prev");
+        // The label swap target lives inside the row. Restoring the saved
+        // markup has to bind that target again.
+        if (window.htmx) htmx.process(acts[i]);
       }
     }
     var sub = document.querySelector(".ag.on .sub");
