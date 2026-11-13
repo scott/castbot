@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/castcfg/modellist"
@@ -12,6 +13,9 @@ import (
 const (
 	modelWarning = "This model is no longer listed. You can keep it, or pick another."
 	modelHelp    = "The list is this provider's models. A saved model that is no longer listed stays selected."
+	// modelValidateTimeout bounds a catalog refresh during a POST.
+	// Page renders do not call it. A failed refresh does not accept the id.
+	modelValidateTimeout = 2 * time.Second
 )
 
 // providerChoice is one row in the provider select.
@@ -46,19 +50,18 @@ func (s *Server) modelPick(ctx context.Context, userID, current, surface string)
 	return s.assemblePick(ctx, userID, "", current, surface, false, false)
 }
 
-// AcceptModel is the create and edit gate. A live id, a manifest id, or the
-// previously saved id is accepted. A different unknown id is not.
-// A live id counts only when this user's cache already holds it. This does
-// not dial and does not log the key.
+// AcceptModel is the create and edit gate.
+// The previously saved id may be posted again.
+// Any other id must belong to a provider this user has configured.
+// A manifest id for that provider is accepted.
+// A live-only id is accepted when this user's catalog lists it.
+// A cold cache is refreshed with a short timeout. This does not log the key.
 func (s *Server) AcceptModel(ctx context.Context, userID, id, previous string) bool {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return false
 	}
 	if previous != "" && id == strings.TrimSpace(previous) {
-		return true
-	}
-	if castcfg.KnownModel(id) {
 		return true
 	}
 	provider := providerOf(id)
@@ -69,7 +72,28 @@ func (s *Server) AcceptModel(ctx context.Context, userID, id, previous string) b
 	if !ok {
 		return false
 	}
-	return s.modelCatalog().CachedID(provider, token, id)
+	if castcfg.KnownModel(id) {
+		return true
+	}
+	cat := s.modelCatalog()
+	if cat.CachedID(provider, token, id) {
+		return true
+	}
+	if !cat.AllowsFetch() {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, modelValidateTimeout)
+	defer cancel()
+	list, err := cat.List(ctx, provider, token)
+	if err != nil || list.Fallback {
+		return false
+	}
+	for _, model := range list.Models {
+		if model.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) modelPicker(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +145,7 @@ func (s *Server) keyFineFor(ctx context.Context, userID, model string, oob bool)
 
 func (s *Server) assemblePick(ctx context.Context, userID, asked, current, surface string, fetch, explicit bool) modelPick {
 	current = strings.TrimSpace(current)
-	providers := s.configuredProviders(ctx, userID, fetch)
+	providers := s.configuredProviders(ctx, userID)
 	pick := modelPick{Surface: surface}
 	if surface == "form" {
 		pick.Help = modelHelp
@@ -241,7 +265,7 @@ func chooseListed(provider string, models []modellist.Model, current string, kee
 	return "", false
 }
 
-func (s *Server) configuredProviders(ctx context.Context, userID string, fetch bool) []providerChoice {
+func (s *Server) configuredProviders(ctx context.Context, userID string) []providerChoice {
 	var out []providerChoice
 	for _, p := range castcfg.KeyedProviders() {
 		if _, ok := s.modelToken(ctx, userID, p.Key); !ok {
@@ -253,7 +277,7 @@ func (s *Server) configuredProviders(ctx context.Context, userID string, fetch b
 		}
 		out = append(out, providerChoice{Key: p.Key, Name: name})
 	}
-	if s.ollamaReady(ctx, fetch) {
+	if s.ollamaReady() {
 		name := castcfg.ProviderName("ollama")
 		if name == "" {
 			name = "ollama"
@@ -263,22 +287,17 @@ func (s *Server) configuredProviders(ctx context.Context, userID string, fetch b
 	return out
 }
 
-func (s *Server) ollamaReady(ctx context.Context, fetch bool) bool {
-	if !modellist.OllamaConfigured() {
-		return false
-	}
-	cat := s.modelCatalog()
-	if fetch && cat.AllowsFetch() {
-		_, err := cat.List(ctx, "ollama", "")
-		return err == nil
-	}
-	return cat.HasLive("ollama", "")
+// ollamaReady is true when a base URL is configured.
+// A cold cache still counts. The keyless flag alone does not.
+// This does not dial. The model list is loaded separately.
+func (s *Server) ollamaReady() bool {
+	return modellist.OllamaConfigured()
 }
 
 func (s *Server) modelsFor(ctx context.Context, userID, provider string, fetch bool) (modellist.List, bool) {
 	token, ok := s.modelToken(ctx, userID, provider)
 	if provider == "ollama" {
-		if !s.ollamaReady(ctx, fetch) {
+		if !s.ollamaReady() {
 			return modellist.List{}, false
 		}
 		token = ""
@@ -298,7 +317,7 @@ func (s *Server) modelsFor(ctx context.Context, userID, provider string, fetch b
 }
 
 func (s *Server) defaultConfiguredModel(ctx context.Context, userID string) string {
-	for _, p := range s.configuredProviders(ctx, userID, false) {
+	for _, p := range s.configuredProviders(ctx, userID) {
 		if id := modellist.DefaultID(p.Key); id != "" {
 			return id
 		}

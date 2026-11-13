@@ -49,7 +49,7 @@ type setupView struct {
 	Idle                                                            int
 	IdleLabel, HourCost, DayCost, Lead                              string
 	Auto, Stripped, Conflict, HasKey, Editing, ServerKey            bool
-	Alt, Block, Why                                                 string
+	Alt, Block, Why, ModelErr                                       string
 	Models                                                          []modelChoice
 	Pick                                                            modelPick
 	KeyFine                                                         keyFine
@@ -88,7 +88,7 @@ type draftTurn struct {
 
 type setupState struct {
 	Name, Title, Instructions, Job, Schedule, Reason, Color string
-	Model, KeyLabel                                         string
+	Model, KeyLabel, ModelErr, ModelHold                    string
 	Size                                                    string
 	Idle                                                    int
 	Auto, Stripped, Conflict, HasKey                        bool
@@ -186,8 +186,13 @@ func (s *Server) presentDraft(ctx context.Context, user store.User, doc draftDoc
 		view.ShowAdvanced = false
 		card := *doc.Card
 		s.refreshCard(ctx, user.ID, &card)
+		shown := card.Model
+		if card.ModelHold != "" {
+			shown = card.ModelHold
+		}
 		view.Card = presentSetup(card, doc.Editing)
-		view.Card.Pick = s.modelPick(ctx, user.ID, card.Model, "setup")
+		view.Card.ModelErr = card.ModelErr
+		view.Card.Pick = s.modelPick(ctx, user.ID, shown, "setup")
 	}
 	return view
 }
@@ -641,9 +646,26 @@ func (s *Server) saveCreate(w http.ResponseWriter, r *http.Request) {
 		instructions = instructionsFor(name, job, job)
 	}
 	model := strings.TrimSpace(r.FormValue("model"))
-	if !s.AcceptModel(r.Context(), user.ID, model, card.Model) {
+	if model == "" {
 		model = card.Model
+	} else if !s.AcceptModel(r.Context(), user.ID, model, card.Model) {
+		card.Name = name
+		card.Job = job
+		card.Instructions = instructions
+		card.ModelErr = "That model is not in the provider manifest."
+		card.ModelHold = model
+		card.Auto = false
+		doc.Editing = true
+		doc.Card = card
+		if err := s.saveDraft(r.Context(), user.ID, doc); err != nil {
+			http.Error(w, "Error", http.StatusInternalServerError)
+			return
+		}
+		s.showCreate(w, r, user)
+		return
 	}
+	card.ModelErr = ""
+	card.ModelHold = ""
 	size := strings.TrimSpace(r.FormValue("size"))
 	switch size {
 	case "1:2048", "2:4096", "8:16384":

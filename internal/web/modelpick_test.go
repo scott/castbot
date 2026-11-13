@@ -475,3 +475,316 @@ func selectedOption(t *testing.T, body, name string) string {
 	}
 	return got
 }
+
+func quietModelEnvs(t *testing.T) {
+	t.Helper()
+	t.Setenv("CASTBOT_MODELS_OFFLINE", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
+	for _, p := range castcfg.KeyedProviders() {
+		t.Setenv(castcfg.ProviderKeyEnv(p.Key), "")
+	}
+}
+
+func refuseKey(t *testing.T, body, key string) {
+	t.Helper()
+	if key != "" && strings.Contains(body, key) {
+		t.Fatal("response included the provider key")
+	}
+}
+
+func loadCard(t *testing.T, h *harness, userID string) (draftDoc, setupState) {
+	t.Helper()
+	row, err := h.st.LoadCreateDraft(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc draftDoc
+	if err := json.Unmarshal([]byte(row.Payload), &doc); err != nil || doc.Card == nil {
+		t.Fatalf("draft %v", err)
+	}
+	return doc, *doc.Card
+}
+
+func TestUnconfiguredProviderIsRejected(t *testing.T) {
+	const key = "fixture-or-configured"
+	quietModelEnvs(t)
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), key)
+	h := newHarness(t)
+	user, secret := h.account("unconfigured@example.com", "Ada", "correct-horse-1")
+	ip := "203.0.113.70:9"
+	h.login("unconfigured@example.com", "correct-horse-1", secret, ip, false)
+	orModel := firstModel(t)
+	if providerOf(orModel) != "openrouter" || !castcfg.KnownModel(orModel) {
+		t.Fatalf("fixture model %s", orModel)
+	}
+	const savedDO = "digitalocean/deepseek-v4.1-flash"
+	const otherDO = "digitalocean/deepseek-3.2"
+	if !castcfg.KnownModel(savedDO) || !castcfg.KnownModel(otherDO) || savedDO == otherDO {
+		t.Fatal("digitalocean fixture ids")
+	}
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	saveCard(t, h, user.ID, orModel)
+	saveFields := map[string][]string{
+		"name": {"Scout"}, "job": {"Check the docs"}, "instructions": {"Check the docs."},
+		"model": {otherDO},
+	}
+	code, _, hdr := h.send(http.MethodPost, "/new-agent/save", ip, saveFields, nil)
+	page := follow(t, h, ip, code, hdr)
+	refuseKey(t, page, key)
+	if !strings.Contains(page, "That model is not in the provider manifest.") || selectedOption(t, page, "model") != otherDO {
+		t.Fatal("setup card did not keep the rejected model")
+	}
+	doc, card := loadCard(t, h, user.ID)
+	if !doc.Editing || card.Model != orModel || card.ModelHold != otherDO || card.ModelErr == "" {
+		t.Fatalf("draft stored the rejected id as the saved model")
+	}
+
+	saveCard(t, h, user.ID, savedDO)
+	saveFields["model"] = []string{savedDO}
+	code, _, hdr = h.send(http.MethodPost, "/new-agent/save", ip, saveFields, nil)
+	page = follow(t, h, ip, code, hdr)
+	refuseKey(t, page, key)
+	if strings.Contains(page, "That model is not in the provider manifest.") {
+		t.Fatal("re-saving the card model was rejected")
+	}
+	doc, card = loadCard(t, h, user.ID)
+	if doc.Editing || card.Model != savedDO || card.ModelHold != "" || card.ModelErr != "" {
+		t.Fatal("card did not keep its current model")
+	}
+
+	saveFields["model"] = []string{otherDO}
+	code, _, hdr = h.send(http.MethodPost, "/new-agent/save", ip, saveFields, nil)
+	page = follow(t, h, ip, code, hdr)
+	refuseKey(t, page, key)
+	if !strings.Contains(page, "That model is not in the provider manifest.") || selectedOption(t, page, "model") != otherDO {
+		t.Fatal("setup card replaced the rejected selection")
+	}
+	doc, card = loadCard(t, h, user.ID)
+	if !doc.Editing || card.Model != savedDO || card.ModelHold != otherDO {
+		t.Fatal("rejected setup id replaced the saved model")
+	}
+
+	fields := map[string][]string{
+		"form": {"agent"}, "confirm": {"advanced"}, "name": {"Relay"}, "title": {"Helper"},
+		"section": {sec.ID}, "model": {otherDO}, "instructions": {"Check the docs."},
+	}
+	code, body, _ := h.send(http.MethodPost, "/new-agent", ip, fields, nil)
+	refuseKey(t, body, key)
+	if code != http.StatusBadRequest || !strings.Contains(body, "That model is not in the provider manifest.") || selectedOption(t, body, "model") != otherDO {
+		t.Fatalf("advanced %d", code)
+	}
+	if rows, err := h.st.ListAgents(context.Background(), user.ID); err != nil || len(rows) != 0 {
+		t.Fatalf("advanced created an agent: %d %v", len(rows), err)
+	}
+
+	archive := testTarGz(map[string]string{
+		"docs/agent.yaml":      "name: Imported\nbrain:\n  model: " + otherDO + "\n  instructions_file: instructions.md\n",
+		"docs/instructions.md": "Imported instructions.\n",
+	})
+	code, body, _ = h.send(http.MethodPost, "/new-agent/import", ip, map[string][]string{"form": {"agent"}, "section": {sec.ID}}, map[string][]byte{"archive": archive})
+	refuseKey(t, body, key)
+	if code != http.StatusOK || !strings.Contains(body, "That model is not in the provider manifest.") || selectedOption(t, body, "model") != otherDO {
+		t.Fatalf("import %d", code)
+	}
+	if rows, err := h.st.ListAgents(context.Background(), user.ID); err != nil || len(rows) != 0 {
+		t.Fatalf("import created an agent: %d %v", len(rows), err)
+	}
+
+	agent, _, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{
+		SectionID: sec.ID, Name: "Scout", Title: "Helper", Model: orModel, Status: "ready",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	yaml := "name: Scout\nbrain:\n  model: " + orModel + "\n"
+	if _, err := h.st.PutBundle(context.Background(), user.ID, agent.ID, "1", yaml, "Check the docs.\n"); err != nil {
+		t.Fatal(err)
+	}
+	edit := map[string][]string{
+		"form": {"agent"}, "name": {"Scout"}, "title": {"Helper"}, "section": {sec.ID},
+		"instructions": {"Check the docs."}, "model": {otherDO},
+	}
+	code, body, _ = h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, edit, nil)
+	refuseKey(t, body, key)
+	if code != http.StatusBadRequest || !strings.Contains(body, "That model is not in the provider manifest.") || selectedOption(t, body, "model") != otherDO {
+		t.Fatalf("edit %d", code)
+	}
+	assertModel(t, h, user.ID, agent.ID, orModel)
+
+	edit["model"] = []string{orModel}
+	code, body, _ = h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, edit, nil)
+	refuseKey(t, body, key)
+	if code != http.StatusSeeOther {
+		t.Fatalf("edit same model %d", code)
+	}
+	assertModel(t, h, user.ID, agent.ID, orModel)
+
+	if err := h.st.SetAgentModel(context.Background(), user.ID, agent.ID, savedDO); err != nil {
+		t.Fatal(err)
+	}
+	edit["model"] = []string{savedDO}
+	code, body, _ = h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, edit, nil)
+	refuseKey(t, body, key)
+	if code != http.StatusSeeOther {
+		t.Fatalf("edit kept model %d", code)
+	}
+	assertModel(t, h, user.ID, agent.ID, savedDO)
+
+	edit["model"] = []string{otherDO}
+	code, body, _ = h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, edit, nil)
+	refuseKey(t, body, key)
+	if code != http.StatusBadRequest || !strings.Contains(body, "That model is not in the provider manifest.") {
+		t.Fatalf("edit other model %d", code)
+	}
+	assertModel(t, h, user.ID, agent.ID, savedDO)
+
+	same := testTarGz(map[string]string{
+		"agent.yaml": "name: Scout\nbrain:\n  model: " + savedDO + "\n",
+	})
+	code, body, _ = h.send(http.MethodPost, "/agents/"+agent.ID+"/import", ip, map[string][]string{"form": {"agent"}, "section": {sec.ID}}, map[string][]byte{"archive": same})
+	refuseKey(t, body, key)
+	if code != http.StatusOK || strings.Contains(body, "That model is not in the provider manifest.") || selectedOption(t, body, "model") != savedDO {
+		t.Fatalf("import of the saved model %d", code)
+	}
+	assertModel(t, h, user.ID, agent.ID, savedDO)
+
+	code, body, _ = h.send(http.MethodPost, "/agents/"+agent.ID+"/import", ip, map[string][]string{"form": {"agent"}, "section": {sec.ID}}, map[string][]byte{"archive": archive})
+	refuseKey(t, body, key)
+	if code != http.StatusOK || !strings.Contains(body, "That model is not in the provider manifest.") || selectedOption(t, body, "model") != otherDO {
+		t.Fatalf("edit import %d", code)
+	}
+	assertModel(t, h, user.ID, agent.ID, savedDO)
+}
+
+func TestLiveModelSurvivesCacheExpiry(t *testing.T) {
+	const key = "fixture-live-clock"
+	quietModelEnvs(t)
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), key)
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RequestURI(), key) {
+			t.Error("key in the upstream URL")
+			http.Error(w, "no", http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+key {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		n := calls.Add(1)
+		if n == 1 {
+			_, _ = io.WriteString(w, `{"data":[{"id":"only-cached"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":[{"id":"only-live"}]}`)
+	}))
+	t.Cleanup(upstream.Close)
+	h := newHarness(t)
+	cat := h.srv.ModelCatalog()
+	cat.SetBase("openrouter", upstream.URL)
+	var now atomic.Value
+	now.Store(time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC))
+	cat.SetNow(func() time.Time { return now.Load().(time.Time) })
+	if _, err := cat.List(context.Background(), "openrouter", key); err != nil || calls.Load() != 1 {
+		t.Fatalf("warm list calls %d %v", calls.Load(), err)
+	}
+	now.Store(now.Load().(time.Time).Add(4 * time.Minute))
+
+	user, secret := h.account("live-clock@example.com", "Ada", "correct-horse-1")
+	ip := "203.0.113.71:9"
+	h.login("live-clock@example.com", "correct-horse-1", secret, ip, false)
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, page, _ := h.do(http.MethodGet, "/new-agent?advanced=1", "", ip, nil)
+	refuseKey(t, page, key)
+	if code != http.StatusOK || calls.Load() != 1 {
+		t.Fatalf("page dialed after expiry: %d calls %d", code, calls.Load())
+	}
+	const live = "openrouter/only-live"
+	fields := map[string][]string{
+		"form": {"agent"}, "confirm": {"advanced"}, "name": {"Relay"}, "title": {"Helper"},
+		"section": {sec.ID}, "model": {live}, "instructions": {"Check the docs."},
+	}
+	code, body, hdr := h.send(http.MethodPost, "/new-agent", ip, fields, nil)
+	refuseKey(t, body, key)
+	if code != http.StatusSeeOther || calls.Load() != 2 {
+		t.Fatalf("live create %d calls %d", code, calls.Load())
+	}
+	made := onlyAgent(t, h, user.ID)
+	assertModel(t, h, user.ID, made.ID, live)
+	if got := follow(t, h, ip, code, hdr); strings.Contains(got, key) {
+		t.Fatal("agent page included the provider key")
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("follow dialed: calls %d", calls.Load())
+	}
+
+	now.Store(now.Load().(time.Time).Add(4 * time.Minute))
+	saveCard(t, h, user.ID, firstModel(t))
+	code, _, hdr = h.send(http.MethodPost, "/new-agent/save", ip, map[string][]string{
+		"name": {"Scout"}, "job": {"Check the docs"}, "instructions": {"Check the docs."},
+		"model": {live},
+	}, nil)
+	page = follow(t, h, ip, code, hdr)
+	refuseKey(t, page, key)
+	if strings.Contains(page, "That model is not in the provider manifest.") || calls.Load() != 3 {
+		t.Fatalf("setup save calls %d", calls.Load())
+	}
+	_, card := loadCard(t, h, user.ID)
+	if card.Model != live || card.ModelHold != "" || card.ModelErr != "" {
+		t.Fatal("setup card reverted the live model")
+	}
+}
+
+func TestOllamaOnlyColdCacheShowsOllama(t *testing.T) {
+	quietModelEnvs(t)
+	t.Setenv("OLLAMA_BASE_URL", "http://example.invalid")
+	h := newHarness(t)
+	var calls atomic.Int32
+	h.srv.ModelCatalog().SetClient(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("pages must not dial")
+	})})
+	user, secret := h.account("ollama-only@example.com", "Ada", "correct-horse-1")
+	ip := "203.0.113.72:9"
+	h.login("ollama-only@example.com", "correct-horse-1", secret, ip, false)
+	start := time.Now()
+	code, body, _ := h.do(http.MethodGet, "/new-agent?advanced=1", "", ip, nil)
+	if code != http.StatusOK || time.Since(start) > time.Second || calls.Load() != 0 {
+		t.Fatalf("page %d dials %d", code, calls.Load())
+	}
+	if selectDisabled(t, body, "provider") || selectDisabled(t, body, "model") {
+		t.Fatal("ollama picker was disabled")
+	}
+	if got := selectValues(t, body, "provider"); len(got) != 1 || got[0] != "ollama" {
+		t.Fatalf("providers %v", got)
+	}
+	if !containsAll(selectValues(t, body, "model"), "ollama/qwen3") || !strings.Contains(body, "Ollama") || !strings.Contains(body, "load once") || strings.Contains(body, "Add a model key first") {
+		t.Fatal("cold ollama picker did not offer Ollama")
+	}
+
+	raw, err := json.Marshal(draftDoc{Editing: true, Card: &setupState{
+		Name: "Scout", Title: "Helper", Job: "Check the docs", Instructions: "Check the docs.",
+		Model: "ollama/qwen3", Size: createSize, Idle: createIdle,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.SaveCreateDraft(context.Background(), user.ID, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	start = time.Now()
+	code, body, _ = h.do(http.MethodGet, "/new-agent", "", ip, nil)
+	if code != http.StatusOK || time.Since(start) > time.Second || calls.Load() != 0 {
+		t.Fatalf("setup %d dials %d", code, calls.Load())
+	}
+	if selectDisabled(t, body, "provider") || selectedOption(t, body, "provider") != "ollama" || !strings.Contains(body, "load once") || strings.Contains(body, "Add a model key first") {
+		t.Fatal("setup card hid Ollama")
+	}
+}
