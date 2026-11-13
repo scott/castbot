@@ -29,7 +29,7 @@ func shootS20(t *testing.T, browser context.Context, dir string, width, height i
 	ts := httptest.NewTLSServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
 	ctx := tab(t, browser)
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, s20User), ts.URL+"/new-agent", width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, s20User), ts.URL+"/new-agent", width, height)...); err != nil {
 		t.Fatal(err)
 	}
 	s20Drive(t, ctx, kind, release, fake)
@@ -132,7 +132,7 @@ func s20Drive(t *testing.T, ctx context.Context, kind string, gate *s20Gate, fak
 		if i := strings.Index(loc, "?"); i >= 0 {
 			loc = loc[:i]
 		}
-		if err := chromedp.Run(ctx, chromedp.Navigate(loc+"?panel=machine")); err != nil {
+		if err := chromedp.Run(ctx, chromedp.Navigate(loc+"?panel=machine"), pageReady(t)); err != nil {
 			t.Fatal(err)
 		}
 		s20Wait(t, ctx, `!!document.querySelector('#agent-panel') && (document.body.innerText||'').indexOf('Machine')>=0 && (document.body.innerText||'').indexOf('Size')>=0 && (document.body.innerText||'').indexOf('Auto-pause')>=0`)
@@ -212,7 +212,7 @@ func s20Click(t *testing.T, ctx context.Context, script, needle string) {
 
 func s20Reload(t *testing.T, ctx context.Context, needle string) {
 	t.Helper()
-	if err := chromedp.Run(ctx, chromedp.Reload()); err != nil {
+	if err := chromedp.Run(ctx, chromedp.Reload(), pageReady(t)); err != nil {
 		t.Fatal(err)
 	}
 	s20Wait(t, ctx, needle)
@@ -220,18 +220,23 @@ func s20Reload(t *testing.T, ctx context.Context, needle string) {
 
 func s20Wait(t *testing.T, ctx context.Context, needle string) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
 	var last string
-	for time.Now().Before(deadline) {
-		var ok bool
-		err := chromedp.Run(ctx, chromedp.Evaluate(js(`!!(`+needle+`)`), &ok))
-		if err == nil && ok {
-			return
+	ok := withShotRetry(t, "s20 "+squash(needle), func() bool {
+		deadline := time.Now().Add(shotWait())
+		for time.Now().Before(deadline) {
+			var good bool
+			err := chromedp.Run(ctx, chromedp.Evaluate(js(`!!(`+needle+`)`), &good))
+			if err == nil && good {
+				return true
+			}
+			_ = chromedp.Run(ctx, chromedp.Evaluate(js(`document.body?document.body.innerText:''`), &last))
+			time.Sleep(150 * time.Millisecond)
 		}
-		_ = chromedp.Run(ctx, chromedp.Evaluate(js(`document.body?document.body.innerText:''`), &last))
-		time.Sleep(150 * time.Millisecond)
+		return false
+	})
+	if !ok {
+		t.Fatalf("wait s20 timed out after %s\ncondition: %s\n%s", shotWait(), squash(needle), squash(last))
 	}
-	t.Fatalf("needle\n%s", last)
 }
 
 func s20Card(a, b string) string {

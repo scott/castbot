@@ -74,20 +74,25 @@ func shootReplace(t *testing.T, browser context.Context, dir string, width, heig
 
 func waitText(t *testing.T, ctx context.Context, needle string) {
 	t.Helper()
-	deadline := time.Now().Add(25 * time.Second)
 	var last error
 	var text string
-	for time.Now().Before(deadline) {
-		last = chromedp.Run(ctx, chromedp.Evaluate(js(`document.body?document.body.innerText:""`), &text))
-		if last == nil && strings.Contains(text, needle) {
-			return
+	ok := withShotRetry(t, "text "+needle, func() bool {
+		deadline := time.Now().Add(shotWait())
+		for time.Now().Before(deadline) {
+			last = chromedp.Run(ctx, chromedp.Evaluate(js(`document.body?document.body.innerText:""`), &text))
+			if last == nil && strings.Contains(text, needle) {
+				return true
+			}
+			if last != nil && !strings.Contains(last.Error(), "navigated") && !strings.Contains(last.Error(), "context") {
+				t.Fatal(last)
+			}
+			time.Sleep(150 * time.Millisecond)
 		}
-		if last != nil && !strings.Contains(last.Error(), "navigated") && !strings.Contains(last.Error(), "context") {
-			t.Fatal(last)
-		}
-		time.Sleep(150 * time.Millisecond)
+		return false
+	})
+	if !ok {
+		t.Fatalf("wait for text %q timed out after %s: %v\n%s", needle, shotWait(), last, squash(text))
 	}
-	t.Fatalf("missing %q: %v\n%s", needle, last, text)
 }
 
 func replaceShot(t *testing.T, theme, kind string) (*harness, store.Agent, string, string) {

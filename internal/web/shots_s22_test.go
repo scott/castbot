@@ -21,7 +21,7 @@ func shootS22(t *testing.T, browser context.Context, dir string, width, height i
 	ts := httptest.NewTLSServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
 	ctx := tab(t, browser)
-	actions := cliOpen(ts.URL, sessionToken(t, h, userID), ts.URL+page, width, height)
+	actions := cliOpen(t, ts.URL, sessionToken(t, h, userID), ts.URL+page, width, height)
 	if kind == "15d-still" {
 		actions = append([]chromedp.Action{chromedp.ActionFunc(func(ctx context.Context) error {
 			return emulation.SetEmulatedMedia().WithFeatures([]*emulation.MediaFeature{{
@@ -39,7 +39,7 @@ func shootS22(t *testing.T, browser context.Context, dir string, width, height i
 		}
 	}
 	if needle != "" {
-		if err := chromedp.Run(ctx, chromedp.Poll(js(needle), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+		if err := chromedp.Run(ctx, shotPoll(t, "s22 content", js(needle))); err != nil {
 			var text string
 			_ = chromedp.Run(ctx, chromedp.Evaluate(js(`document.body?document.body.innerText:''`), &text))
 			t.Fatalf("needle: %v\n%s", err, text)

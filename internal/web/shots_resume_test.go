@@ -45,10 +45,10 @@ func shootPausedOpen(t *testing.T, browser context.Context, dir string, width, h
 	fake.WakeWait = wake
 	t.Cleanup(func() { close(wake) })
 	ctx := tab(t, browser)
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), ts.URL+"/", width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), ts.URL+"/", width, height)...); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`!!document.querySelector('a.ag[data-name="Atlas"]') && (document.body.innerText||'').indexOf('Wren')>=0`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "paused sidebar", js(`!!document.querySelector('a.ag[data-name="Atlas"]') && (document.body.innerText||'').indexOf('Wren')>=0`))); err != nil {
 		t.Fatal(err)
 	}
 	if err := chromedp.Run(ctx, chromedp.Click(`a.ag[data-name="Atlas"]`, chromedp.ByQuery)); err != nil && !containsNav(err) {

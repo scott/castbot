@@ -33,12 +33,12 @@ func shootEditReturn(t *testing.T, browser context.Context, width, height int) {
 	}
 	ts := httptest.NewTLSServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
-	ctx := longTab(t, browser, 2*time.Minute)
+	ctx := tab(t, browser)
 	edit := ts.URL + "/agents/" + agent.ID + "/edit"
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), edit, width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), edit, width, height)...); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`(document.body.innerText||'').indexOf('Edit agent')>=0 && !!document.querySelector('a.sclose[href]') && (document.body.innerText||'').indexOf('Cancel')<0 && document.querySelector('form.na input[name="name"]').value==='Atlas'`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "edit form open", js(`(document.body.innerText||'').indexOf('Edit agent')>=0 && !!document.querySelector('a.sclose[href]') && (document.body.innerText||'').indexOf('Cancel')<0 && document.querySelector('form.na input[name="name"]').value==='Atlas'`))); err != nil {
 		t.Fatal(err)
 	}
 	assertEditClose(t, ctx)
@@ -80,14 +80,14 @@ func shootEditReturn(t *testing.T, browser context.Context, width, height int) {
 
 func waitVisibleClose(t *testing.T, ctx context.Context) {
 	t.Helper()
-	err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){
+	err := chromedp.Run(ctx, shotPoll(t, "visible close control", js(`(function(){
 		var links=document.querySelectorAll('a.sclose[href]');
 		for (var i=0;i<links.length;i++){
 			var r=links[i].getBoundingClientRect();
 			if(r.width>1 && r.height>1) return true;
 		}
 		return false;
-	})()`), nil, chromedp.WithPollingTimeout(8*time.Second)))
+	})()`)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,23 +185,32 @@ func assertModelLabelShown(t *testing.T, ctx context.Context, label string) {
 
 func editWait(t *testing.T, ctx context.Context, label, expr string) {
 	t.Helper()
-	deadline := time.Now().Add(8 * time.Second)
 	var last string
+	ok := withShotRetry(t, label, func() bool {
+		return editWaitOnce(t, ctx, expr, &last)
+	})
+	if ok {
+		return
+	}
+	t.Fatalf("wait %s timed out after %s: %s\ncondition: %s\n%s", label, shotWait(), last, squash(expr), pageSnap(ctx))
+}
+
+func editWaitOnce(t *testing.T, ctx context.Context, expr string, last *string) bool {
+	t.Helper()
+	deadline := time.Now().Add(shotWait())
 	for time.Now().Before(deadline) {
 		var ok bool
 		err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){function pageText(){return document.body&&document.body.innerText||'';}return !!(`+expr+`);})()`), &ok))
 		if err == nil && ok {
-			return
+			return true
 		}
 		if err != nil && !containsNav(err) && !strings.Contains(err.Error(), "Uncaught") && !strings.Contains(err.Error(), "exception") {
 			t.Fatal(err)
 		}
 		if err != nil {
-			last = err.Error()
+			*last = err.Error()
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	var now string
-	_ = chromedp.Run(ctx, chromedp.Evaluate(js(`location.href+"\n"+(document.body?document.body.innerText:"")`), &now))
-	t.Fatalf("%s: %s\n%s", label, last, now)
+	return false
 }

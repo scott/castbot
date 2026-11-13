@@ -29,6 +29,9 @@ import (
 )
 
 func TestShots(t *testing.T) {
+	if _, err := parseShotWait(os.Getenv("CASTBOT_SHOT_WAIT")); err != nil {
+		t.Fatal(err)
+	}
 	chrome := "/usr/bin/google-chrome"
 	if p := os.Getenv("CASTBOT_CHROME"); p != "" {
 		chrome = p
@@ -332,6 +335,30 @@ func TestShots(t *testing.T) {
 	}
 }
 
+// htmxApproveReady is true once HTMX has processed the approve control.
+// The button and its form carry htmx-internal-data, the form is listening
+// for submit, and the control is not still swapping or settling.
+func htmxApproveReady(sel string) string {
+	return `(function(){
+		var btn = document.querySelector('` + sel + `');
+		if (!btn || !window.htmx) return false;
+		var form = btn.form || (btn.closest && btn.closest('form'));
+		if (!form) return false;
+		var bd = btn['htmx-internal-data'];
+		var fd = form['htmx-internal-data'];
+		if (!bd || !bd.firstInitCompleted || !fd || !fd.firstInitCompleted) return false;
+		if (!fd.listenerInfos || !fd.listenerInfos.length) return false;
+		function settling(el) {
+			if (!el || !el.classList) return false;
+			return el.classList.contains('htmx-added') || el.classList.contains('htmx-settling') || el.classList.contains('htmx-swapping') || el.classList.contains('htmx-request');
+		}
+		if (settling(btn) || settling(form) || settling(document.body)) return false;
+		var cards = form.closest && form.closest('.cards');
+		if (settling(cards)) return false;
+		return true;
+	})()`
+}
+
 // shootDecisionBar clicks Approve on a live card and checks the waiting bar
 // and the nav badges clear. The stream can swap the card before the click
 // response lands, so the bar has to ride the stream event.
@@ -356,23 +383,21 @@ func shootDecisionBar(t *testing.T, browser context.Context, width, height, n in
 		token := sessionToken(t, h, user.ID)
 		sel := "#appr-" + ap.ID + " button.pri"
 		ctx := tab(t, browser)
-		if err := chromedp.Run(ctx, cliOpen(ts.URL, token, ts.URL+"/agents/"+agent.ID, width, height)...); err != nil {
+		if err := chromedp.Run(ctx, cliOpen(t, ts.URL, token, ts.URL+"/agents/"+agent.ID, width, height)...); err != nil {
 			t.Fatalf("open %d: %v", i, err)
 		}
-		if err := chromedp.Run(ctx, chromedp.WaitVisible(sel, chromedp.ByQuery)); err != nil {
-			var url, text string
-			_ = chromedp.Run(ctx, chromedp.Location(&url), chromedp.Evaluate(js(`document.body?document.body.innerText:''`), &text))
-			t.Fatalf("button %d: %v url %s text %s", i, err, url, text)
+		if err := chromedp.Run(ctx, shotVisible(t, sel, chromedp.ByQuery)); err != nil {
+			t.Fatalf("button %d: %v", i, err)
 		}
-		time.Sleep(300 * time.Millisecond)
-		var ready bool
-		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`!!(window.htmx&&document.querySelector('`+sel+`'))`), &ready)); err != nil || !ready {
-			t.Fatalf("htmx %d ready %v %v", i, ready, err)
+		// The button is in the DOM before HTMX settles the swap and binds the
+		// form. A click in that gap is a full page POST.
+		if err := chromedp.Run(ctx, shotPoll(t, "htmx processed the approve button", js(htmxApproveReady(sel)))); err != nil {
+			t.Fatalf("htmx %d: %v", i, err)
 		}
 		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.querySelector('`+sel+`').click()`), nil)); err != nil {
 			t.Fatalf("click %d: %v", i, err)
 		}
-		if err := chromedp.Run(ctx, chromedp.Poll(js(`(document.body.innerText||'').indexOf('bash finished.')>=0`), nil, chromedp.WithPollingTimeout(10*time.Second))); err != nil {
+		if err := chromedp.Run(ctx, shotPoll(t, "bash finished", js(`(document.body.innerText||'').indexOf('bash finished.')>=0`))); err != nil {
 			t.Fatalf("finish %d: %v", i, err)
 		}
 		time.Sleep(700 * time.Millisecond)
@@ -420,23 +445,25 @@ func shootStream(t *testing.T, browser context.Context, dir string, width, heigh
 		network.SetCookie("castbot_session", token).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
 		chromedp.EmulateViewport(int64(width), int64(height)),
 		chromedp.Navigate(page),
-		chromedp.WaitVisible(`textarea[name="body"]`, chromedp.ByQuery),
+		pageReady(t),
+		shotVisible(t, `textarea[name="body"]`, chromedp.ByQuery),
 		chromedp.SendKeys(`textarea[name="body"]`, "hello", chromedp.ByQuery),
 		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var s=document.querySelector(".stream");return !!(s&&s.textContent.indexOf("Hello")>=0&&s.textContent.indexOf("today?")<0);})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		shotPoll(t, "stream shows Hello before the rest of the reply", js(`(function(){var s=document.querySelector(".stream");return !!(s&&s.textContent.indexOf("Hello")>=0&&s.textContent.indexOf("today?")<0);})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	saveShot(t, ctx, filepath.Join(dir, "streaming-"+name+".png"))
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.Reload(),
-		chromedp.Poll(js(`(function(){var s=document.querySelector(".stream");var t=document.body.innerText||"";return !!((s&&s.textContent.indexOf("Hello")>=0)||t.indexOf("Hello! I'm Atlas")>=0);})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		pageReady(t),
+		shotPoll(t, "reloaded reply is on the page", js(`(function(){var s=document.querySelector(".stream");var t=document.body.innerText||"";return !!((s&&s.textContent.indexOf("Hello")>=0)||t.indexOf("Hello! I'm Atlas")>=0);})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	saveShot(t, ctx, filepath.Join(dir, "reload-"+name+".png"))
 	if err := chromedp.Run(ctx,
-		chromedp.Poll(js(`(function(){var t=document.querySelector("#msgs").innerText;var n=t.split("How can I help you today?").length-1;return n===1&&t.indexOf("Hello! I'm Atlas.")>=0;})()`), nil, chromedp.WithPollingTimeout(20*time.Second)),
+		shotPoll(t, "reply finished once", js(`(function(){var t=document.querySelector("#msgs").innerText;var n=t.split("How can I help you today?").length-1;return n===1&&t.indexOf("Hello! I'm Atlas.")>=0;})()`)),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -465,10 +492,11 @@ func shootError(t *testing.T, browser context.Context, dir string, width, height
 		network.SetCookie("castbot_session", token).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
 		chromedp.EmulateViewport(int64(width), int64(height)),
 		chromedp.Navigate(page),
-		chromedp.WaitVisible(`textarea[name="body"]`, chromedp.ByQuery),
+		pageReady(t),
+		shotVisible(t, `textarea[name="body"]`, chromedp.ByQuery),
 		chromedp.SendKeys(`textarea[name="body"]`, "hello", chromedp.ByQuery),
 		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
-		chromedp.Poll(retryInside(), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		shotPoll(t, "retry control inside the thread", retryInside()),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +504,8 @@ func shootError(t *testing.T, browser context.Context, dir string, width, height
 	assertNoSideScroll(t, ctx)
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.Reload(),
-		chromedp.Poll(retryInside(), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		pageReady(t),
+		shotPoll(t, "retry control inside the thread", retryInside()),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -485,10 +514,11 @@ func shootError(t *testing.T, browser context.Context, dir string, width, height
 	}
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.Reload(),
-		chromedp.Poll(js(`(function(){return document.documentElement.classList.contains("light")&&`+retryInsideExpr()+`;})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		pageReady(t),
+		shotPoll(t, "light theme and retry control", js(`(function(){return document.documentElement.classList.contains("light")&&`+retryInsideExpr()+`;})()`)),
 		chromedp.SendKeys(`textarea[name="body"]`, "hello again", chromedp.ByQuery),
 		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var n=document.querySelectorAll(".errbox button, .ch-body .calm button").length;return n>=2&&`+retryInsideExpr()+`;})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		shotPoll(t, "second retry control", js(`(function(){var n=document.querySelectorAll(".errbox button, .ch-body .calm button").length;return n>=2&&`+retryInsideExpr()+`;})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -506,17 +536,18 @@ func shoot502(t *testing.T, browser context.Context, dir string, width, height i
 	ts := httptest.NewTLSServer(gate)
 	t.Cleanup(ts.Close)
 	token := sessionToken(t, h, user.ID)
-	ctx := longTab(t, browser, 90*time.Second)
+	ctx := tab(t, browser)
 	page := ts.URL + "/agents/" + agent.ID
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		network.Enable(),
 		network.SetCookie("castbot_session", token).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
 		chromedp.EmulateViewport(int64(width), int64(height)),
 		chromedp.Navigate(page),
-		chromedp.WaitVisible(`textarea[name="body"]`, chromedp.ByQuery),
+		pageReady(t),
+		shotVisible(t, `textarea[name="body"]`, chromedp.ByQuery),
 		chromedp.SendKeys(`textarea[name="body"]`, "please keep going now", chromedp.ByQuery),
 		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var s=document.querySelector(".stream");return !!(s&&s.textContent.indexOf("You said:")>=0);})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		shotPoll(t, "502 stream started", js(`(function(){var s=document.querySelector(".stream");return !!(s&&s.textContent.indexOf("You said:")>=0);})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -545,8 +576,9 @@ func shoot502(t *testing.T, browser context.Context, dir string, width, height i
 		t.Fatalf("text repeated during the 502 window: %d", during)
 	}
 	saveShot(t, ctx, filepath.Join(dir, "502-"+name+".png"))
+	// The gate answers 502 for 12s, so this wait is longer than the usual budget.
 	if err := chromedp.Run(ctx,
-		chromedp.Poll(js(`(function(){var t=document.querySelector("#msgs").innerText;return t.indexOf("OPENROUTER_API_KEY")>=0&&!document.querySelector(".pending");})()`), nil, chromedp.WithPollingTimeout(45*time.Second)),
+		shotPollFor(t, "502 reply settled", js(`(function(){var t=document.querySelector("#msgs").innerText;return t.indexOf("OPENROUTER_API_KEY")>=0&&!document.querySelector(".pending");})()`), shotWait()+15*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -584,10 +616,11 @@ func shootRestart(t *testing.T, browser context.Context, dir string, width, heig
 		network.SetCookie("castbot_session", token).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
 		chromedp.EmulateViewport(int64(width), int64(height)),
 		chromedp.Navigate(page),
-		chromedp.WaitVisible(`textarea[name="body"]`, chromedp.ByQuery),
+		pageReady(t),
+		shotVisible(t, `textarea[name="body"]`, chromedp.ByQuery),
 		chromedp.SendKeys(`textarea[name="body"]`, "hello", chromedp.ByQuery),
 		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var s=document.querySelector(".stream");return !!(s&&s.textContent.indexOf("Hello")>=0);})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		shotPoll(t, "restart stream started", js(`(function(){var s=document.querySelector(".stream");return !!(s&&s.textContent.indexOf("Hello")>=0);})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -597,7 +630,8 @@ func shootRestart(t *testing.T, browser context.Context, dir string, width, heig
 	}
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.Reload(),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("The reply was interrupted.")>=0&&t.indexOf("Retry")>=0;})()`), nil, chromedp.WithPollingTimeout(15*time.Second)),
+		pageReady(t),
+		shotPoll(t, "interrupted reply and retry", js(`(function(){var t=document.body.innerText||"";return t.indexOf("The reply was interrupted.")>=0&&t.indexOf("Retry")>=0;})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -647,10 +681,11 @@ func shootContainer(t *testing.T, browser context.Context, dir string, width, he
 		network.SetCookie("castbot_session", session).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
 		chromedp.EmulateViewport(int64(width), int64(height)),
 		chromedp.Navigate(page),
-		chromedp.WaitVisible(`textarea[name="body"]`, chromedp.ByQuery),
+		pageReady(t),
+		shotVisible(t, `textarea[name="body"]`, chromedp.ByQuery),
 		chromedp.SendKeys(`textarea[name="body"]`, "hello", chromedp.ByQuery),
 		chromedp.Click(`.comp button[type="submit"]`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var s=document.querySelector(".stream");return !!(s&&s.textContent.indexOf("Hello")>=0&&s.textContent.indexOf("today?")<0);})()`), nil, chromedp.WithPollingTimeout(20*time.Second)),
+		shotPoll(t, "container stream shows Hello before the rest of the reply", js(`(function(){var s=document.querySelector(".stream");return !!(s&&s.textContent.indexOf("Hello")>=0&&s.textContent.indexOf("today?")<0);})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -736,7 +771,7 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 	ts := httptest.NewTLSServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
 	token := sessionToken(t, h, user.ID)
-	ctx := longTab(t, browser, 3*time.Minute)
+	ctx := tab(t, browser)
 	pageURL := ts.URL + "/new-agent?advanced=1"
 	steps := []chromedp.Action{
 		network.Enable(),
@@ -747,7 +782,8 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 		network.SetCookie("castbot_session", token).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
 		chromedp.EmulateViewport(int64(width), int64(height)),
 		chromedp.Navigate(pageURL),
-		chromedp.WaitVisible(`select[name="model"]`, chromedp.ByQuery),
+		pageReady(t),
+		shotVisible(t, `select[name="model"]`, chromedp.ByQuery),
 	}
 	for i, step := range steps {
 		if err := chromedp.Run(ctx, step); err != nil {
@@ -779,7 +815,7 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 		chromedp.SetValue(`form.na input[name="name"]`, "", chromedp.ByQuery),
 		chromedp.SetValue(`form.na select[name="model"]`, "", chromedp.ByQuery),
 		chromedp.Click(`form.na button.pri`, chromedp.ByQuery),
-		chromedp.WaitVisible(`.err`, chromedp.ByQuery),
+		shotVisible(t, `.err`, chromedp.ByQuery),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -795,7 +831,7 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 	}
 	var imported string
 	if err := chromedp.Run(ctx, chromedp.Tasks{
-		chromedp.WaitVisible(`ul.skip`, chromedp.ByQuery),
+		shotVisible(t, `ul.skip`, chromedp.ByQuery),
 		chromedp.Evaluate(js(`document.body.innerText`), &imported),
 	}); err != nil {
 		t.Fatal(err)
@@ -834,7 +870,8 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 	}
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.Navigate(ts.URL + "/agents/" + agent.ID + "/edit"),
-		chromedp.WaitVisible(`input[name="title"]`, chromedp.ByQuery),
+		pageReady(t),
+		shotVisible(t, `input[name="title"]`, chromedp.ByQuery),
 		chromedp.SetValue(`form.na input[name="title"]`, "Reloaded helper", chromedp.ByQuery),
 	}); err != nil {
 		t.Fatal(err)
@@ -916,7 +953,7 @@ func tab(t *testing.T, browser context.Context) context.Context {
 	t.Helper()
 	ctx, cancel := chromedp.NewContext(browser)
 	t.Cleanup(cancel)
-	ctx, timeout := context.WithTimeout(ctx, 60*time.Second)
+	ctx, timeout := context.WithTimeout(ctx, 8*time.Minute)
 	t.Cleanup(timeout)
 	return ctx
 }
@@ -956,8 +993,9 @@ func shootMachine(t *testing.T, browser context.Context, dir string, width, heig
 		network.SetCookie("castbot_session", token).WithURL(ts.URL).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
 		chromedp.EmulateViewport(int64(width), int64(height)),
 		chromedp.Navigate(page),
-		chromedp.WaitVisible(`#confirm-name`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Paused")>=0&&t.indexOf("Wake")>=0&&t.indexOf("Type Wren")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+		pageReady(t),
+		shotVisible(t, `#confirm-name`, chromedp.ByQuery),
+		shotPoll(t, "paused machine", js(`(function(){var t=document.body.innerText||"";return t.indexOf("Paused")>=0&&t.indexOf("Wake")>=0&&t.indexOf("Type Wren")>=0;})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -966,7 +1004,8 @@ func shootMachine(t *testing.T, browser context.Context, dir string, width, heig
 	fake.SetForce("creating")
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.Reload(),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Waking")>=0&&t.indexOf("The machine is waking.")>=0&&t.indexOf("The machine is starting.")<0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+		pageReady(t),
+		shotPoll(t, "machine waking", js(`(function(){var t=document.body.innerText||"";return t.indexOf("Waking")>=0&&t.indexOf("The machine is waking.")>=0&&t.indexOf("The machine is starting.")<0;})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -997,14 +1036,14 @@ func shootCLIExport(t *testing.T, browser context.Context, dir string, width, he
 	}
 	fake.Machines["vm-shot"] = host.Machine{ID: "vm-shot", State: "running", Endpoint: endpoint}
 	ctx := tab(t, browser)
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, token, ts.URL+"/agents/"+agent.ID+"/machine", width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, token, ts.URL+"/agents/"+agent.ID+"/machine", width, height)...); err != nil {
 		t.Fatal(err)
 	}
 	if err := chromedp.Run(ctx, chromedp.Tasks{
-		chromedp.WaitVisible(`#cast-cli button`, chromedp.ByQuery),
+		shotVisible(t, `#cast-cli button`, chromedp.ByQuery),
 		chromedp.Click(`#cast-cli button`, chromedp.ByQuery),
-		chromedp.WaitVisible(`pre.cli-blob`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("microvm")>=0&&t.indexOf("Copy this now")>=0&&t.indexOf("Add to Cast CLI")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+		shotVisible(t, `pre.cli-blob`, chromedp.ByQuery),
+		shotPoll(t, "cli export", js(`(function(){var t=document.body.innerText||"";return t.indexOf("microvm")>=0&&t.indexOf("Copy this now")>=0&&t.indexOf("Add to Cast CLI")>=0;})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1030,13 +1069,13 @@ func shootCLITokens(t *testing.T, browser context.Context, dir string, width, he
 		t.Fatal(err)
 	}
 	ctx := tab(t, browser)
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, token, ts.URL+"/agents/"+agent.ID+"/machine", width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, token, ts.URL+"/agents/"+agent.ID+"/machine", width, height)...); err != nil {
 		t.Fatal(err)
 	}
 	if err := chromedp.Run(ctx, chromedp.Tasks{
-		chromedp.WaitVisible(`#cast-cli .tok button`, chromedp.ByQuery),
+		shotVisible(t, `#cast-cli .tok button`, chromedp.ByQuery),
 		chromedp.Click(`#cast-cli .tok button`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Revoked")>=0&&t.indexOf("Not yet")>=0&&t.indexOf("Not shown")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+		shotPoll(t, "cli tokens", js(`(function(){var t=document.body.innerText||"";return t.indexOf("Revoked")>=0&&t.indexOf("Not yet")>=0&&t.indexOf("Not shown")>=0;})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1068,10 +1107,10 @@ func shootCLIThread(t *testing.T, browser context.Context, dir string, width, he
 		t.Fatal("missing cli thread")
 	}
 	ctx := tab(t, browser)
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, token, ts.URL+"/agents/"+agent.ID+"?thread="+id, width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, token, ts.URL+"/agents/"+agent.ID+"?thread="+id, width, height)...); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Cast CLI")>=0&&t.indexOf("from the cli")>=0&&t.indexOf("Answer it in the Cast CLI")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "cli thread", js(`(function(){var t=document.body.innerText||"";return t.indexOf("Cast CLI")>=0&&t.indexOf("from the cli")>=0&&t.indexOf("Answer it in the Cast CLI")>=0;})()`))); err != nil {
 		t.Fatal(err)
 	}
 	shotPage(t, ctx, filepath.Join(dir, "cli-thread-"+theme+"-"+name+".png"))
@@ -1127,10 +1166,10 @@ func shootApproval(t *testing.T, browser context.Context, dir string, width, hei
 		ts := httptest.NewTLSServer(h.srv.Handler())
 		t.Cleanup(ts.Close)
 		ctx := tab(t, browser)
-		if err := chromedp.Run(ctx, cliOpen(ts.URL, c.Value, ts.URL+page, width, height)...); err != nil {
+		if err := chromedp.Run(ctx, cliOpen(t, ts.URL, c.Value, ts.URL+page, width, height)...); err != nil {
 			t.Fatal(err)
 		}
-		if err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Approve")>=0&&t.indexOf("Deny")>=0&&t.indexOf("ls demo")>=0&&t.indexOf("Hidden")>=0&&t.indexOf("demo-secret-value")<0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second))); err != nil {
+		if err := chromedp.Run(ctx, shotPoll(t, "pending approval", js(`(function(){var t=document.body.innerText||"";return t.indexOf("Approve")>=0&&t.indexOf("Deny")>=0&&t.indexOf("ls demo")>=0&&t.indexOf("Hidden")>=0&&t.indexOf("demo-secret-value")<0;})()`))); err != nil {
 			t.Fatal(err)
 		}
 		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var n=document.querySelector(".appr");if(n)n.scrollIntoView({block:"center"});return true;})()`), new(bool))); err != nil {
@@ -1231,7 +1270,7 @@ func shootApproval(t *testing.T, browser context.Context, dir string, width, hei
 	t.Cleanup(ts.Close)
 	ctx := tab(t, browser)
 	token := sessionToken(t, h, user.ID)
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, token, ts.URL+page, width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, token, ts.URL+page, width, height)...); err != nil {
 		t.Fatal(err)
 	}
 	needle := "Expired"
@@ -1243,7 +1282,7 @@ func shootApproval(t *testing.T, browser context.Context, dir string, width, hei
 	case "cli":
 		needle = "An approval was asked for bash."
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("`+needle+`")>=0&&t.indexOf("demo-secret-value")<0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "approval "+needle, js(`(function(){var t=document.body.innerText||"";return t.indexOf("`+needle+`")>=0&&t.indexOf("demo-secret-value")<0;})()`))); err != nil {
 		t.Fatal(err)
 	}
 	if kind == "cli" {
@@ -1286,7 +1325,7 @@ func cliShot(t *testing.T, theme, name string) (*harness, *host.Fake, store.Agen
 	return h, fake, agent, sessionToken(t, h, user.ID), ts
 }
 
-func cliOpen(base, token, page string, width, height int) []chromedp.Action {
+func cliOpen(t *testing.T, base, token, page string, width, height int) []chromedp.Action {
 	return []chromedp.Action{
 		network.Enable(),
 		chromedp.ActionFunc(func(ctx context.Context) error {
@@ -1296,6 +1335,7 @@ func cliOpen(base, token, page string, width, height int) []chromedp.Action {
 		network.SetCookie("castbot_session", token).WithURL(base).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
 		chromedp.EmulateViewport(int64(width), int64(height)),
 		chromedp.Navigate(page),
+		pageReady(t),
 	}
 }
 
