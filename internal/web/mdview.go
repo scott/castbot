@@ -225,28 +225,6 @@ func foldRun(events []store.RunEvent) (text string, last int, tools string, fact
 	return b.String(), last, strings.Join(rows, ""), fact, errText
 }
 
-func textBefore(events []store.RunEvent, seq int) (before, through string) {
-	var b, t strings.Builder
-	for _, ev := range events {
-		if ev.Kind != "text" {
-			continue
-		}
-		var payload struct {
-			Text string `json:"text"`
-		}
-		if json.Unmarshal([]byte(ev.Payload), &payload) != nil {
-			continue
-		}
-		if ev.Seq < seq {
-			b.WriteString(payload.Text)
-		}
-		if ev.Seq <= seq {
-			t.WriteString(payload.Text)
-		}
-	}
-	return b.String(), t.String()
-}
-
 func toolRowHTML(fact toolFact) string {
 	state := "Done"
 	cls := "ok"
