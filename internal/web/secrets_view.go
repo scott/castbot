@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/store"
 )
 
@@ -55,8 +56,9 @@ type vaultAv struct {
 
 type vaultRow struct {
 	ID, Name, When, Used, UsedLabel, Href string
+	MoveCopy                              string
 	Avatars                               []vaultAv
-	Unused, HL                            bool
+	Unused, HL, Move                      bool
 }
 
 type vaultDetail struct {
@@ -66,7 +68,8 @@ type vaultDetail struct {
 	History                               []vaultHist
 	BannerClass, BannerLead, BannerRest   string
 	ReloadHref, ReloadLabel               string
-	Poll                                  bool
+	MoveCopy                              string
+	Poll, Move                            bool
 }
 
 type vaultAgentRow struct {
@@ -86,7 +89,8 @@ type vaultForm struct {
 	Agents                                     []vaultPick
 	Secrets                                    []vaultPick
 	Note, Submit, Intro                        string
-	Key                                        bool
+	Connection, OfferText                      string
+	Key, Offer                                 bool
 }
 
 type vaultPick struct {
@@ -403,6 +407,17 @@ func (s *Server) listView(r *http.Request, user store.User, form vaultForm, high
 			Href: "/settings/secrets/item/" + sec.ID, Avatars: avatars(got, 3),
 			Unused: len(got) == 0, HL: sec.ID == highlight,
 		}
+		kind, err := s.store.SecretKind(ctx, user.ID, sec.ID)
+		if err != nil {
+			return vaultView{}, err
+		}
+		if kind == "connection" {
+			row.When = "Connection · " + when
+			row.Unused = false
+		} else if _, ok := connect.ProviderEnv(sec.Name); ok {
+			row.Move = true
+			row.MoveCopy = connectionStayCopy
+		}
 		v.Rows = append(v.Rows, row)
 	}
 	v.Empty = len(v.Rows) == 0
@@ -486,8 +501,17 @@ func (s *Server) vaultItem(r *http.Request, user store.User, id string) (vaultVi
 		return vaultView{}, err
 	}
 	loc := userLocation(user.Timezone)
-	d := vaultDetail{ID: sec.ID, Name: sec.Name, ShowRevoke: sec.Provider == ""}
-	if sec.Provider != "" {
+	kind, err := s.store.SecretKind(ctx, user.ID, sec.ID)
+	if err != nil {
+		return vaultView{}, err
+	}
+	d := vaultDetail{ID: sec.ID, Name: sec.Name, ShowRevoke: sec.Provider == "" && kind != "connection"}
+	if kind == "connection" {
+		d.KindLine = "Connection · added " + monthDay(sec.CreatedAt, loc) + " by you. The token stays in the vault. The agent does not see it."
+		if sec.RotatedAt != "" {
+			d.KindLine += " · replaced " + monthDay(sec.RotatedAt, loc)
+		}
+	} else if sec.Provider != "" {
 		slot, _ := slotByID(sec.Provider)
 		title := slot.Title
 		if title == "" {
@@ -501,6 +525,10 @@ func (s *Server) vaultItem(r *http.Request, user store.User, id string) (vaultVi
 		d.KindLine = "Agent secret · added " + monthDay(sec.CreatedAt, loc) + " by you"
 		if sec.RotatedAt != "" {
 			d.KindLine += " · replaced " + monthDay(sec.RotatedAt, loc)
+		}
+		if _, ok := connect.ProviderEnv(sec.Name); ok {
+			d.Move = true
+			d.MoveCopy = connectionStayCopy
 		}
 	}
 	var granted []store.Agent
@@ -547,7 +575,7 @@ func (s *Server) vaultItem(r *http.Request, user store.User, id string) (vaultVi
 			return vaultView{}, err
 		}
 	}
-	if r.URL.Query().Get("give") == "1" && sec.Provider == "" {
+	if r.URL.Query().Get("give") == "1" && sec.Provider == "" && kind != "connection" {
 		form, err := s.giveAgentsForm(ctx, user, sec, granted)
 		if err != nil {
 			return vaultView{}, err
@@ -973,7 +1001,7 @@ func (s *Server) giveSecretsForm(ctx context.Context, user store.User, agent sto
 		form.Note = agent.Name + " reloads to get it. No new machine."
 	}
 	for _, sec := range rows {
-		if have[sec.ID] {
+		if have[sec.ID] || connect.BlocksGuest(sec.Name) {
 			continue
 		}
 		gids, err := s.store.GrantAgentIDs(ctx, user.ID, sec.ID)

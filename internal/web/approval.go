@@ -808,18 +808,20 @@ func (s *Server) cardsHTML(ctx context.Context, user store.User, runID, csrf str
 	if len(cards) == 0 && len(secrets) == 0 {
 		return "", nil
 	}
-	body, err := execTemplate("liveCards", page{Cards: cards, SecretCards: secrets})
-	if err != nil {
-		return "", err
-	}
-	chrome, err := s.approvalChrome(ctx, user, "", runID)
-	if err != nil {
-		return body, nil
-	}
-	return body + chrome, nil
+	return execTemplate("liveCards", page{Cards: cards, SecretCards: secrets})
 }
 
 func (s *Server) approvalChrome(ctx context.Context, user store.User, agentID, runID string) (string, error) {
+	return s.chromeHTML(ctx, user, agentID, runID, true)
+}
+
+// badgeChrome is the pending bar and the nav badges, without the activity clock.
+// The clock moves on its own event. Putting it in the card payload remounts the token field.
+func (s *Server) badgeChrome(ctx context.Context, user store.User, agentID, runID string) (string, error) {
+	return s.chromeHTML(ctx, user, agentID, runID, false)
+}
+
+func (s *Server) chromeHTML(ctx context.Context, user store.User, agentID, runID string, withAct bool) (string, error) {
 	if agentID == "" && runID != "" {
 		runRow, err := s.store.GetRun(ctx, user.ID, runID)
 		if err != nil {
@@ -836,7 +838,7 @@ func (s *Server) approvalChrome(ctx context.Context, user store.User, agentID, r
 		return "", err
 	}
 	act := ""
-	if runID != "" {
+	if withAct && runID != "" {
 		if runRow, err := s.store.GetRun(ctx, user.ID, runID); err == nil && !runTerminal(runRow.Status) {
 			events, _ := s.store.ListRunEvents(ctx, user.ID, runID, 0)
 			text, _, _, fact, _ := foldRun(events)

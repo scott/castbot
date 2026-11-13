@@ -242,3 +242,42 @@ func TestConsumeCastApprovalOnce(t *testing.T) {
 		t.Fatal("second consume")
 	}
 }
+
+func TestLegacyProviderTokenGrantIsNotPulled(t *testing.T) {
+	s := connectStore(t)
+	ctx := context.Background()
+	owner := makeUser(t, s, "ada-legacy@example.com", "Ada")
+	secRow, err := s.SystemSection(ctx, owner.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: secRow.ID, Name: "Atlas", Title: "Helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const canary = "vault-sample-token"
+	sec, err := s.PutSecret(ctx, owner.ID, "DIGITALOCEAN_API_TOKEN", canary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantSecret(ctx, owner.ID, agent.ID, sec.ID); err == nil {
+		t.Fatal("grant of a provider token name")
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO agent_secret_grants(agent_id, secret_id, workspace_id, user_id) VALUES (?, ?, ?, ?)`,
+		agent.ID, sec.ID, owner.WorkspaceID, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GrantedSecrets(ctx, owner.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range got {
+		if item.Name == "DIGITALOCEAN_API_TOKEN" || strings.Contains(item.Value, canary) {
+			t.Fatal("guest pull included a provider token")
+		}
+	}
+	on, err := s.ConnectionEnabled(ctx, owner.ID, agent.ID, connect.DigitalOcean)
+	if err != nil || on {
+		t.Fatal("env row enabled a connection")
+	}
+}

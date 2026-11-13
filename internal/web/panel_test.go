@@ -335,7 +335,7 @@ func TestPanelPartialRedirectsOutsideChrome(t *testing.T) {
 	h, user, ip := panelSession(t, "chrome-s19@example.com", "Alex Rivera")
 	agent := makeAgent(t, h.st, user.ID, "Atlas")
 	sec, err := h.st.CreateSecret(context.Background(), user.ID, store.SecretInput{
-		Name: "GITHUB_TOKEN", Value: "demo-only-value",
+		Name: "NOTES_TOKEN", Value: "demo-only-value",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -353,7 +353,7 @@ func TestPanelPartialRedirectsOutsideChrome(t *testing.T) {
 	hx := map[string]string{"HX-Request": "true", "HX-Target": "agent-panel"}
 	list := "/agents/" + agent.ID + "?panel=secrets"
 	code, body, hdr := h.do(http.MethodGet, list, "", ip, hx)
-	if code != http.StatusOK || hdr.Get("HX-Redirect") != "" || !strings.Contains(body, "GITHUB_TOKEN") || strings.Contains(body, "Give Atlas a secret") {
+	if code != http.StatusOK || hdr.Get("HX-Redirect") != "" || !strings.Contains(body, "NOTES_TOKEN") || strings.Contains(body, "Give Atlas a secret") {
 		t.Fatalf("plain panel %d redirect %q", code, hdr.Get("HX-Redirect"))
 	}
 	for _, path := range []string{
@@ -374,7 +374,7 @@ func TestPanelPartialRedirectsOutsideChrome(t *testing.T) {
 		t.Fatal("full load did not paint the give drawer")
 	}
 	code, body, _ = h.do(http.MethodGet, list+"&revoke="+sec.ID, "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, "Take GITHUB_TOKEN away from Atlas?") || strings.Contains(body, "demo-only-value") {
+	if code != http.StatusOK || !strings.Contains(body, "Take NOTES_TOKEN away from Atlas?") || strings.Contains(body, "demo-only-value") {
 		t.Fatal("full load did not paint the revoke confirm")
 	}
 	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=routines&routine="+routine.ID+"&delete=1", "", ip, nil)

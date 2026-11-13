@@ -1,12 +1,22 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/store"
 )
+
+// connectionStayCopy is the promise for a provider token saved from Settings.
+const connectionStayCopy = "This token stays in the vault. The agent does not see it. This is what the in-chat card is asking for."
+
+func trimSecretInput(value string) string {
+	return strings.TrimSpace(value)
+}
 
 func (s *Server) vaultList(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.requireUser(w, r)
@@ -71,14 +81,23 @@ func (s *Server) vaultCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
-	value := r.FormValue("value")
+	value := trimSecretInput(r.FormValue("value"))
+	connection := strings.ToLower(strings.TrimSpace(r.FormValue("connection")))
 	ids := r.Form["agent"]
+	if connection != "" {
+		s.vaultCreateConnection(w, r, user, name, value, connection, ids)
+		return
+	}
+	if id, ok := connect.ProviderEnv(name); ok {
+		s.renderAddError(w, r, user, name, "", "", "", id, connectionStayCopy)
+		return
+	}
 	if s.reloadBlocked(r.Context(), user.ID, ids) {
 		writeText(w, http.StatusConflict, replaceSentence+"\n")
 		return
 	}
 	if !store.SecretNameOK(name) {
-		s.renderAddError(w, r, user, name, "Use capital letters, digits and underscores, starting with a letter. For example SEARCH_API_KEY.", "", "")
+		s.renderAddError(w, r, user, name, "Use capital letters, digits and underscores, starting with a letter. For example SEARCH_API_KEY.", "", "", "", "")
 		return
 	}
 	sec, err := s.store.CreateSecret(r.Context(), user.ID, store.SecretInput{Name: name, Value: value})
@@ -88,11 +107,11 @@ func (s *Server) vaultCreate(w http.ResponseWriter, r *http.Request) {
 		if lookErr == nil {
 			href = "/settings/secrets/item/" + existing.ID + "/replace"
 		}
-		s.renderAddError(w, r, user, name, "You already have a secret named "+name+". Pick another name, or", href, existing.ID)
+		s.renderAddError(w, r, user, name, "You already have a secret named "+name+". Pick another name, or", href, existing.ID, "", "")
 		return
 	}
 	if errors.Is(err, store.ErrInvalid) {
-		s.renderAddError(w, r, user, name, "", "", "")
+		s.renderAddError(w, r, user, name, "", "", "", "", "")
 		return
 	}
 	if s.missing(w, err) {
@@ -112,6 +131,10 @@ func (s *Server) vaultCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.GrantSecret(r.Context(), user.ID, id, sec.ID); err != nil {
+			if errors.Is(err, store.ErrInvalid) {
+				writeText(w, http.StatusBadRequest, "Bad request\n")
+				return
+			}
 			if s.missing(w, err) {
 				return
 			}
@@ -126,7 +149,185 @@ func (s *Server) vaultCreate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings/secrets", http.StatusSeeOther)
 }
 
-func (s *Server) renderAddError(w http.ResponseWriter, r *http.Request, user store.User, name, nameErr, href, highlight string) {
+func (s *Server) vaultCreateConnection(w http.ResponseWriter, r *http.Request, user store.User, name, value, connection string, ids []string) {
+	if _, known := connect.Lookup(connection); !known {
+		s.renderAddError(w, r, user, name, "Pick DigitalOcean or GitHub.", "", "", "", "")
+		return
+	}
+	if _, err := s.store.SaveConnectionSecret(r.Context(), user.ID, connection, value); err != nil {
+		if errors.Is(err, store.ErrInvalid) {
+			s.renderAddError(w, r, user, name, "", "", "", connection, "")
+			return
+		}
+		if errors.Is(err, store.ErrConflict) {
+			existing, lookErr := s.store.SecretByName(r.Context(), user.ID, connect.SecretName(connection))
+			href := ""
+			highlight := ""
+			if lookErr == nil {
+				href = "/settings/secrets/item/" + existing.ID
+				highlight = existing.ID
+			}
+			s.renderAddError(w, r, user, name, "An environment secret already uses this connection name.", href, highlight, connection, connectionStayCopy)
+			return
+		}
+		if s.missing(w, err) {
+			return
+		}
+	}
+	if err := s.enableConnectionAgents(r.Context(), user, connection, ids); s.missing(w, err) {
+		return
+	}
+	http.Redirect(w, r, "/settings/secrets", http.StatusSeeOther)
+}
+
+// enableConnectionAgents turns on the proxy grant for each selected agent,
+// resolves that agent's pending card, and wakes the open run.
+// It never grants the connection row as an environment variable.
+func (s *Server) enableConnectionAgents(ctx context.Context, user store.User, connection string, ids []string) error {
+	for _, id := range ids {
+		agent, err := s.store.GetAgent(ctx, user.ID, id)
+		if err != nil {
+			return err
+		}
+		if err := s.store.EnableConnection(ctx, user.ID, id, connection); err != nil {
+			return err
+		}
+		rows, err := s.store.ListSecretRequests(ctx, user.ID, id, time.Unix(0, 0))
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if row.Status != "pending" || row.Connection != connection {
+				continue
+			}
+			if _, err := s.store.ResolveSecretRequest(ctx, user.ID, row.ID, "saved"); err != nil {
+				return err
+			}
+		}
+		if err := s.refreshConnectionBundle(ctx, user.ID, id); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		s.notifyAgent(ctx, user.ID, id)
+		sec, _ := s.store.ConnectionSecret(ctx, user.ID, connection)
+		s.audit(ctx, user, "connection.enabled", sec.ID, connect.SecretName(connection), agent.ID, agent.Name)
+	}
+	return nil
+}
+
+func (s *Server) vaultMove(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	sec, err := s.store.SecretMeta(r.Context(), user.ID, id)
+	if s.missing(w, err) {
+		return
+	}
+	kind, err := s.store.SecretKind(r.Context(), user.ID, id)
+	if s.missing(w, err) {
+		return
+	}
+	if kind == "connection" {
+		http.Redirect(w, r, "/settings/secrets/item/"+id, http.StatusSeeOther)
+		return
+	}
+	connection, known := connect.ProviderEnv(sec.Name)
+	if !known || sec.Provider != "" {
+		writeText(w, http.StatusBadRequest, "Bad request\n")
+		return
+	}
+	value, err := s.store.DecryptSecret(r.Context(), user.ID, id)
+	if s.missing(w, err) {
+		return
+	}
+	granted, err := s.store.GrantAgentIDs(r.Context(), user.ID, id)
+	if s.missing(w, err) {
+		return
+	}
+	agents := s.connectionTargets(r.Context(), user.ID, connection, granted)
+	vaultName := connect.SecretName(connection)
+	if sec.Name == vaultName {
+		if err := s.store.DeleteSecret(r.Context(), user.ID, id); s.missing(w, err) {
+			return
+		}
+		if _, err := s.store.SaveConnectionSecret(r.Context(), user.ID, connection, value); s.missing(w, err) {
+			return
+		}
+	} else {
+		extra, err := s.moveAliasToConnection(r, user, id, connection, vaultName, value)
+		if s.missing(w, err) {
+			return
+		}
+		agents = append(agents, extra...)
+	}
+	if err := s.enableConnectionAgents(r.Context(), user, connection, agents); s.missing(w, err) {
+		return
+	}
+	http.Redirect(w, r, "/settings/secrets", http.StatusSeeOther)
+}
+
+func (s *Server) moveAliasToConnection(r *http.Request, user store.User, id, connection, vaultName, value string) ([]string, error) {
+	_, err := s.store.SaveConnectionSecret(r.Context(), user.ID, connection, value)
+	var extra []string
+	if errors.Is(err, store.ErrConflict) {
+		occupant, lookErr := s.store.SecretByName(r.Context(), user.ID, vaultName)
+		if lookErr != nil {
+			return nil, lookErr
+		}
+		if occupant.ID != id {
+			extra, err = s.store.GrantAgentIDs(r.Context(), user.ID, occupant.ID)
+			if err != nil {
+				return nil, err
+			}
+			if err := s.store.DeleteSecret(r.Context(), user.ID, occupant.ID); err != nil {
+				return nil, err
+			}
+		}
+		if _, err := s.store.SaveConnectionSecret(r.Context(), user.ID, connection, value); err != nil {
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	if err := s.store.DeleteSecret(r.Context(), user.ID, id); err != nil {
+		return nil, err
+	}
+	return extra, nil
+}
+
+func (s *Server) connectionTargets(ctx context.Context, userID, connection string, granted []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(id string) {
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	for _, id := range granted {
+		add(id)
+	}
+	agents, err := s.store.ListAgents(ctx, userID)
+	if err != nil {
+		return out
+	}
+	for _, agent := range agents {
+		rows, err := s.store.ListSecretRequests(ctx, userID, agent.ID, time.Unix(0, 0))
+		if err != nil {
+			continue
+		}
+		for _, row := range rows {
+			if row.Status == "pending" && row.Connection == connection {
+				add(agent.ID)
+			}
+		}
+	}
+	return out
+}
+
+func (s *Server) renderAddError(w http.ResponseWriter, r *http.Request, user store.User, name, nameErr, href, highlight, connection, offer string) {
 	picks, err := s.picks(r.Context(), user.ID, checkedSet(r))
 	if s.missing(w, err) {
 		return
@@ -134,9 +335,10 @@ func (s *Server) renderAddError(w http.ResponseWriter, r *http.Request, user sto
 	form := vaultForm{
 		Title: "Add secret", Action: "/settings/secrets", Name: name,
 		Submit: "Save secret", Agents: picks, NameErr: nameErr, ConflictHref: href,
-		Intro: "Only your agents are listed. You can change this later.",
+		Intro:      "Only your agents are listed. You can change this later.",
+		Connection: connection, Offer: offer != "", OfferText: offer,
 	}
-	if nameErr == "" {
+	if nameErr == "" && offer == "" {
 		form.ValueErr = "Paste a value with no line breaks. 8192 bytes at most."
 	}
 	v, err := s.listView(r, user, form, highlight)
@@ -183,7 +385,7 @@ func (s *Server) vaultKeyCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	label := strings.TrimSpace(r.FormValue("label"))
-	value := r.FormValue("value")
+	value := trimSecretInput(r.FormValue("value"))
 	users, err := s.agentsUsingSlot(r.Context(), user.ID, slot)
 	if err != nil {
 		writeText(w, http.StatusInternalServerError, "Error\n")
@@ -324,7 +526,7 @@ func (s *Server) vaultReplace(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusConflict, replaceSentence+"\n")
 		return
 	}
-	value := r.FormValue("value")
+	value := trimSecretInput(r.FormValue("value"))
 	if _, err := s.store.ReplaceSecret(r.Context(), user.ID, id, value); errors.Is(err, store.ErrInvalid) {
 		q := r.URL.Query()
 		q.Set("modal", "replace")
@@ -489,8 +691,14 @@ func (s *Server) vaultGrantAgents(w http.ResponseWriter, r *http.Request) {
 			writeText(w, http.StatusInternalServerError, "Error\n")
 			return
 		}
-		if err := s.store.GrantSecret(r.Context(), user.ID, agentID, sec.ID); s.missing(w, err) {
-			return
+		if err := s.store.GrantSecret(r.Context(), user.ID, agentID, sec.ID); err != nil {
+			if errors.Is(err, store.ErrInvalid) {
+				writeText(w, http.StatusBadRequest, "Bad request\n")
+				return
+			}
+			if s.missing(w, err) {
+				return
+			}
 		}
 		s.audit(r.Context(), user, "secret.granted", sec.ID, sec.Name, agent.ID, agent.Name)
 	}
@@ -523,8 +731,14 @@ func (s *Server) vaultGrant(w http.ResponseWriter, r *http.Request) {
 			writeText(w, http.StatusInternalServerError, "Error\n")
 			return
 		}
-		if err := s.store.GrantSecret(r.Context(), user.ID, agentID, secretID); s.missing(w, err) {
-			return
+		if err := s.store.GrantSecret(r.Context(), user.ID, agentID, secretID); err != nil {
+			if errors.Is(err, store.ErrInvalid) {
+				writeText(w, http.StatusBadRequest, "Bad request\n")
+				return
+			}
+			if s.missing(w, err) {
+				return
+			}
 		}
 		s.audit(r.Context(), user, "secret.granted", sec.ID, sec.Name, agent.ID, agent.Name)
 		granted = append(granted, secretID)

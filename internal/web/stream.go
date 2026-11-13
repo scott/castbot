@@ -113,10 +113,11 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	sentTerminal := false
 	orphaned := false
 	lastKA := time.Now()
-	lastCards := ""
-	// Seed the pane with what the page already painted. An approvals
-	// frame is sent only after that list changes, so activity ticks
-	// do not swap the pane.
+	// Seed both with what the page already painted. A frame is sent
+	// only after that HTML changes, so an activity tick does not
+	// remount the token field. The badge chrome rides on the approvals
+	// frame, and a badge-only change does not count as a new pane.
+	lastCards, _ := s.cardsHTML(r.Context(), user, runRow.ID, from(r).CSRF)
 	lastPane, _ := s.approvalsSyncHTML(r.Context(), user, runRow.AgentID, from(r).CSRF)
 	st := &liveSend{run: runRow}
 	if err := s.primeLive(r.Context(), user, st, cur); err != nil {
@@ -559,10 +560,26 @@ func batchTerminal(events []store.RunEvent) bool {
 	return false
 }
 
+// liveAsideHTML is the approvals pane plus the pending bar and badges.
+// The activity clock is not included, so a tick does not change this string.
+func (s *Server) liveAsideHTML(ctx context.Context, user store.User, agentID, runID, csrf string) (string, error) {
+	pane, err := s.approvalsSyncHTML(ctx, user, agentID, csrf)
+	if err != nil {
+		return "", err
+	}
+	badge, berr := s.badgeChrome(ctx, user, agentID, runID)
+	if berr != nil {
+		return pane, nil
+	}
+	return pane + badge, nil
+}
+
 func (s *Server) writeLiveCards(ctx context.Context, w http.ResponseWriter, user store.User, runRow store.Run, csrf string, last, lastPane *string) error {
 	if lastPane != nil {
-		if next, perr := s.approvalsSyncHTML(ctx, user, runRow.AgentID, csrf); perr == nil && next != *lastPane {
-			if err := writeSSE(w, "", "approvals", next); err != nil {
+		next, perr := s.approvalsSyncHTML(ctx, user, runRow.AgentID, csrf)
+		if perr == nil && next != *lastPane {
+			badge, _ := s.badgeChrome(ctx, user, runRow.AgentID, runRow.ID)
+			if err := writeSSE(w, "", "approvals", next+badge); err != nil {
 				return err
 			}
 			*lastPane = next

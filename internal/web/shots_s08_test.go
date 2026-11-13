@@ -144,7 +144,7 @@ func vaultShot(t *testing.T, theme, kind string) (*harness, store.User, string, 
 func vaultPath(kind string, ids vaultIDs) (string, string) {
 	switch kind {
 	case "10a":
-		return "/settings/secrets", `(function(){var t=document.body.innerText||"";return t.indexOf("GITHUB_TOKEN")>=0 && t.indexOf("Agent secrets")>=0;})()`
+		return "/settings/secrets", `(function(){var t=document.body.innerText||"";return t.indexOf("NOTES_TOKEN")>=0 && t.indexOf("Agent secrets")>=0;})()`
 	case "10a2":
 		return "/settings/secrets", `(function(){return (document.body.innerText||"").indexOf("No secrets yet")>=0;})()`
 	case "10b":
@@ -152,25 +152,25 @@ func vaultPath(kind string, ids vaultIDs) (string, string) {
 	case "10b2":
 		return "/settings/secrets/new?bad=1&name=search-api%20key", `(function(){return (document.body.innerText||"").indexOf("Use capital letters")>=0;})()`
 	case "10b3":
-		return "/settings/secrets/new?taken=1&name=GITHUB_TOKEN", `(function(){return (document.body.innerText||"").indexOf("already have a secret named GITHUB_TOKEN")>=0;})()`
+		return "/settings/secrets/new?taken=1&name=NOTES_TOKEN", `(function(){return (document.body.innerText||"").indexOf("already have a secret named NOTES_TOKEN")>=0;})()`
 	case "10c":
 		return "/settings/secrets/item/" + ids.github, `(function(){return (document.body.innerText||"").indexOf("Hidden after save")>=0;})()`
 	case "10d":
-		return "/settings/secrets/item/" + ids.github + "/replace", `(function(){return (document.body.innerText||"").indexOf("Replace GITHUB_TOKEN?")>=0;})()`
+		return "/settings/secrets/item/" + ids.github + "/replace", `(function(){return (document.body.innerText||"").indexOf("Replace NOTES_TOKEN?")>=0;})()`
 	case "10d2":
 		return "/settings/secrets/item/" + ids.github + "?watch=1", `(function(){return (document.body.innerText||"").indexOf("New value saved")>=0;})()`
 	case "10d3":
-		return "/settings/secrets/item/" + ids.github + "?watch=1", `(function(){return (document.body.innerText||"").indexOf("GITHUB_TOKEN replaced")>=0;})()`
+		return "/settings/secrets/item/" + ids.github + "?watch=1", `(function(){return (document.body.innerText||"").indexOf("NOTES_TOKEN replaced")>=0;})()`
 	case "10e":
 		return "/settings/secrets/item/" + ids.github + "?watch=1", `(function(){return (document.body.innerText||"").indexOf("did not reload")>=0;})()`
 	case "10f":
-		return "/agents/" + ids.atlas + "?panel=secrets", `(function(){var t=document.body.innerText||"";var main=document.querySelector(".main");var shown=main&&getComputedStyle(main).display!=="none";var chat=!shown||(main.innerText||"").indexOf("Check docs/")>=0;return t.indexOf("GITHUB_TOKEN")>=0 && t.indexOf("OpenRouter key")>=0 && chat;})()`
+		return "/agents/" + ids.atlas + "?panel=secrets", `(function(){var t=document.body.innerText||"";var main=document.querySelector(".main");var shown=main&&getComputedStyle(main).display!=="none";var chat=!shown||(main.innerText||"").indexOf("Check docs/")>=0;return t.indexOf("NOTES_TOKEN")>=0 && t.indexOf("OpenRouter key")>=0 && chat;})()`
 	case "10f2":
-		return "/agents/" + ids.atlas + "?panel=secrets&revoke=" + ids.github, `(function(){return (document.body.innerText||"").indexOf("Take GITHUB_TOKEN away from Atlas?")>=0;})()`
+		return "/agents/" + ids.atlas + "?panel=secrets&revoke=" + ids.github, `(function(){return (document.body.innerText||"").indexOf("Take NOTES_TOKEN away from Atlas?")>=0;})()`
 	case "10f3":
 		return "/agents/" + ids.atlas + "?panel=secrets&give=1", `(function(){return (document.body.innerText||"").indexOf("Give Atlas a secret")>=0;})()`
 	case "10g":
-		return "/settings/secrets/item/" + ids.github + "/delete", `(function(){return (document.body.innerText||"").indexOf("Delete GITHUB_TOKEN?")>=0;})()`
+		return "/settings/secrets/item/" + ids.github + "/delete", `(function(){return (document.body.innerText||"").indexOf("Delete NOTES_TOKEN?")>=0;})()`
 	case "10g2":
 		return "/settings/secrets/item/" + ids.key + "/delete", `(function(){var t=document.body.innerText||"";return t.indexOf("Replace this key, or change those agents' model first.")>=0 && t.indexOf("Agent secrets")>=0;})()`
 	default:
@@ -255,7 +255,7 @@ func seedVaultCast(t *testing.T, st *store.Store, userID string, withSecrets boo
 		return sec.ID
 	}
 	ids.key = put("PROVIDER_A_MAIN", "provider-a-main", "a", time.Date(2026, 10, 28, 15, 0, 0, 0, time.UTC))
-	ids.github = put("GITHUB_TOKEN", "", "", time.Date(2026, 10, 28, 15, 0, 1, 0, time.UTC))
+	ids.github = put("NOTES_TOKEN", "", "", time.Date(2026, 10, 28, 15, 0, 1, 0, time.UTC))
 	ids.docs = put("DOCS_REPO_TOKEN", "", "", time.Date(2026, 10, 28, 15, 1, 0, 0, time.UTC))
 	ids.stripe = put("STRIPE_TEST_KEY", "", "", time.Date(2026, 11, 2, 16, 0, 0, 0, time.UTC))
 	ids.slack = put("SLACK_WEBHOOK_URL", "", "", time.Date(2026, 11, 5, 16, 0, 0, 0, time.UTC))
@@ -270,22 +270,22 @@ func seedVaultCast(t *testing.T, st *store.Store, userID string, withSecrets boo
 	grant(ids.atlas, ids.docs)
 	grant(ids.ledger, ids.stripe)
 	st.SetNow(func() time.Time { return time.Date(2026, 10, 28, 20, 20, 0, 0, time.UTC) })
-	if err := st.RecordSecretAudit(ctx, userID, "secret.added", ids.github, secretEvent{Name: "GITHUB_TOKEN", Agent: "Atlas", AgentID: ids.atlas}); err != nil {
+	if err := st.RecordSecretAudit(ctx, userID, "secret.added", ids.github, secretEvent{Name: "NOTES_TOKEN", Agent: "Atlas", AgentID: ids.atlas}); err != nil {
 		t.Fatal(err)
 	}
 	st.SetNow(func() time.Time { return time.Date(2026, 10, 30, 17, 5, 0, 0, time.UTC) })
-	if err := st.RecordSecretAudit(ctx, userID, "secret.granted", ids.github, secretEvent{Name: "GITHUB_TOKEN", Agent: "Juniper", AgentID: ids.juniper}); err != nil {
+	if err := st.RecordSecretAudit(ctx, userID, "secret.granted", ids.github, secretEvent{Name: "NOTES_TOKEN", Agent: "Juniper", AgentID: ids.juniper}); err != nil {
 		t.Fatal(err)
 	}
 	st.SetNow(func() time.Time { return time.Date(2026, 11, 1, 16, 30, 0, 0, time.UTC) })
-	if err := st.RecordSecretAudit(ctx, userID, "secret.granted", ids.github, secretEvent{Name: "GITHUB_TOKEN", Agent: "Wren", AgentID: ids.wren}); err != nil {
+	if err := st.RecordSecretAudit(ctx, userID, "secret.granted", ids.github, secretEvent{Name: "NOTES_TOKEN", Agent: "Wren", AgentID: ids.wren}); err != nil {
 		t.Fatal(err)
 	}
 	st.SetNow(func() time.Time { return time.Date(2026, 11, 3, 23, 12, 0, 0, time.UTC) })
 	if _, err := st.ReplaceSecret(ctx, userID, ids.github, shotSecretValue); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.RecordSecretAudit(ctx, userID, "secret.replaced", ids.github, secretEvent{Name: "GITHUB_TOKEN", Email: "alex@example.com"}); err != nil {
+	if err := st.RecordSecretAudit(ctx, userID, "secret.replaced", ids.github, secretEvent{Name: "NOTES_TOKEN", Email: "alex@example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	return ids

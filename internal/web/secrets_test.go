@@ -30,7 +30,7 @@ func TestVaultPageHidesValues(t *testing.T) {
 	user, secret := h.account("ada-vault@example.com", "Ada", "correct-horse-1")
 	h.login("ada-vault@example.com", "correct-horse-1", secret, ip, false)
 	const value = "vault-sample-value-9k"
-	sec, err := h.st.PutSecret(context.Background(), user.ID, "GITHUB_TOKEN", value)
+	sec, err := h.st.PutSecret(context.Background(), user.ID, "NOTES_TOKEN", value)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestVaultPageHidesValues(t *testing.T) {
 	if strings.Contains(body, value) || strings.Contains(body, `type="password" name="value" value=`) {
 		t.Fatal("list rendered a value")
 	}
-	if !strings.Contains(body, `aria-label="Value hidden"`) || !strings.Contains(body, "••••••••") || strings.Contains(body, "data-show-password") || !strings.Contains(body, "GITHUB_TOKEN") {
+	if !strings.Contains(body, `aria-label="Value hidden"`) || !strings.Contains(body, "••••••••") || strings.Contains(body, "data-show-password") || !strings.Contains(body, "NOTES_TOKEN") {
 		t.Fatal("mask missing")
 	}
 	code, body, _ = h.do(http.MethodGet, "/settings/secrets/item/"+sec.ID, "", ip, nil)
@@ -68,9 +68,9 @@ func TestVaultPageHidesValues(t *testing.T) {
 		t.Fatalf("invalid name %d", code)
 	}
 	code, body, _ = h.do(http.MethodPost, "/settings/secrets", h.form(url.Values{
-		"name": {"GITHUB_TOKEN"}, "value": {value},
+		"name": {"NOTES_TOKEN"}, "value": {value},
 	}), ip, nil)
-	if code != http.StatusConflict || !strings.Contains(body, "You already have a secret named GITHUB_TOKEN. Pick another name, or") || !strings.Contains(body, "replace that one") || strings.Contains(body, value) {
+	if code != http.StatusConflict || !strings.Contains(body, "You already have a secret named NOTES_TOKEN. Pick another name, or") || !strings.Contains(body, "replace that one") || strings.Contains(body, value) {
 		t.Fatalf("conflict %d", code)
 	}
 	code, body, _ = h.do(http.MethodPost, "/settings/secrets", h.form(url.Values{
@@ -90,7 +90,7 @@ func TestVaultAuthzIsNotFound(t *testing.T) {
 	h := newHarness(t)
 	owner, secret := h.account("ada-authz@example.com", "Ada", "correct-horse-1")
 	h.login("ada-authz@example.com", "correct-horse-1", secret, ip, false)
-	sec, err := h.st.PutSecret(context.Background(), owner.ID, "GITHUB_TOKEN", "vault-sample-value")
+	sec, err := h.st.PutSecret(context.Background(), owner.ID, "NOTES_TOKEN", "vault-sample-value")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestPausedReplaceDoesNotWake(t *testing.T) {
 		t.Fatal(err)
 	}
 	token := readyMachine(t, h, fake, agent, "vm-wren", "paused")
-	sec, err := h.st.PutSecret(context.Background(), user.ID, "GITHUB_TOKEN", "old-vault-value")
+	sec, err := h.st.PutSecret(context.Background(), user.ID, "NOTES_TOKEN", "old-vault-value")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestPausedReplaceDoesNotWake(t *testing.T) {
 		}
 	}
 	code, body, _ := h.do(http.MethodGet, "/api/castlet/agents/"+agent.ID+"/secrets", "", ip, map[string]string{"Authorization": "Bearer " + token})
-	if code != http.StatusOK || !strings.Contains(body, "GITHUB_TOKEN") || !strings.Contains(body, "new-vault-value") {
+	if code != http.StatusOK || !strings.Contains(body, "NOTES_TOKEN") || !strings.Contains(body, "new-vault-value") {
 		t.Fatal("next pull did not return the new value")
 	}
 	if !strings.Contains(hdr.Get("Location"), "watch=1") {
@@ -197,7 +197,7 @@ func TestReloadWaitsForReplyThenRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	readyMachine(t, h, fake, agent, "vm-juniper", "running")
-	sec, err := h.st.PutSecret(context.Background(), user.ID, "GITHUB_TOKEN", "old-vault-value")
+	sec, err := h.st.PutSecret(context.Background(), user.ID, "NOTES_TOKEN", "old-vault-value")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ func TestReplaceLockRefusesVaultReload(t *testing.T) {
 	if _, _, err := h.st.BeginReplacement(context.Background(), user.ID, agent.ID, "ada@example.com", "example.invalid/castbot-runtime:s08", false); err != nil {
 		t.Fatal(err)
 	}
-	sec, err := h.st.PutSecret(context.Background(), user.ID, "GITHUB_TOKEN", "old-vault-value")
+	sec, err := h.st.PutSecret(context.Background(), user.ID, "NOTES_TOKEN", "old-vault-value")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -601,7 +601,7 @@ func TestReloadWaitsForApproval(t *testing.T) {
 	h.login("ada-approve@example.com", "correct-horse-1", secret, ip, false)
 	agent := vaultAgent(t, h.st, user.ID, "Juniper")
 	readyMachine(t, h, fake, agent, "vm-approve", "running")
-	sec, err := h.st.PutSecret(context.Background(), user.ID, "GITHUB_TOKEN", "old-vault-value")
+	sec, err := h.st.PutSecret(context.Background(), user.ID, "NOTES_TOKEN", "old-vault-value")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,7 +659,7 @@ func TestVaultMutationsNeedCSRFAndReplaceLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	readyMachine(t, h, fake, agent, "vm-lock", "running")
-	sec, err := h.st.PutSecret(context.Background(), user.ID, "GITHUB_TOKEN", "old-vault-value")
+	sec, err := h.st.PutSecret(context.Background(), user.ID, "NOTES_TOKEN", "old-vault-value")
 	if err != nil {
 		t.Fatal(err)
 	}
