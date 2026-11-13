@@ -3,6 +3,7 @@
 //
 // The model list is the manifest copied from scott/castagent
 // python/cast/providers/manifest.json at ad6b1ee21462ce4c6a917ace7b8a15b3d99ef077.
+// DigitalOcean default and fallback ids were updated in this repo after that copy.
 // Builtin tool names match python/cast/agent/runtime.py BUILTIN_TOOLS at that commit.
 // Permission levels match python/cast/harness/permissions.py.
 package castcfg
