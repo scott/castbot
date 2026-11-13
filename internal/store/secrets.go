@@ -59,7 +59,11 @@ func SecretNameOK(name string) bool {
 }
 
 func secretNameBlocked(name string) bool {
-	if connect.BlocksGuest(name) {
+	// Connection vault names are not environment variables. A provider token
+	// alias may already exist as an env row so it can be moved. Grants and
+	// the guest pull still refuse that name.
+	switch strings.ToUpper(strings.TrimSpace(name)) {
+	case connect.SecretNameGitHub, connect.SecretNameDigitalOcean:
 		return true
 	}
 	switch name {
@@ -334,6 +338,19 @@ FROM secrets WHERE id = ? AND user_id = ?`, id, userID).Scan(
 	}
 	sec.RotatedAt = rotated.String
 	return sec, nil
+}
+
+// SecretKind is env or connection. The value is not returned.
+func (s *Store) SecretKind(ctx context.Context, userID, id string) (string, error) {
+	if _, err := s.SecretMeta(ctx, userID, id); err != nil {
+		return "", err
+	}
+	var kind string
+	err := s.db.QueryRowContext(ctx, `SELECT kind FROM secrets WHERE id = ? AND user_id = ?`, id, userID).Scan(&kind)
+	if err != nil {
+		return "", scanErr(err)
+	}
+	return kind, nil
 }
 
 // SecretByName returns one secret without the value.

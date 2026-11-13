@@ -27,6 +27,8 @@ func envWithToken() []string {
 		"PATH=/usr/bin",
 		"HOME=/app",
 		"GITHUB_TOKEN=" + fixtureValue,
+		"GITHUB_CONNECTION=" + fixtureValue,
+		"DIGITALOCEAN_CONNECTION=" + fixtureValue,
 		"GH_TOKEN=" + fixtureValue,
 		"DIGITALOCEAN_ACCESS_TOKEN=" + fixtureValue,
 		"GIT_CONFIG_COUNT=1",

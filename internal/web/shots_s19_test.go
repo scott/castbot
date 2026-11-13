@@ -247,12 +247,12 @@ func shootS19Secrets(t *testing.T, browser context.Context, width, height int) {
 	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
 		t.Fatal(err)
 	}
-	waitText(t, ctx, "GITHUB_TOKEN")
+	waitText(t, ctx, "NOTES_TOKEN")
 	var before string
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.body?document.body.innerText:""`), &before)); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(before, "Give Atlas a secret") || strings.Contains(before, "Take GITHUB_TOKEN away from Atlas?") {
+	if strings.Contains(before, "Give Atlas a secret") || strings.Contains(before, "Take NOTES_TOKEN away from Atlas?") {
 		t.Fatal("the drawer was open before the click")
 	}
 	if err := chromedp.Run(ctx, chromedp.Click(`a[href*="give=1"]`, chromedp.ByQuery)); err != nil && !containsNav(err) {
@@ -262,11 +262,11 @@ func shootS19Secrets(t *testing.T, browser context.Context, width, height int) {
 	if err := chromedp.Run(ctx, chromedp.Navigate(page), pageReady(t)); err != nil {
 		t.Fatal(err)
 	}
-	waitText(t, ctx, "GITHUB_TOKEN")
-	if err := chromedp.Run(ctx, chromedp.Click(`a[aria-label="Revoke GITHUB_TOKEN from Atlas"]`, chromedp.ByQuery)); err != nil && !containsNav(err) {
+	waitText(t, ctx, "NOTES_TOKEN")
+	if err := chromedp.Run(ctx, chromedp.Click(`a[aria-label="Revoke NOTES_TOKEN from Atlas"]`, chromedp.ByQuery)); err != nil && !containsNav(err) {
 		t.Fatal(err)
 	}
-	waitText(t, ctx, "Take GITHUB_TOKEN away from Atlas?")
+	waitText(t, ctx, "Take NOTES_TOKEN away from Atlas?")
 	assertVaultShot(t, ctx, height)
 	assertNoSideScroll(t, ctx)
 	assertShotClean(t, ctx)

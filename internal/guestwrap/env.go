@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/egresscontract"
 )
 
@@ -102,6 +103,9 @@ func envGet(env []string, key string) string {
 }
 
 func blockedEnvKey(key string) bool {
+	if connect.BlocksGuest(key) {
+		return true
+	}
 	switch strings.ToUpper(key) {
 	case "GH_TOKEN", "GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN",
 		"GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",

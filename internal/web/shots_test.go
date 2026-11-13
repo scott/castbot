@@ -338,6 +338,9 @@ func TestShots(t *testing.T) {
 			})
 		}
 	}
+	t.Run("secret-paste", func(t *testing.T) {
+		shootSecretPaste(t, browserCtx)
+	})
 }
 
 // htmxApproveReady is true once HTMX has processed the approve control.

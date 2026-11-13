@@ -49,7 +49,7 @@ func TestConnectionTokenStaysOutOfGuest(t *testing.T) {
 		t.Fatalf("create %d", code)
 	}
 	agent := onlyAgent(t, h, user.ID)
-	envSecret, err := h.st.PutSecret(context.Background(), user.ID, "GITHUB_TOKEN", "env-sample-value")
+	envSecret, err := h.st.PutSecret(context.Background(), user.ID, "NOTES_TOKEN", "env-sample-value")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -686,7 +686,7 @@ func (s *Server) submitSecret(w http.ResponseWriter, r *http.Request) {
 		s.writeSecretCard(w, r, user, row)
 		return
 	}
-	value := r.FormValue("value")
+	value := trimSecretInput(r.FormValue("value"))
 	_, secretErr := s.store.ConnectionSecret(r.Context(), user.ID, row.Connection)
 	has := secretErr == nil
 	if value == "" && !has {

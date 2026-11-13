@@ -67,16 +67,26 @@ func SecretName(id string) string {
 	return e.SecretName
 }
 
-// BlocksGuest reports a name the guest pull and child environment must reject.
-// Generic vault names are not in this set. Connection rows use it so a
-// mistaken grant cannot become an environment variable.
-func BlocksGuest(name string) bool {
+// ProviderEnv maps a name people type for a provider token onto a catalog id.
+// The vault stores the catalog secret name, not this alias.
+func ProviderEnv(name string) (string, bool) {
 	switch strings.ToUpper(strings.TrimSpace(name)) {
-	case SecretNameGitHub, SecretNameDigitalOcean:
-		return true
+	case "GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", SecretNameGitHub:
+		return GitHub, true
+	case "DIGITALOCEAN_API_TOKEN", "DIGITALOCEAN_TOKEN", "DIGITALOCEAN_ACCESS_TOKEN", SecretNameDigitalOcean:
+		return DigitalOcean, true
 	default:
-		return false
+		return "", false
 	}
+}
+
+// BlocksGuest reports a name the guest pull and child environment must reject.
+// Generic vault names are not in this set. Connection rows and the provider
+// token names people paste as environment variables are, so a mistaken grant
+// cannot become an environment variable.
+func BlocksGuest(name string) bool {
+	_, ok := ProviderEnv(name)
+	return ok
 }
 
 // Tool is one host-adapter tool. Write tools need an approval on the host.
