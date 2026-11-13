@@ -252,7 +252,7 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	}
 	name := "app"
 	switch {
-	case strings.HasSuffix(r.URL.Path, "/machine/card"):
+	case strings.HasSuffix(r.URL.Path, "/machine/card") || strings.HasSuffix(r.URL.Path, "/machine/refresh"):
 		name = "machinePanel"
 	case panelPartial(r):
 		if outsidePanelChrome(p) {

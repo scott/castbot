@@ -523,6 +523,13 @@ func TestEdgeResumeAndUnknownFirstRunning(t *testing.T) {
 	if code, _, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil); code != 200 {
 		t.Fatal(code)
 	}
+	if kindPresent(mustEvents(t, h, agent), store.EventEdgeResume) {
+		t.Fatal("a page load logged an edge resume")
+	}
+	code, _, hdr := h.do(http.MethodPost, "/agents/"+agent.ID+"/machine/refresh", h.form(nil), ip, nil)
+	if code != http.StatusSeeOther || !strings.HasSuffix(hdr.Get("Location"), "/machine") {
+		t.Fatalf("refresh %d %s", code, hdr.Get("Location"))
+	}
 	if !kindPresent(mustEvents(t, h, agent), store.EventEdgeResume) {
 		t.Fatal("edge resume was not logged")
 	}

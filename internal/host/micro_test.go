@@ -645,6 +645,44 @@ func TestUnpublishedHostnameIsNotRejected(t *testing.T) {
 	}
 }
 
+func TestCachedStatusSkipsTheAPI(t *testing.T) {
+	api := newScriptAPI(t, "")
+	m := newTestClient(t, api, "machine-token-for-tests")
+	if _, err := m.Status(context.Background(), "vm-1"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := m.CachedStatus("vm-1")
+	if !ok || got.State == "" || api.getN != 1 {
+		t.Fatalf("warm %+v ok %v calls %d", got, ok, api.getN)
+	}
+	m.mu.Lock()
+	hit := m.cache["vm-1"]
+	hit.at = time.Now().Add(-6 * time.Second)
+	m.cache["vm-1"] = hit
+	m.mu.Unlock()
+	if _, ok := m.CachedStatus("vm-1"); !ok {
+		t.Fatal("warm window closed at 6s")
+	}
+	if _, err := m.Status(context.Background(), "vm-1"); err != nil {
+		t.Fatal(err)
+	}
+	if api.getN != 2 {
+		t.Fatalf("status calls %d", api.getN)
+	}
+	m.mu.Lock()
+	hit = m.cache["vm-1"]
+	hit.at = time.Now().Add(-31 * time.Second)
+	m.cache["vm-1"] = hit
+	m.mu.Unlock()
+	if _, ok := m.CachedStatus("vm-1"); ok {
+		t.Fatal("stale cache was still warm")
+	}
+	m.ForgetStatus("vm-1")
+	if _, ok := m.CachedStatus("vm-1"); ok {
+		t.Fatal("forget left a cache hit")
+	}
+}
+
 func TestStatusIsCachedBriefly(t *testing.T) {
 	api := newScriptAPI(t, "")
 	m := newTestClient(t, api, "machine-token-for-tests")
