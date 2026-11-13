@@ -204,7 +204,7 @@ func TestBackgroundRefreshFeedsThePage(t *testing.T) {
 		t.Fatalf("state %s wake %d", state, wakeCount(fake))
 	}
 	code, body, _ = h.do(http.MethodGet, syncPath(t, body), "", ip, nil)
-	if code != 200 || !strings.Contains(body, "Waking") || !strings.Contains(body, "The machine is waking.") || !strings.Contains(body, `id="machine-lead"`) {
+	if code != 200 || !strings.Contains(body, "Waking") || !strings.Contains(body, "The machine is waking.") || !strings.Contains(body, `id="machine-lead"`) || !strings.Contains(body, `id="machine-chip"`) {
 		t.Fatalf("sync %d %s", code, body)
 	}
 	if wakeCount(fake) != 0 {
