@@ -2,6 +2,7 @@ package connect
 
 import (
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -64,14 +65,40 @@ func TestPublicIP(t *testing.T) {
 }
 
 func TestMutatingAndMethod(t *testing.T) {
-	if Mutating("GET", "https://api.github.com/user") || !Mutating("POST", "https://api.github.com/repos/o/r/issues") {
-		t.Fatal("verbs")
+	reads := []string{
+		"GET https://api.github.com/user",
+		"GET https://github.com/octo/demo.git/info/refs?service=git-upload-pack",
+		"POST https://github.com/octo/demo.git/git-upload-pack",
+		"POST https://github.com/octo/demo/git-upload-pack",
+		"POST https://github.com/octo/demo.git/git-upload-pack?extra=1",
+		"HEAD https://api.digitalocean.com/v2/account",
 	}
-	if !Mutating("GET", "https://github.com/o/r.git/git-receive-pack") {
-		t.Fatal("push")
+	writes := []string{
+		"POST https://api.github.com/repos/octo/demo/issues",
+		"POST https://api.github.com/repos/octo/demo/issues?x=git-upload-pack",
+		"POST https://github.com/octo/demo/issues?x=git-upload-pack",
+		"POST https://api.digitalocean.com/v2/droplets?note=git-upload-pack",
+		"POST https://api.github.com/repos/octo/git-upload-pack",
+		"POST https://github.com/octo/demo.git/git-upload-pack/extra",
+		"POST https://github.com/octo/demo.git/info/refs?service=git-upload-pack",
+		"GET https://github.com/octo/demo.git/info/refs?service=git-receive-pack",
+		"GET https://github.com/octo/demo.git/info/refs?service=git-receive-pack&other=1",
+		"GET https://github.com/octo/demo.git/git-receive-pack",
+		"POST https://github.com/octo/demo.git/git-receive-pack",
+		"GET https://github.com/octo/demo/git-receive-pack",
+		"DELETE https://api.digitalocean.com/v2/droplets/1",
 	}
-	if Mutating("POST", "https://github.com/o/r.git/git-upload-pack") {
-		t.Fatal("fetch")
+	for _, item := range reads {
+		method, raw, _ := strings.Cut(item, " ")
+		if Mutating(method, raw) {
+			t.Fatalf("read classified as write: %s", item)
+		}
+	}
+	for _, item := range writes {
+		method, raw, _ := strings.Cut(item, " ")
+		if !Mutating(method, raw) {
+			t.Fatalf("write classified as read: %s", item)
+		}
 	}
 	if MethodOK("TRACE") || MethodOK("CONNECT") || MethodOK("OPTIONS") || !MethodOK("PATCH") {
 		t.Fatal("method set")

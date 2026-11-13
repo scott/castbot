@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -327,6 +328,8 @@ func (s *Server) machineEgress(w http.ResponseWriter, r *http.Request, git bool)
 		Headers:    body.Headers,
 		Body:       rawBody,
 		ApprovalID: cleanApprovalID(body.ApprovalID),
+		Hash:       connect.RequestHash(body.Method, rawURL, rawBody),
+		Summary:    connect.RequestSummary(body.Method, rawURL, rawBody),
 	}
 	if _, known := connect.Lookup(call.Connection); !known || !connect.MethodOK(call.Method) {
 		s.finishProxy(w, userID, agentID, call, "", connect.Result{Outcome: connect.OutcomeBad}, connect.ErrBad)
@@ -425,11 +428,20 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 		if len(entry.Hosts) > 0 {
 			hostName = entry.Hosts[0]
 		}
+		tool := rpcTool(msg)
+		args := rpcArgs(msg)
+		hash, hashErr := connect.MCPHash(tool, args)
+		if hashErr != nil || tool == "" {
+			writeEgressFail(w, "bad_request")
+			return
+		}
 		call := connect.Call{
 			Connection: server,
 			Method:     "POST",
-			URL:        "https://" + hostName + "/",
-			Tool:       rpcTool(msg),
+			URL:        "https://" + hostName + "/mcp",
+			Tool:       tool,
+			Hash:       hash,
+			Summary:    connect.MCPSummary(tool, args),
 		}
 		if err := s.gateApproval(r.Context(), userID, agentID, call); err != nil {
 			outcome := connect.Code(err)
@@ -561,6 +573,9 @@ func (s *Server) waitSecret(ctx context.Context, userID, id string) string {
 func (s *Server) gateApproval(ctx context.Context, userID, agentID string, call connect.Call) error {
 	method := strings.ToUpper(strings.TrimSpace(call.Method))
 	path := auditPath(call.URL)
+	if len(call.Hash) != 64 {
+		return connect.ErrBad
+	}
 	if call.ApprovalID != "" {
 		row, err := s.store.GetConnectApproval(ctx, userID, call.ApprovalID)
 		if err != nil {
@@ -570,19 +585,10 @@ func (s *Server) gateApproval(ctx context.Context, userID, agentID string, call 
 		if err != nil {
 			return err
 		}
-		if !approvalMatches(row, agentID, call, method, path) {
+		if !approvalMatches(row, agentID, call, method) {
 			return connect.ErrDenied
 		}
 		return consumeOrWait(s, ctx, userID, row)
-	}
-	if call.Tool != "" {
-		ok, err := s.store.ConsumeToolApproval(ctx, userID, agentID, call.Tool)
-		if err != nil {
-			return err
-		}
-		if ok {
-			return nil
-		}
 	}
 	since := s.store.Now().Add(-connectApprovalFor)
 	rows, err := s.store.ListConnectApprovals(ctx, userID, agentID, since)
@@ -593,12 +599,15 @@ func (s *Server) gateApproval(ctx context.Context, userID, agentID string, call 
 		if row.Status != "pending" && row.Status != "approved" {
 			continue
 		}
-		if !approvalMatches(row, agentID, call, method, path) {
+		if !approvalMatches(row, agentID, call, method) {
 			continue
 		}
 		row, err = s.store.ExpireConnectApproval(ctx, userID, row.ID)
 		if err != nil {
 			return err
+		}
+		if row.Status == "expired" {
+			continue
 		}
 		if row.Status == "pending" {
 			return connect.ErrApproval
@@ -614,11 +623,11 @@ func (s *Server) gateApproval(ctx context.Context, userID, agentID string, call 
 		}
 	}
 	_, threadID, _ := s.store.OpenRun(ctx, userID, agentID)
-	action := call.Tool
+	action := call.Summary
 	if action == "" {
 		action = method + " " + path
 	}
-	if _, err := s.store.CreateConnectApproval(ctx, userID, agentID, threadID, call.Connection, action, method, path, s.store.Now().Add(connectApprovalFor)); err != nil {
+	if _, err := s.store.CreateConnectApproval(ctx, userID, agentID, threadID, call.Connection, action, method, path, call.Hash, s.store.Now().Add(connectApprovalFor)); err != nil {
 		return err
 	}
 	s.notifyAgent(ctx, userID, agentID)
@@ -645,14 +654,11 @@ func consumeOrWait(s *Server, ctx context.Context, userID string, row store.Conn
 	}
 }
 
-func approvalMatches(row store.ConnectApproval, agentID string, call connect.Call, method, path string) bool {
-	if row.AgentID != agentID || row.Connection != call.Connection || row.Method != method || row.Path != path {
+func approvalMatches(row store.ConnectApproval, agentID string, call connect.Call, method string) bool {
+	if row.AgentID != agentID || row.Connection != call.Connection || row.Method != method {
 		return false
 	}
-	if call.Tool != "" && row.Action != call.Tool {
-		return false
-	}
-	return true
+	return connect.SameHash(row.RequestHash, call.Hash)
 }
 
 func (s *Server) submitSecret(w http.ResponseWriter, r *http.Request) {
@@ -953,6 +959,19 @@ func rpcTool(msg connect.RPC) string {
 		_ = json.Unmarshal(msg.Params, &params)
 	}
 	return strings.TrimSpace(params.Name)
+}
+
+func rpcArgs(msg connect.RPC) json.RawMessage {
+	var params struct {
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if len(msg.Params) > 0 {
+		_ = json.Unmarshal(msg.Params, &params)
+	}
+	if len(bytes.TrimSpace(params.Arguments)) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	return params.Arguments
 }
 
 func egressCode(outcome string) string {

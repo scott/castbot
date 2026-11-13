@@ -53,6 +53,7 @@ type ConnectApproval struct {
 	Action      string
 	Method      string
 	Path        string
+	RequestHash string
 	Status      string
 	ExpiresAt   string
 	CreatedAt   string
@@ -117,12 +118,16 @@ func (s *Store) migrateV22() error {
   action TEXT NOT NULL,
   method TEXT NOT NULL,
   path TEXT NOT NULL,
+  request_hash TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired', 'consumed')),
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
   decided_at TEXT,
   consumed_at TEXT
 )`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("connect_approvals", "request_hash", `ALTER TABLE connect_approvals ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_connect_appr_user ON connect_approvals(user_id, agent_id, status)`); err != nil {
@@ -498,8 +503,8 @@ func (s *Store) finishSecret(ctx context.Context, userID, id, status string) (Se
 }
 
 // CreateConnectApproval opens a host approval card for a mutating call.
-func (s *Store) CreateConnectApproval(ctx context.Context, userID, agentID, threadID, connection, action, method, path string, expires time.Time) (ConnectApproval, error) {
-	if _, ok := connect.Lookup(connection); !ok || action == "" || method == "" {
+func (s *Store) CreateConnectApproval(ctx context.Context, userID, agentID, threadID, connection, action, method, path, requestHash string, expires time.Time) (ConnectApproval, error) {
+	if _, ok := connect.Lookup(connection); !ok || action == "" || method == "" || !hashOK(requestHash) {
 		return ConnectApproval{}, ErrInvalid
 	}
 	agent, err := s.GetAgent(ctx, userID, agentID)
@@ -514,11 +519,11 @@ func (s *Store) CreateConnectApproval(ctx context.Context, userID, agentID, thre
 	path = clipPath(path)
 	row := ConnectApproval{
 		ID: id, WorkspaceID: agent.WorkspaceID, UserID: userID, AgentID: agentID, ThreadID: threadID,
-		Connection: connection, Action: clipPath(action), Method: method, Path: path,
+		Connection: connection, Action: clipPath(action), Method: method, Path: path, RequestHash: requestHash,
 		Status: "pending", ExpiresAt: s.stamp(expires.UTC()), CreatedAt: stamp,
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO connect_approvals(id, workspace_id, user_id, agent_id, thread_id, connection, action, method, path, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
-		row.ID, row.WorkspaceID, userID, agentID, threadID, connection, row.Action, method, path, row.ExpiresAt, stamp)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO connect_approvals(id, workspace_id, user_id, agent_id, thread_id, connection, action, method, path, request_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+		row.ID, row.WorkspaceID, userID, agentID, threadID, connection, row.Action, method, path, requestHash, row.ExpiresAt, stamp)
 	if err != nil {
 		return ConnectApproval{}, err
 	}
@@ -594,7 +599,7 @@ func (s *Store) ExpireConnectApproval(ctx context.Context, userID, id string) (C
 	if err != nil {
 		return ConnectApproval{}, err
 	}
-	if row.Status != "pending" {
+	if row.Status != "pending" && row.Status != "approved" {
 		return row, nil
 	}
 	exp, err := parseTime(row.ExpiresAt)
@@ -602,7 +607,7 @@ func (s *Store) ExpireConnectApproval(ctx context.Context, userID, id string) (C
 		return row, nil
 	}
 	stamp := s.stamp(s.Now())
-	_, err = s.db.ExecContext(ctx, `UPDATE connect_approvals SET status = 'expired', decided_at = ? WHERE id = ? AND user_id = ? AND status = 'pending'`, stamp, id, userID)
+	_, err = s.db.ExecContext(ctx, `UPDATE connect_approvals SET status = 'expired', decided_at = ? WHERE id = ? AND user_id = ? AND status IN ('pending', 'approved')`, stamp, id, userID)
 	if err != nil {
 		return ConnectApproval{}, err
 	}
@@ -696,6 +701,20 @@ func auditConnect(connection, method, path, outcome string) string {
 	return string(raw)
 }
 
+func hashOK(hash string) bool {
+	if len(hash) != 64 {
+		return false
+	}
+	for _, r := range hash {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func clipPath(path string) string {
 	path = strings.ReplaceAll(path, "\n", "")
 	path = strings.ReplaceAll(path, "\r", "")
@@ -716,11 +735,11 @@ func scanSecretRequest(row rowScanner) (SecretRequest, error) {
 	return out, nil
 }
 
-const connectApprSelect = `SELECT id, workspace_id, user_id, agent_id, thread_id, connection, action, method, path, status, expires_at, created_at, COALESCE(decided_at, '') FROM connect_approvals`
+const connectApprSelect = `SELECT id, workspace_id, user_id, agent_id, thread_id, connection, action, method, path, request_hash, status, expires_at, created_at, COALESCE(decided_at, '') FROM connect_approvals`
 
 func scanConnectApproval(row rowScanner) (ConnectApproval, error) {
 	var out ConnectApproval
-	err := row.Scan(&out.ID, &out.WorkspaceID, &out.UserID, &out.AgentID, &out.ThreadID, &out.Connection, &out.Action, &out.Method, &out.Path, &out.Status, &out.ExpiresAt, &out.CreatedAt, &out.DecidedAt)
+	err := row.Scan(&out.ID, &out.WorkspaceID, &out.UserID, &out.AgentID, &out.ThreadID, &out.Connection, &out.Action, &out.Method, &out.Path, &out.RequestHash, &out.Status, &out.ExpiresAt, &out.CreatedAt, &out.DecidedAt)
 	if err != nil {
 		return ConnectApproval{}, scanErr(err)
 	}

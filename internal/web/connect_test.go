@@ -463,6 +463,127 @@ func TestSecretRequestCard(t *testing.T) {
 	}
 }
 
+func TestApprovalBindsTheExactRequest(t *testing.T) {
+	ip := "203.0.113.51:9"
+	h := newHarness(t)
+	user, secret := h.account("connect-bind@example.com", "Ada", "correct-horse-1")
+	h.login("connect-bind@example.com", "correct-horse-1", secret, ip, false)
+	agent := vaultAgent(t, h.st, user.ID, "Atlas")
+	model := firstModel(t)
+	if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Model: model}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.SaveConnectionSecret(context.Background(), user.ID, connect.GitHub, connectCanary); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.EnableConnection(context.Background(), user.ID, agent.ID, connect.GitHub); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.SaveConnectionSecret(context.Background(), user.ID, connect.DigitalOcean, "do-sample-value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.EnableConnection(context.Background(), user.ID, agent.ID, connect.DigitalOcean); err != nil {
+		t.Fatal(err)
+	}
+	var dials int
+	ts, dial := connectUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		dials++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	defer ts.Close()
+	h.srv.SetConnectDial(dial)
+	token := guestToken(t, h, agent)
+
+	code, body := machinePost(t, h, ip, token, agent.ID, "/egress/git", `{"provider":"github","method":"POST","path":"/octo/demo.git/git-upload-pack","body_b64":"`+base64.StdEncoding.EncodeToString([]byte("pack"))+`"}`)
+	if code != 200 || dials != 1 {
+		t.Fatalf("clean fetch %d dials %d", code, dials)
+	}
+	before := dials
+	trick := `{"provider":"github","method":"POST","path":"/repos/octo/demo/issues","query":"x=git-upload-pack","body_b64":"` + base64.StdEncoding.EncodeToString([]byte(`{"title":"unapproved write"}`)) + `"}`
+	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/http", trick)
+	if code != http.StatusForbidden || !strings.Contains(body, `"error":"approval_required"`) || dials != before {
+		t.Fatalf("query trick %d dials %d", code, dials)
+	}
+	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/http", `{"provider":"digitalocean","method":"POST","path":"/v2/droplets","query":"note=git-upload-pack","body_b64":"`+base64.StdEncoding.EncodeToString([]byte(`{"name":"drop"}`))+`"}`)
+	if code != http.StatusForbidden || !strings.Contains(body, `"error":"approval_required"`) || dials != before {
+		t.Fatalf("do query trick %d dials %d", code, dials)
+	}
+	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/http", `{"provider":"github","method":"POST","path":"/repos/octo/git-upload-pack","body_b64":"`+base64.StdEncoding.EncodeToString([]byte(`{"title":"path trick"}`))+`"}`)
+	if code != http.StatusForbidden || !strings.Contains(body, `"error":"approval_required"`) || dials != before {
+		t.Fatalf("path trick %d dials %d", code, dials)
+	}
+
+	harmless := `{"provider":"github","method":"POST","path":"/repos/octo/demo/issues","body_b64":"` + base64.StdEncoding.EncodeToString([]byte(`{"title":"harmless"}`)) + `"}`
+	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/http", harmless)
+	if code != http.StatusForbidden || !strings.Contains(body, `"error":"approval_required"`) || dials != before {
+		t.Fatalf("harmless card %d", code)
+	}
+	approval := waitConnectCardText(t, h, user.ID, agent.ID, "harmless")
+	code, page, _ := h.do(http.MethodGet, "/agents/"+agent.ID, "", ip, nil)
+	if code != 200 || !strings.Contains(page, "harmless") || strings.Contains(page, "swapped") || strings.Contains(page, connectCanary) {
+		t.Fatalf("card summary %d", code)
+	}
+	code, card, _ := h.do(http.MethodPost, "/agents/"+agent.ID+"/connect-approvals/"+approval+"/approve", h.form(url.Values{}), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 || strings.Contains(card, connectCanary) {
+		t.Fatalf("approve %d", code)
+	}
+	swapped := `{"provider":"github","method":"POST","path":"/repos/octo/demo/issues","body_b64":"` + base64.StdEncoding.EncodeToString([]byte(`{"title":"swapped"}`)) + `","approval_id":"` + approval + `"}`
+	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/http", swapped)
+	if code != http.StatusForbidden || !strings.Contains(body, `"error":"bad_request"`) || strings.Contains(body, "approval_required") || dials != before || strings.Contains(body, connectCanary) {
+		t.Fatalf("swapped body %d dials %d", code, dials)
+	}
+	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/http", strings.TrimSuffix(harmless, "}")+`,"approval_id":"`+approval+`"}`)
+	if code != 200 || dials != before+1 || strings.Contains(body, connectCanary) {
+		t.Fatalf("matching body %d dials %d", code, dials)
+	}
+	before = dials
+	code, _ = machinePost(t, h, ip, token, agent.ID, "/egress/http", strings.TrimSuffix(harmless, "}")+`,"approval_id":"`+approval+`"}`)
+	if code == 200 || dials != before {
+		t.Fatalf("reuse %d dials %d", code, dials)
+	}
+
+	mcp := func(title string) string {
+		return `{"server":"github","message":{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_issue","arguments":{"owner":"octo","repo":"demo","title":"` + title + `"}}}}`
+	}
+	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/mcp", mcp("harmless"))
+	if code != http.StatusForbidden || !strings.Contains(body, `"error":"approval_required"`) || dials != before {
+		t.Fatalf("mcp card %d dials %d", code, dials)
+	}
+	mcpID := waitConnectCardText(t, h, user.ID, agent.ID, "create_issue")
+	code, _, _ = h.do(http.MethodPost, "/agents/"+agent.ID+"/connect-approvals/"+mcpID+"/approve", h.form(url.Values{}), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 {
+		t.Fatalf("mcp approve %d", code)
+	}
+	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/mcp", mcp("swapped"))
+	if code != http.StatusForbidden || !strings.Contains(body, `"error":"approval_required"`) || dials != before {
+		t.Fatalf("swapped args %d dials %d", code, dials)
+	}
+	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/mcp", mcp("harmless"))
+	if code != 200 || dials != before+1 || strings.Contains(body, connectCanary) {
+		t.Fatalf("matching args %d dials %d", code, dials)
+	}
+}
+
+func waitConnectCardText(t *testing.T, h *harness, userID, agentID, needle string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, err := h.st.ListConnectApprovals(context.Background(), userID, agentID, h.st.Now().Add(-time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if row.Status == "pending" && strings.Contains(row.Action, needle) {
+				return row.ID
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	t.Fatalf("no approval card containing %s", needle)
+	return ""
+}
+
 func useSession(t *testing.T, h *harness, userID, ip string) {
 	t.Helper()
 	sess, err := h.st.CreateSession(context.Background(), userID, "Mozilla/5.0", false)

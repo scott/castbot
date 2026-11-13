@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 )
 
@@ -89,26 +90,86 @@ func PublicIP(ip net.IP) bool {
 	return true
 }
 
+var (
+	gitUploadPath  = regexp.MustCompile(`^/[^/]+/[^/]+(?:\.git)?/git-upload-pack$`)
+	gitReceivePath = regexp.MustCompile(`^/[^/]+/[^/]+(?:\.git)?/git-receive-pack$`)
+	gitInfoPath    = regexp.MustCompile(`^/[^/]+/[^/]+(?:\.git)?/info/refs$`)
+)
+
 // Mutating reports whether a proxied call can change upstream state.
-// git receive-pack is a push even when the discovery request is a GET.
-// git upload-pack is a fetch and stays a read.
+// A git fetch is a read only when it is real git smart HTTP on github.com:
+// GET .../info/refs?service=git-upload-pack, or POST .../git-upload-pack.
+// The words are not a substring match, so an API URL cannot opt out of approval
+// by mentioning git-upload-pack. git receive-pack stays a write, including
+// GET discovery on info/refs.
 func Mutating(method, rawURL string) bool {
 	method = strings.ToUpper(strings.TrimSpace(method))
-	low := strings.ToLower(rawURL)
-	if strings.Contains(low, "git-receive-pack") {
+	if gitSmart(method, rawURL) == gitWrite {
 		return true
 	}
-	if strings.Contains(low, "git-upload-pack") {
+	if gitSmart(method, rawURL) == gitRead {
 		return false
 	}
 	switch method {
-	case "GET", "HEAD", "OPTIONS":
+	case "GET", "HEAD":
 		return false
-	case "POST", "PUT", "PATCH", "DELETE":
-		return true
 	default:
 		return true
 	}
+}
+
+const (
+	gitNone = iota
+	gitRead
+	gitWrite
+)
+
+func gitSmart(method, rawURL string) int {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u == nil {
+		return gitNone
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host != "github.com" && host != "www.github.com" {
+		return gitNone
+	}
+	cleaned := gitSmartPath(u.Path)
+	if cleaned == "" {
+		return gitNone
+	}
+	if gitReceivePath.MatchString(cleaned) {
+		return gitWrite
+	}
+	if gitInfoPath.MatchString(cleaned) && queryIs(u.RawQuery, "service", "git-receive-pack") {
+		return gitWrite
+	}
+	if method == "POST" && gitUploadPath.MatchString(cleaned) {
+		return gitRead
+	}
+	if method == "GET" && gitInfoPath.MatchString(cleaned) && queryIs(u.RawQuery, "service", "git-upload-pack") && u.RawQuery == "service=git-upload-pack" {
+		return gitRead
+	}
+	return gitNone
+}
+
+func gitSmartPath(p string) string {
+	if p == "" || !strings.HasPrefix(p, "/") || strings.Contains(p, "..") || strings.ContainsAny(p, "\\\x00") {
+		return ""
+	}
+	cleaned := path.Clean(p)
+	if !strings.HasPrefix(cleaned, "/") || strings.Contains(cleaned, "..") {
+		return ""
+	}
+	return cleaned
+}
+
+func queryIs(raw, key, want string) bool {
+	q, err := url.ParseQuery(raw)
+	if err != nil {
+		return false
+	}
+	vals, ok := q[key]
+	return ok && len(vals) == 1 && vals[0] == want
 }
 
 // MethodOK is the verb set the proxy will forward.

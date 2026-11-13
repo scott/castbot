@@ -179,6 +179,37 @@ func TestSecretCardExpiryReuseAndLimit(t *testing.T) {
 	}
 }
 
+func TestApprovedConnectCardExpiresUnused(t *testing.T) {
+	s := connectStore(t)
+	ctx := context.Background()
+	owner := makeUser(t, s, "ada4@example.com", "Ada")
+	secRow, err := s.SystemSection(ctx, owner.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: secRow.ID, Name: "Atlas", Title: "Helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := strings.Repeat("ab", 32)
+	row, err := s.CreateConnectApproval(ctx, owner.ID, agent.ID, "", connect.GitHub, "POST /repos/octo/demo/issues", "POST", "/repos/octo/demo/issues", hash, s.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.DecideConnectApproval(ctx, owner.ID, row.ID, "approved"); err != nil || !ok {
+		t.Fatal("approve")
+	}
+	s.SetNow(func() time.Time { return time.Now().Add(2 * time.Minute) })
+	got, err := s.ExpireConnectApproval(ctx, owner.ID, row.ID)
+	if err != nil || got.Status != "expired" {
+		t.Fatalf("status %s %v", got.Status, err)
+	}
+	ok, err := s.ConsumeConnectApproval(ctx, owner.ID, row.ID)
+	if err != nil || ok {
+		t.Fatal("expired approval was consumed")
+	}
+}
+
 func TestConsumeCastApprovalOnce(t *testing.T) {
 	s := connectStore(t)
 	ctx := context.Background()

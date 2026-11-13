@@ -70,6 +70,9 @@ type Call struct {
 	Body       []byte
 	Tool       string
 	ApprovalID string
+	// Hash binds an approval to this exact call. Summary is the card text.
+	Hash    string
+	Summary string
 }
 
 // Result is the upstream response after the token has been stripped.
