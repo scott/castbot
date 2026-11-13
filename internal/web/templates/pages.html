@@ -132,7 +132,7 @@
 </div>
 {{end}}{{end}}
 {{if .Empty}}<div class="sb-empty"><span>No agents yet. Each agent you create gets its own machine.</span><a class="btn sm pri" href="/new-agent">{{template "plus" .}}New agent</a></div>{{end}}
-<div class="sb-foot"><a class="acct{{if eq .Page "settings" "password" "stub"}} on{{end}}" href="/settings" aria-label="Account and settings"><span class="av me">{{.Initials}}</span><span class="grow"><span class="nm">{{.User.DisplayName}}</span><br><span class="sub">{{.User.WorkspaceName}} workspace</span></span>{{template "gear" .}}</a></div>
+<div class="sb-foot"><a class="acct{{if eq .Page "settings" "password" "stub" "secrets" "connections"}} on{{end}}" href="/settings" aria-label="Account and settings"><span class="av me">{{.Initials}}</span><span class="grow"><span class="nm">{{.User.DisplayName}}</span><br><span class="sub">{{.User.WorkspaceName}} workspace</span></span>{{template "gear" .}}</a></div>
 </aside>
 {{end}}
 
@@ -350,22 +350,6 @@
 {{template "modelPicker" .AgentForm.Pick}}
 {{if .AgentForm.ModelErr}}<span class="err">{{.AgentForm.ModelErr}}</span>{{end}}
 </section>
-<section class="card" id="tools-card">
-<div class="card-h"><span class="num">4</span><h3>Tools</h3></div>
-<p class="fineprint">Write and shell tools ask before they run. Read tools are allowed. You can change each one.</p>
-{{if .AgentForm.ToolErr}}<p class="err">{{.AgentForm.ToolErr}}</p>{{end}}
-{{range .AgentForm.Tools}}<div class="toolrow"><label><input type="checkbox" name="tool" value="{{.Name}}"{{if .On}} checked{{end}}> {{.Name}}</label><div class="selwrap"><select class="sel" name="perm_{{.Name}}" aria-label="{{.Name}} permission"><option value="ask"{{if eq .Level "ask"}} selected{{end}}>Ask</option><option value="always-allow"{{if eq .Level "always-allow"}} selected{{end}}>Always allow</option><option value="deny"{{if eq .Level "deny"}} selected{{end}}>Deny</option></select></div></div>{{end}}
-</section>
-{{if .AgentForm.Editing}}<section class="card" id="connections">
-<div class="card-h"><span class="num">5</span><h3>Connections</h3></div>
-<p class="fineprint">GitHub and DigitalOcean only. The token stays in your vault. The agent asks for it in chat and never sees the value.</p>
-{{range .AgentForm.Connections}}<div class="conn">
-<label><input type="checkbox" name="connection" value="{{.ID}}"{{if .On}} checked{{end}}> {{.Title}}</label>
-<p class="fineprint">{{.Detail}}</p>
-{{if .HasSecret}}<p class="fineprint">A token is saved. Leave the field blank to keep it.</p>{{end}}
-<div class="field"><span class="lab">{{.TokenLabel}}</span><div class="inp"><input class="secret-in" type="password" name="token_{{.ID}}" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="{{.TokenLabel}}"></div></div>
-</div>{{end}}
-</section>{{end}}
 <div class="acts"><button class="btn pri" type="submit">{{.AgentForm.Submit}}</button></div>
 {{if .AgentForm.Advanced}}<p class="fineprint">The machine starts as soon as you create. You land in {{if .AgentForm.Name}}{{.AgentForm.Name}}{{else}}the agent{{end}}'s chat.</p>{{end}}
 {{if .AgentForm.KeyLine}}<p class="fineprint">{{.AgentForm.KeyLine}}</p><p class="help">Secrets you add here are saved in your vault (Settings, Secrets) and given to this agent. Changing one later reloads the agent, no new machine.</p>{{end}}
@@ -478,6 +462,7 @@
 {{else if eq .Page "chat" "machine" "agent-routines" "agent-files"}}{{template "chatMain" .}}
 {{else if eq .Page "settings"}}{{template "settingsMain" .}}
 {{else if eq .Page "secrets"}}{{template "vaultMain" .}}
+{{else if eq .Page "connections"}}{{template "connectionsMain" .}}
 {{else if eq .Page "first"}}{{template "firstMain" .}}
 {{else if eq .Page "password"}}{{template "passwordMain" .}}
 {{else if eq .Page "new" "edit"}}{{template "agentForm" .}}

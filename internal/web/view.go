@@ -181,6 +181,7 @@ type page struct {
 	Run              runBar
 	PendingTool      string
 	Vault            vaultView
+	Connections      connPage
 	Panel            string
 	LowSpace         bool
 	Files            filesPanel
@@ -251,7 +252,7 @@ func finish(p page) page {
 		if p.Replace.Confirm {
 			p.BodyClass += " p-confirm"
 		}
-	case "settings", "password", "stub", "new", "edit":
+	case "settings", "password", "stub", "new", "edit", "connections":
 		p.BodyClass = "p-main no-bnav"
 	case "approvals", "routines", "files", "usage":
 		p.BodyClass = "p-main"

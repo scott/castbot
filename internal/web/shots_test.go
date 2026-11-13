@@ -1427,13 +1427,13 @@ func saveFull(t *testing.T, ctx context.Context, path string) {
 		if (app) app.style.height = 'auto';
 		if (main) { main.style.height = 'auto'; main.style.overflow = 'visible'; }
 		if (sb) { sb.style.height = 'auto'; sb.style.overflow = 'visible'; }
-		const card = document.querySelector('#tools-card');
+		const card = document.querySelector('.na');
 		return card ? Math.ceil(card.getBoundingClientRect().bottom + window.scrollY) : 0;
 	})()`), &height)); err != nil {
 		t.Fatal(err)
 	}
-	if height < 900 {
-		t.Fatalf("tools card bottom %d", height)
+	if height < 700 {
+		t.Fatalf("form bottom %d", height)
 	}
 	var buf []byte
 	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {

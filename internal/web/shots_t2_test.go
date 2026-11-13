@@ -42,14 +42,14 @@ func shootT2Connections(t *testing.T, browser context.Context, dir string, width
 	ts := httptest.NewTLSServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
 	ctx := tab(t, browser)
-	page := ts.URL + "/agents/" + agent.ID + "/edit"
+	page := ts.URL + "/settings/connections/github"
 	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, shotPoll(t, "saved connection", js(`!!document.querySelector('#connections') && (document.body.innerText||'').indexOf('A token is saved')>=0`))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "saved connection", js(`!!document.querySelector('#conn-token') && (document.body.innerText||'').indexOf('A token is saved')>=0`))); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.ScrollIntoView(`#connections`, chromedp.ByQuery)); err != nil {
+	if err := chromedp.Run(ctx, chromedp.ScrollIntoView(`#conn-form`, chromedp.ByQuery)); err != nil {
 		t.Fatal(err)
 	}
 	assertNoCanary(t, ctx)

@@ -17,7 +17,11 @@ The vault name is not an environment grant. `GrantSecret` rejects it. The guest 
 
 The owner chooses the token's own scopes. castbot does not add a service list on top.
 
-Edit agent has a Connections section. A checkbox turns the grant on or off for that agent. The password field is blank on every page load. Saving a new value replaces the vault row. Leaving the field blank keeps the saved token. Unchecking and saving revokes the grant, and the proxy starts refusing immediately.
+Settings, Connections owns GitHub and DigitalOcean, including the account switch. Connecting stores the token in the vault and turns the connection on for every agent on the account. The password field is blank on every page load. Saving a new value replaces the vault row. Leaving the field blank keeps the saved token. Disconnect turns the connection off for every agent and reloads a running agent. The token and the tool choices stay. No new machine is created. A connection can be on before any agent exists. The next agent you create inherits it.
+
+Each tool has a level: Ask, Always allow, or Deny. Deny keeps a named tool listed and blocks it. Always allow on a GitHub or DigitalOcean write tool skips the host approval card. Ask keeps that card for a write. A read tool set to Ask does not open a second host card. A raw git or HTTP call that is not one of those named tools still asks before a mutating request.
+
+Shell Actions is the builtin tool policy: bash, read, glob, and the git tools. It is not an egress provider, it has no token, and `request_secret` does not accept it. While it is on, every agent you own gets those tools at the levels you chose. While it is off, those tools are removed. A missing Shell Actions row stays on, so an existing agent keeps shell access until you disconnect it. The first save replaces a per-agent subset with the account levels.
 
 ## How a call is made
 
@@ -78,11 +82,11 @@ If that binary is not in the image yet, the agent cannot start the shim. The tok
 
 `request_secret(connection, reason)` renders a masked card in the chat. The typed value is posted to the control plane and stored in the vault. The tool's result is only `saved`, `declined`, `expired`, or `already_configured`. The card expires after 60 minutes. One pending card per connection is reused. More than five cards an hour return `declined`.
 
-If a vault row already exists, the card asks for confirmation and does not require typing the token again. An optional field can replace it. The page never shows the saved value.
+If a vault row already exists, the card asks for confirmation and does not require typing the token again. An optional field can replace it. The page never shows the saved value. Saving the card turns that connection on for every agent you own.
 
 Enabling the connection updates the bundle (shim file and permissions) and reloads the guest after the current turn. The new tools show up on the next turn.
 
-`request_secret` is `always-allow`. The card is the consent. When a connection is on, `mcp` is `ask`, read tools are `always-allow`, and write tools are `ask`.
+`request_secret` is `always-allow`. The card is the consent. Tool levels come from Settings, Connections. When a connection is on and a tool has no saved level, `mcp` is `ask`, read tools are `always-allow`, and write tools are `ask`.
 
 ## Limits
 

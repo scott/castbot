@@ -58,11 +58,9 @@ func TestConnectionTokenStaysOutOfGuest(t *testing.T) {
 	if err := h.st.GrantSecret(context.Background(), user.ID, agent.ID, envSecret.ID); err != nil {
 		t.Fatal(err)
 	}
-	fields["connection"] = []string{connect.GitHub}
-	fields["token_github"] = []string{connectCanary}
-	code, _, _ = h.send(http.MethodPost, "/agents/"+agent.ID+"/edit", ip, fields, nil)
-	if code != http.StatusSeeOther {
-		t.Fatalf("save %d", code)
+	code, _, hdr := h.do(http.MethodPost, "/settings/connections/github", h.form(url.Values{"token": {connectCanary}}), ip, nil)
+	if code != http.StatusSeeOther || !strings.Contains(hdr.Get("Location"), "/settings/connections/github") {
+		t.Fatalf("connect %d %s", code, hdr.Get("Location"))
 	}
 	on, err := h.st.ConnectionEnabled(context.Background(), user.ID, agent.ID, connect.GitHub)
 	if err != nil || !on {
@@ -116,8 +114,8 @@ func TestConnectionTokenStaysOutOfGuest(t *testing.T) {
 		t.Fatal("permissions")
 	}
 	code, page, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/edit", "", ip, nil)
-	if code != 200 || !strings.Contains(page, "Connections") || !strings.Contains(page, `type="password"`) {
-		t.Fatalf("edit %d", code)
+	if code != 200 || strings.Contains(page, `id="connections"`) || strings.Contains(page, `id="tools-card"`) {
+		t.Fatalf("edit still has tools or connections %d", code)
 	}
 	absent(t, "edit", page)
 	if strings.Contains(page, `value="`+connectCanary+`"`) {

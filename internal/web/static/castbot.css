@@ -394,6 +394,13 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 .appr.secret .field { min-width: 0; }
 .appr.secret p { margin: 0; }
 .appr.secret form { min-width: 0; }
+.conn-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.conn-grid .card, .conn-card { min-width: 0; }
+.conn-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.conn-acts form { display: inline-flex; margin: 0; }
+@media (min-width: 800px) {
+  .conn-grid { grid-template-columns: 1fr 1fr; }
+}
 .toolrow { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 8px; align-items: center; min-width: 0; }
 .toolrow label { display: flex; align-items: center; gap: 8px; min-height: 44px; min-width: 0; }
 .toolrow .selwrap { min-width: 0; }
@@ -595,6 +602,7 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
   .tpl-grid { grid-template-columns: 1fr 1fr; }
   .two { grid-template-columns: 1fr; }
   .toolrow { grid-template-columns: 1fr; }
+  .conn-acts .btn, .conn-grid .btn { min-height: 44px; }
   .three { grid-template-columns: 1fr; }
   .secret { grid-template-columns: minmax(0,1fr) auto; }
   .secret .k { grid-column: 1 / -1; }
