@@ -41,12 +41,12 @@ func shootT2Connections(t *testing.T, browser context.Context, dir string, width
 	}
 	ts := httptest.NewTLSServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
-	ctx := longTab(t, browser, 2*time.Minute)
+	ctx := tab(t, browser)
 	page := ts.URL + "/agents/" + agent.ID + "/edit"
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`!!document.querySelector('#connections') && (document.body.innerText||'').indexOf('A token is saved')>=0`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "saved connection", js(`!!document.querySelector('#connections') && (document.body.innerText||'').indexOf('A token is saved')>=0`))); err != nil {
 		t.Fatal(err)
 	}
 	if err := chromedp.Run(ctx, chromedp.ScrollIntoView(`#connections`, chromedp.ByQuery)); err != nil {
@@ -73,12 +73,12 @@ func shootT2Secret(t *testing.T, browser context.Context, dir string, width, hei
 	}
 	ts := httptest.NewTLSServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
-	ctx := longTab(t, browser, 2*time.Minute)
+	ctx := tab(t, browser)
 	page := ts.URL + "/agents/" + agent.ID
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`!!document.querySelector('.appr.secret input.secret-in') && (document.body.innerText||'').indexOf('Connect GitHub')>=0 && (document.body.innerText||'').indexOf('Use saved token')>=0`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "secret request card", js(`!!document.querySelector('.appr.secret input.secret-in') && (document.body.innerText||'').indexOf('Connect GitHub')>=0 && (document.body.innerText||'').indexOf('Use saved token')>=0`))); err != nil {
 		t.Fatal(err)
 	}
 	assertNoCanary(t, ctx)

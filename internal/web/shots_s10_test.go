@@ -21,7 +21,7 @@ func shootS10(t *testing.T, browser context.Context, dir string, width, height i
 	ts := httptest.NewTLSServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
 	ctx := tab(t, browser)
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, userID), ts.URL+page, width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, userID), ts.URL+page, width, height)...); err != nil {
 		t.Fatal(err)
 	}
 	if script != "" {
@@ -30,7 +30,7 @@ func shootS10(t *testing.T, browser context.Context, dir string, width, height i
 		}
 	}
 	if needle != "" {
-		if err := chromedp.Run(ctx, chromedp.Poll(js(needle), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+		if err := chromedp.Run(ctx, shotPoll(t, "s10 content", js(needle))); err != nil {
 			var text string
 			_ = chromedp.Run(ctx, chromedp.Evaluate(js(`document.body?document.body.innerText:''`), &text))
 			t.Fatalf("needle: %v\n%s", err, text)

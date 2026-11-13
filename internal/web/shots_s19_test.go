@@ -22,24 +22,24 @@ func shootS19(t *testing.T, browser context.Context, dir string, width, height i
 	ts := httptest.NewTLSServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
 	ctx := tab(t, browser)
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, userID), ts.URL+page, width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, userID), ts.URL+page, width, height)...); err != nil {
 		t.Fatal(err)
 	}
 	if kind == "13a2" {
 		s19DraftAndClose(t, ctx)
 	}
 	if kind == "13f" {
-		if err := chromedp.Run(ctx, chromedp.Poll(js(`!!document.querySelector('#composer')`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+		if err := chromedp.Run(ctx, shotPoll(t, "s19 composer", js(`!!document.querySelector('#composer')`))); err != nil {
 			t.Fatal(err)
 		}
-		if err := chromedp.Run(ctx, chromedp.Navigate(ts.URL+"/settings#usage")); err != nil {
+		if err := chromedp.Run(ctx, chromedp.Navigate(ts.URL+"/settings#usage"), pageReady(t)); err != nil {
 			t.Fatal(err)
 		}
 		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){var el=document.getElementById('usage');if(el)el.scrollIntoView({block:'center'});return true;})()`), nil)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(needle), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "s19 content", js(needle))); err != nil {
 		var text string
 		_ = chromedp.Run(ctx, chromedp.Evaluate(js(`document.body?document.body.innerText:''`), &text))
 		t.Fatalf("needle: %v\n%s", err, text)
@@ -57,7 +57,7 @@ func shootS19(t *testing.T, browser context.Context, dir string, width, height i
 
 func s19DraftAndClose(t *testing.T, ctx context.Context) {
 	t.Helper()
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){
+	if err := chromedp.Run(ctx, shotPoll(t, "s19 draft kept", js(`(function(){
 		var box=document.querySelector('#composer textarea');
 		if(!box)return false;
 		box.value='keep this draft';
@@ -65,19 +65,19 @@ func s19DraftAndClose(t *testing.T, ctx context.Context) {
 		var open=document.querySelector('#agent-panel.s19pane')&&!document.getElementById('agent-panel').hidden;
 		if(!open){var tog=document.querySelector('[data-panel-toggle]');if(tog)tog.click();}
 		return true;
-	})()`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	})()`))); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`!!(document.querySelector('#agent-panel.s19pane')&&!document.getElementById('agent-panel').hidden)`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "s19 panel open", js(`!!(document.querySelector('#agent-panel.s19pane')&&!document.getElementById('agent-panel').hidden)`))); err != nil {
 		t.Fatal(err)
 	}
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`), nil)); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`(function(){var p=document.getElementById('agent-panel');return !p||p.hidden||!p.classList.contains('s19pane');})()`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "s19 panel closed after escape", js(`(function(){var p=document.getElementById('agent-panel');return !p||p.hidden||!p.classList.contains('s19pane');})()`))); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Reload()); err != nil {
+	if err := chromedp.Run(ctx, chromedp.Reload(), pageReady(t)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -87,19 +87,24 @@ func s19SettingsReturns(t *testing.T, ctx context.Context) {
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.querySelector('[data-sclose]').click()`), nil)); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(8 * time.Second)
 	var loc string
-	for time.Now().Before(deadline) {
-		err := chromedp.Run(ctx, chromedp.Evaluate(js(`location.pathname`), &loc))
-		if err == nil && len(loc) >= 8 && loc[:8] == "/agents/" {
-			return
+	ok := withShotRetry(t, "settings close returns to the agent", func() bool {
+		deadline := time.Now().Add(shotWait())
+		for time.Now().Before(deadline) {
+			err := chromedp.Run(ctx, chromedp.Evaluate(js(`location.pathname`), &loc))
+			if err == nil && len(loc) >= 8 && loc[:8] == "/agents/" {
+				return true
+			}
+			if err != nil && !strings.Contains(err.Error(), "context") && !strings.Contains(err.Error(), "navigated") {
+				t.Fatal(err)
+			}
+			time.Sleep(150 * time.Millisecond)
 		}
-		if err != nil && !strings.Contains(err.Error(), "context") && !strings.Contains(err.Error(), "navigated") {
-			t.Fatal(err)
-		}
-		time.Sleep(150 * time.Millisecond)
+		return false
+	})
+	if !ok {
+		t.Fatalf("wait settings close timed out after %s; stayed on %s", shotWait(), loc)
 	}
-	t.Fatalf("settings close stayed on %s", loc)
 }
 
 func s19TapTargets(t *testing.T, ctx context.Context) {
@@ -239,7 +244,7 @@ func shootS19Secrets(t *testing.T, browser context.Context, width, height int) {
 	t.Cleanup(ts.Close)
 	ctx := tab(t, browser)
 	page := ts.URL + "/agents/" + ids.atlas + "?panel=secrets"
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
 		t.Fatal(err)
 	}
 	waitText(t, ctx, "GITHUB_TOKEN")
@@ -254,7 +259,7 @@ func shootS19Secrets(t *testing.T, browser context.Context, width, height int) {
 		t.Fatal(err)
 	}
 	waitText(t, ctx, "Give Atlas a secret")
-	if err := chromedp.Run(ctx, chromedp.Navigate(page)); err != nil {
+	if err := chromedp.Run(ctx, chromedp.Navigate(page), pageReady(t)); err != nil {
 		t.Fatal(err)
 	}
 	waitText(t, ctx, "GITHUB_TOKEN")
@@ -280,7 +285,7 @@ func shootS19Back(t *testing.T, browser context.Context) {
 	t.Cleanup(ts.Close)
 	ctx := tab(t, browser)
 	page := ts.URL + "/agents/" + agent.ID + "?panel=routines"
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), page, 1280, 800)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), page, 1280, 800)...); err != nil {
 		t.Fatal(err)
 	}
 	waitText(t, ctx, "No routines yet")
@@ -298,7 +303,7 @@ func shootS19Back(t *testing.T, browser context.Context) {
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`history.back()`), nil)); err != nil && !containsNav(err) {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`location.search.indexOf("panel=routines")>=0 && location.search.indexOf("routine=")<0 && (document.body.innerText||"").indexOf("What should Atlas do?")<0`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "s19 back to the routine list", js(`location.search.indexOf("panel=routines")>=0 && location.search.indexOf("routine=")<0 && (document.body.innerText||"").indexOf("What should Atlas do?")<0`))); err != nil {
 		var now string
 		_ = chromedp.Run(ctx, chromedp.Evaluate(js(`location.search+"\n"+(document.body?document.body.innerText:"")`), &now))
 		t.Fatalf("back to the list: %v\n%s", err, now)
@@ -306,7 +311,7 @@ func shootS19Back(t *testing.T, browser context.Context) {
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`history.back()`), nil)); err != nil && !containsNav(err) {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(`location.search.indexOf("panel=")<0 && (function(){var p=document.getElementById("agent-panel");return !p||p.hidden||!p.classList.contains("s19pane");})()`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "s19 back to chat", js(`location.search.indexOf("panel=")<0 && (function(){var p=document.getElementById("agent-panel");return !p||p.hidden||!p.classList.contains("s19pane");})()`))); err != nil {
 		var now string
 		_ = chromedp.Run(ctx, chromedp.Evaluate(js(`location.href`), &now))
 		t.Fatalf("back to chat: %v %s", err, now)
@@ -332,16 +337,16 @@ func shootPanelToggle(t *testing.T, browser context.Context, dir string, width, 
 	t.Cleanup(ts.Close)
 	ctx := tab(t, browser)
 	page := ts.URL + "/agents/" + agent.ID + "?panel=closed"
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(panelClosedJS), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "s19 panel closed", js(panelClosedJS))); err != nil {
 		t.Fatal(err)
 	}
 	if err := chromedp.Run(ctx, chromedp.Click(`[data-panel-toggle]`, chromedp.ByQuery)); err != nil && !containsNav(err) {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(panelPlacedJS+`==='ok'`), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "s19 panel placed", js(panelPlacedJS+`==='ok'`))); err != nil {
 		var why string
 		_ = chromedp.Run(ctx, chromedp.Evaluate(js(panelPlacedJS), &why))
 		t.Fatalf("toggle open: %v %s", err, why)
@@ -352,7 +357,7 @@ func shootPanelToggle(t *testing.T, browser context.Context, dir string, width, 
 	if err := chromedp.Run(ctx, chromedp.Click(`[data-panel-toggle]`, chromedp.ByQuery)); err != nil && !containsNav(err) {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(panelClosedJS), nil, chromedp.WithPollingTimeout(8*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "s19 panel closed", js(panelClosedJS))); err != nil {
 		var why string
 		_ = chromedp.Run(ctx, chromedp.Evaluate(js(`location.href+' '+(document.querySelector('.app')&&document.querySelector('.app').className)+' aria='+(document.querySelector('[data-panel-toggle]')&&document.querySelector('[data-panel-toggle]').getAttribute('aria-expanded'))`), &why))
 		t.Fatalf("toggle close: %v %s", err, why)

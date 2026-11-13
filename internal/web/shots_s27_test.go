@@ -68,7 +68,7 @@ func shootS27(t *testing.T, browser context.Context, dir string, width, height i
 	ts := httptest.NewTLSServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
 	ctx := tab(t, browser)
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, sessionToken(t, h, user.ID), ts.URL+page, width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), ts.URL+page, width, height)...); err != nil {
 		t.Fatal(err)
 	}
 	switch kind {

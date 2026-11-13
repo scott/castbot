@@ -50,21 +50,25 @@ func shootS07Start(t *testing.T, browser context.Context, dir string, width, hei
 			t.Fatal("create finished while Start was held")
 		}
 	}
-	deadline := time.Now().Add(8 * time.Second)
+	const startPage = `(function(){return (location.pathname.indexOf("/machine")>=0||location.search.indexOf("panel=machine")>=0)&&document.querySelectorAll(".app").length===1&&document.querySelectorAll("header.ch-h").length===1&&(document.body.innerText||"").indexOf("Starting")>=0;})()`
 	var ok bool
 	var last error
-	for time.Now().Before(deadline) {
-		last = chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){return (location.pathname.indexOf("/machine")>=0||location.search.indexOf("panel=machine")>=0)&&document.querySelectorAll(".app").length===1&&document.querySelectorAll("header.ch-h").length===1&&(document.body.innerText||"").indexOf("Starting")>=0;})()`), &ok))
-		if last == nil && ok {
-			break
+	ready := withShotRetry(t, "s07 start page", func() bool {
+		deadline := time.Now().Add(shotWait())
+		for time.Now().Before(deadline) {
+			last = chromedp.Run(ctx, chromedp.Evaluate(js(startPage), &ok))
+			if last == nil && ok {
+				return true
+			}
+			if last != nil && !strings.Contains(last.Error(), "navigated or closed") && !strings.Contains(last.Error(), "context") {
+				t.Fatal(last)
+			}
+			time.Sleep(200 * time.Millisecond)
 		}
-		if last != nil && !strings.Contains(last.Error(), "navigated or closed") && !strings.Contains(last.Error(), "context") {
-			t.Fatal(last)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	if last != nil || !ok {
-		t.Fatalf("start page %v ok %v", last, ok)
+		return false
+	})
+	if !ready {
+		t.Fatalf("wait s07 start page timed out after %s: %v ok %v\ncondition: %s", shotWait(), last, ok, squash(startPage))
 	}
 }
 
@@ -83,7 +87,7 @@ func shootS07Waking(t *testing.T, browser context.Context, dir string, width, he
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.SendKeys(`#composer textarea`, "hello", chromedp.ByQuery),
 		chromedp.Click(`#send-btn`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Waking")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+		shotPoll(t, "s07 waking", js(`(function(){var t=document.body.innerText||"";return t.indexOf("Waking")>=0;})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +103,7 @@ func shootS07Reply(t *testing.T, browser context.Context, dir string, width, hei
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.SendKeys(`#composer textarea`, "hello", chromedp.ByQuery),
 		chromedp.Click(`#send-btn`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("Streamed from the fixture provider.")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+		shotPoll(t, "s07 reply", js(`(function(){var t=document.body.innerText||"";return t.indexOf("Streamed from the fixture provider.")>=0;})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +119,7 @@ func shootS07NoKey(t *testing.T, browser context.Context, dir string, width, hei
 	if err := chromedp.Run(ctx, chromedp.Tasks{
 		chromedp.SendKeys(`#composer textarea`, "hello", chromedp.ByQuery),
 		chromedp.Click(`#send-btn`, chromedp.ByQuery),
-		chromedp.Poll(js(`(function(){var t=document.body.innerText||"";return t.indexOf("No key for provider DigitalOcean. Ask the owner to add it.")>=0;})()`), nil, chromedp.WithPollingTimeout(10*time.Second)),
+		shotPoll(t, "s07 missing provider key", js(`(function(){var t=document.body.innerText||"";return t.indexOf("No key for provider DigitalOcean. Ask the owner to add it.")>=0;})()`)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -187,10 +191,10 @@ func openS07(t *testing.T, browser context.Context, h *harness, userID, path str
 	t.Cleanup(ts.Close)
 	token := sessionToken(t, h, userID)
 	ctx := tab(t, browser)
-	if err := chromedp.Run(ctx, cliOpen(ts.URL, token, ts.URL+path, width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, token, ts.URL+path, width, height)...); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, chromedp.Poll(js(ready), nil, chromedp.WithPollingTimeout(10*time.Second))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "s07 page", js(ready))); err != nil {
 		t.Fatal(err)
 	}
 	return ctx
