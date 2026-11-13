@@ -1287,7 +1287,18 @@ func shootApproval(t *testing.T, browser context.Context, dir string, width, hei
 	case "cli":
 		needle = "An approval was asked for bash."
 	}
-	if err := chromedp.Run(ctx, shotPoll(t, "approval "+needle, js(`(function(){var t=document.body.innerText||"";return t.indexOf("`+needle+`")>=0&&t.indexOf("demo-secret-value")<0;})()`))); err != nil {
+	visible := needle
+	if kind == "approved" {
+		visible = "Approved"
+	}
+	fold := ""
+	if kind == "approved" || kind == "denied" || kind == "expired" {
+		fold = `&&full.indexOf("` + needle + `")>=0&&fold&&!fold.open&&t.indexOf("bash")>=0`
+		if kind == "approved" {
+			fold += `&&t.indexOf("3:42 PM")>=0`
+		}
+	}
+	if err := chromedp.Run(ctx, shotPoll(t, "approval "+needle, js(`(function(){var t=document.body.innerText||"";var full=document.body.textContent||"";var fold=document.querySelector("details.appr-fold");return t.indexOf("`+visible+`")>=0&&t.indexOf("demo-secret-value")<0`+fold+`;})()`))); err != nil {
 		t.Fatal(err)
 	}
 	if kind == "cli" {

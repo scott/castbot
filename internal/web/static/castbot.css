@@ -657,6 +657,18 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 .appr .kv dd { overflow-wrap: anywhere; min-width: 0; }
 .appr .cmd, .appr .mono { white-space: pre-wrap; word-break: break-word; overflow-x: auto; max-width: 100%; }
 .appr details summary { cursor: pointer; }
+.appr.appr-fold { padding: 0; gap: 0; }
+.appr.appr-fold > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; list-style: none; cursor: pointer; min-width: 0; }
+.appr.appr-fold > summary::-webkit-details-marker { display: none; }
+.appr.appr-fold > summary::marker { content: ""; }
+.appr.appr-fold > summary:focus-visible { outline: 2px solid var(--acc); outline-offset: -2px; }
+.appr.appr-fold > summary .st { font-weight: 700; flex: none; }
+.appr.appr-fold > summary .tn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+.appr.appr-fold > summary .stamp { margin-left: auto; flex: none; }
+.appr.appr-fold > summary .chev { flex: none; color: var(--tx3); }
+.appr.appr-fold[open] > summary .chev { transform: rotate(90deg); }
+.appr.appr-fold .ico { width: 28px; height: 28px; }
+.appr.appr-fold .appr-more { display: grid; gap: 12px; padding: 12px 14px 14px; border-top: 1px solid var(--line); }
 .rt-filter { margin-bottom: 12px; }
 .drawer-b { gap: 14px; padding-top: 16px; }
 .drawer-b textarea.ta { min-height: 72px; }

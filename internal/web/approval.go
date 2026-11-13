@@ -689,6 +689,7 @@ func (s *Server) presentApproval(row store.Approval, user store.User, csrf strin
 		}
 	case "approved":
 		view.Approved = true
+		view.Fold = "Approved"
 		when := clockLabel(row.DecidedAt, loc)
 		if when == "" {
 			view.Line = "Approved by you"
@@ -697,6 +698,7 @@ func (s *Server) presentApproval(row store.Approval, user store.User, csrf strin
 			view.When = when
 		}
 	case "denied":
+		view.Fold = "Denied"
 		view.Line = "Denied"
 		if row.DecidedBy == "routine" {
 			view.Line = "Denied by the routine setting"
@@ -705,11 +707,13 @@ func (s *Server) presentApproval(row store.Approval, user store.User, csrf strin
 			view.When = when
 		}
 	case "expired":
+		view.Fold = "Expired"
 		view.Line = "Expired"
 		if when := clockLabel(row.DecidedAt, loc); when != "" {
 			view.When = when
 		}
 	default:
+		view.Fold = "Closed"
 		view.Line = "This request is no longer active."
 		if when := clockLabel(row.DecidedAt, loc); when != "" {
 			view.When = when

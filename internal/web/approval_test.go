@@ -1341,6 +1341,74 @@ func mustAgent(t *testing.T, h *harness, userID string) store.Agent {
 	return rows[0]
 }
 
+func TestDecidedApprovalCardCollapses(t *testing.T) {
+	pending, err := execTemplate("approvalCard", cardView{
+		ID: "a1", RunID: "r1", Tool: "bash", Pending: true, CSRF: "tok", When: "3:41 PM",
+		ApproveURL: "/approve", DenyURL: "/deny",
+	})
+	if err != nil || strings.Contains(pending, "appr-fold") || strings.Contains(pending, "<summary") || !strings.Contains(pending, ">Approve<") || !strings.Contains(pending, ">Deny<") {
+		t.Fatalf("pending card %v %s", err, pending)
+	}
+
+	approved, err := execTemplate("approvalCard", cardView{
+		ID: "a1", RunID: "r1", Tool: "bash", Fold: "Approved", Approved: true, When: "3:42 PM",
+		Line: "Approved by you at 3:42 PM",
+		Args: []argView{{Key: "command", Value: "ls demo"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFolded(t, approved, "Approved", "bash", "3:42 PM", "Approved by you at 3:42 PM")
+	if !strings.Contains(approved, "ls demo") || !strings.Contains(approved, `class="appr appr-fold done settled"`) {
+		t.Fatalf("approved card %s", approved)
+	}
+
+	denied, err := execTemplate("approvalCard", cardView{
+		ID: "a2", RunID: "r1", Tool: "git_push", Fold: "Denied", When: "3:43 PM",
+		Line: "Denied by the routine setting",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFolded(t, denied, "Denied", "git_push", "3:43 PM", "Denied by the routine setting")
+
+	h, _, user, agent, ip := newAsk(t, nil, nil)
+	sendPrompt(t, h, agent, ip, "go")
+	ap := waitPending(t, h, user.ID)
+	page := h.poll(ip, "/agents/"+agent.ID, ">Approve<")
+	if strings.Contains(page, "appr-fold") {
+		t.Fatal("a pending card rendered collapsed")
+	}
+	code, body := postDecision(h, ap, ip, false)
+	if code != http.StatusOK {
+		t.Fatalf("deny %d %s", code, body)
+	}
+	assertFolded(t, body, "Denied", "bash", "", "Denied")
+	h.waitRuns(user.ID, agentThread(t, h, user.ID, agent.ID))
+	page = h.poll(ip, "/agents/"+agent.ID, "Denied")
+	if strings.Contains(page, ">Deny<") || !strings.Contains(page, "appr-fold") || !strings.Contains(page, ">Denied<") {
+		t.Fatalf("reloaded card %s", page)
+	}
+}
+
+func assertFolded(t *testing.T, body, status, tool, when, full string) {
+	t.Helper()
+	if !strings.Contains(body, "<details") || !strings.Contains(body, "<summary") || strings.Contains(body, " open") {
+		t.Fatalf("not a collapsed disclosure %s", body)
+	}
+	if !strings.Contains(body, ">"+status+"<") || !strings.Contains(body, ">"+tool+"<") {
+		t.Fatalf("summary missing %s %s in %s", status, tool, body)
+	}
+	if when != "" && !strings.Contains(body, when) {
+		t.Fatalf("summary missing time %s in %s", when, body)
+	}
+	sum := strings.Index(body, "<summary")
+	line := strings.Index(body, full)
+	if sum < 0 || line < sum || strings.Contains(body, ">Approve<") || strings.Contains(body, ">Deny<") {
+		t.Fatalf("full card %s", body)
+	}
+}
+
 func TestDecisionSyncsPaneAndChatCard(t *testing.T) {
 	h, _, user, agent, ip := newAsk(t, nil, nil)
 	live := httptest.NewServer(h.srv.Handler())

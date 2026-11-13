@@ -919,12 +919,16 @@ func (s *Server) presentConnect(user store.User, row store.ConnectApproval, csrf
 		view.Extra = "This changes data on the connection. The token stays in your vault."
 	case "approved":
 		view.Approved = true
+		view.Fold = "Approved"
 		view.Line = "Approved by you"
 	case "denied":
+		view.Fold = "Denied"
 		view.Line = "Denied"
 	case "expired":
+		view.Fold = "Expired"
 		view.Line = "Expired"
 	default:
+		view.Fold = "Closed"
 		view.Line = "This request is no longer active."
 	}
 	return view
