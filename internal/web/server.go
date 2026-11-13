@@ -8,7 +8,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"io/fs"
 	"log"
 	"log/slog"
 	"net"
@@ -443,11 +442,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	sub, err := fs.Sub(staticFS, "static")
-	if err != nil {
-		panic(err)
-	}
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(sub))))
+	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	return s.wrap(mux)
 }
 
@@ -468,6 +463,12 @@ func (s *Server) wrap(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
+		// Static files do not need a session. Skip the cookie and the user lookup
+		// so a stylesheet does not take the database connection.
+		if staticRequest(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		st := s.loadState(w, r)
 		r = r.WithContext(context.WithValue(r.Context(), stateKey, st))
 		// castlet calls these with a bearer token, not a browser form.

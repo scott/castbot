@@ -243,7 +243,10 @@ if(btn){btn.disabled=false;btn.click();}
 func s20Composer(t *testing.T, ctx context.Context) {
 	t.Helper()
 	var bad string
-	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){
+	// The card and composer settle a moment after the text is on the page.
+	// A single read can catch that frame, so measure again before failing.
+	for attempt := 0; attempt < 8; attempt++ {
+		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){
 		var form=document.querySelector('[data-create-compose]');
 		if(!form || location.pathname!=='/new-agent') return '';
 		var main=document.querySelector('main.main');
@@ -274,11 +277,14 @@ func s20Composer(t *testing.T, ctx context.Context) {
 		if(widthOk && centerOk && cardOk && placeOk && advOk) return '';
 		return 'w='+Math.round(fr.width)+' center='+Math.round(center)+' gap='+Math.round(gap)+' width='+widthOk+' mid='+centerOk+' card='+cardOk+' place='+placeOk+' adv='+advOk;
 	})()`), &bad)); err != nil {
-		t.Fatal(err)
+			t.Fatal(err)
+		}
+		if bad == "" {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	if bad != "" {
-		t.Fatalf("composer %s", bad)
-	}
+	t.Fatalf("composer %s", bad)
 }
 
 func s20Chat(t *testing.T, ctx context.Context, text string) {
