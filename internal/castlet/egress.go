@@ -265,7 +265,12 @@ func (s *Supervisor) egressSecret(w http.ResponseWriter, r *http.Request) {
 	if !validSecretName(call.Name) {
 		call.Name = ""
 	}
-	if !s.egressStatus(r.Context()).Has(call.Connection) {
+	// The card is how a provider becomes connected, so it is forwarded
+	// whenever the proxy is enabled, including an empty provider list
+	// and a list that names only the other provider. HTTP, git, and MCP
+	// stay gated on Has. A disabled proxy, including a missing route,
+	// returns here and does not wait out the card timeout.
+	if !s.egressStatus(r.Context()).Enabled {
 		writeFailure(w, http.StatusForbidden, "not_connected")
 		return
 	}

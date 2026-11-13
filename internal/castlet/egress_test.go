@@ -262,6 +262,80 @@ func TestEgressForwardsWithoutTheGuestToken(t *testing.T) {
 	}
 }
 
+func TestSecretRequestWhenTheProviderIsNotConnected(t *testing.T) {
+	for _, status := range []string{
+		`{"enabled":true,"providers":[]}`,
+		`{"enabled":true,"providers":["digitalocean"]}`,
+	} {
+		sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/egress"):
+				_, _ = io.WriteString(w, status)
+			case strings.HasSuffix(r.URL.Path, "/egress/secret-request"):
+				_, _ = io.WriteString(w, `{"result":"saved","leak":"`+fixtureValue+`"}`)
+			default:
+				t.Errorf("forwarded %s", r.URL.Path)
+				http.NotFound(w, r)
+			}
+		})
+		rec := httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"connection":"github","reason":"need a repository"}`))
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), fixtureValue) || strings.Contains(rec.Body.String(), "leak") {
+			t.Fatalf("secret %s %d %s", status, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"result":"saved"`) {
+			t.Fatal(rec.Body.String())
+		}
+		if hit.count("/egress/secret-request") != 1 {
+			t.Fatalf("secret forwards %d for %s", hit.count("/egress/secret-request"), status)
+		}
+		rec = httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/http", `{"provider":"github","method":"GET","path":"/user"}`))
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), egresscontract.NotConnected) {
+			t.Fatalf("http %d %s", rec.Code, rec.Body.String())
+		}
+		rec = httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/git/github/acme/repo.git/info/refs?service=git-upload-pack", "pack"))
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), egresscontract.NotConnected) {
+			t.Fatalf("git %d %s", rec.Code, rec.Body.String())
+		}
+		rec = httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/mcp", `{"server":"github","message":{"jsonrpc":"2.0","id":1,"method":"tools/list"}}`))
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), egresscontract.NotConnected) {
+			t.Fatalf("mcp %d %s", rec.Code, rec.Body.String())
+		}
+		if hit.count("/egress/http") != 0 || hit.count("/egress/git") != 0 || hit.count("/egress/mcp") != 0 {
+			t.Fatalf("unlisted provider was forwarded: %s", hit.blob())
+		}
+		rec = httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"connection":"aws","reason":"phish"}`))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("aws %d %s", rec.Code, rec.Body.String())
+		}
+		if hit.count("/egress/secret-request") != 1 {
+			t.Fatal("aws was forwarded")
+		}
+	}
+}
+
+func TestSecretRequest404IsImmediate(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"connection":"github","reason":"need a repository"}`))
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), egresscontract.NotConnected) {
+		t.Fatalf("secret %d %s", rec.Code, rec.Body.String())
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatal("disabled secret request waited")
+	}
+	if hit.count("/egress/secret-request") != 0 {
+		t.Fatal("404 host was asked for a card")
+	}
+}
+
 func TestEgressRejectsBadPaths(t *testing.T) {
 	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/egress") {

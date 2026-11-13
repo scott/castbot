@@ -19,7 +19,7 @@ func planGit(st egresscontract.Status, base string, args, env []string) Action {
 		)
 	}
 	argv = append(argv, filtered...)
-	return Action{Argv: argv, Env: childEnv(env)}
+	return Action{Argv: argv, Env: childEnv(env, proxyLive(st))}
 }
 
 func stripGitConfig(args []string) []string {

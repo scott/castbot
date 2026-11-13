@@ -7,7 +7,7 @@ import (
 )
 
 func planGH(st egresscontract.Status, base string, args, env []string) Action {
-	env = childEnv(env)
+	env = childEnv(env, proxyLive(st))
 	env = setEnv(env, "GH_CONFIG_DIR", ghConfigDir)
 	if refusedAuth(args) {
 		return Action{
@@ -36,16 +36,16 @@ func planGH(st egresscontract.Status, base string, args, env []string) Action {
 
 func refusedAuth(args []string) bool {
 	for _, a := range args {
-		if a == "--with-token" {
+		name, _ := splitFlag(a)
+		if name == "--with-token" {
 			return true
 		}
 	}
-	cmd, rest := firstCommand(args)
-	if cmd != "auth" {
+	cmds := commands(args, ghBoolFlag)
+	if len(cmds) < 2 || cmds[0] != "auth" {
 		return false
 	}
-	sub, _ := firstCommand(rest)
-	switch sub {
+	switch cmds[1] {
 	case "login", "token", "setup-git", "refresh":
 		return true
 	default:
@@ -54,9 +54,9 @@ func refusedAuth(args []string) bool {
 }
 
 func planDoctl(st egresscontract.Status, base string, args, env []string) Action {
-	env = childEnv(env)
-	cmd, _ := firstCommand(args)
-	if cmd == "auth" {
+	env = childEnv(env, proxyLive(st))
+	cmds := commands(args, doctlBoolFlag)
+	if len(cmds) > 0 && cmds[0] == "auth" {
 		return Action{
 			Stderr: "castbot: this command is disabled so a token cannot be read or stored.",
 			Code:   1,
@@ -91,11 +91,9 @@ func stripDoctlFlags(args []string) []string {
 	var out []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if a == "--" {
-			out = append(out, args[i:]...)
-			break
-		}
 		name, inline := splitFlag(a)
+		// Flags after -- are still stripped when they would carry a token.
+		// Other words after -- stay, in order.
 		if valued[name] {
 			if !inline && i+1 < len(args) {
 				i++
@@ -118,17 +116,50 @@ func splitFlag(a string) (name string, inline bool) {
 	return a, false
 }
 
-func firstCommand(args []string) (string, []string) {
-	for i, a := range args {
-		if a == "--" {
-			return "", nil
-		}
-		if strings.HasPrefix(a, "-") {
+func ghBoolFlag(name string) bool {
+	switch name {
+	case "--help", "--version":
+		return true
+	default:
+		return false
+	}
+}
+
+func doctlBoolFlag(name string) bool {
+	switch name {
+	case "--interactive", "--show", "--trace", "--verbose", "-v", "--help":
+		return true
+	default:
+		return false
+	}
+}
+
+// commands returns positional words. A non-boolean flag consumes the
+// following word, so that word is not a command. "--" ends flag parsing
+// and the words after it are commands. This matches the CLIs: an unknown
+// long flag consumes the next word, and a boolean flag does not.
+func commands(args []string, boolFlag func(string) bool) []string {
+	var cmds []string
+	positionals := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !positionals && a == "--" {
+			positionals = true
 			continue
 		}
-		return a, args[i+1:]
+		if !positionals && a != "-" && strings.HasPrefix(a, "-") {
+			name, inline := splitFlag(a)
+			if inline || boolFlag(name) {
+				continue
+			}
+			if i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		cmds = append(cmds, a)
 	}
-	return "", nil
+	return cmds
 }
 
 func isQuiet(args []string) bool {

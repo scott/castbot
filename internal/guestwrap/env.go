@@ -142,6 +142,40 @@ func setEnv(env []string, key, val string) []string {
 	return append(out, prefix+val)
 }
 
-func childEnv(env []string) []string {
-	return setEnv(FilterEnv(env), "GIT_TERMINAL_PROMPT", "0")
+// childEnv is the environment for a real git, gh, or doctl process.
+// live means a provider is connected, so those programs may talk to the
+// loopback egress. NO_PROXY then includes that loopback, and an existing
+// list is kept. Curl reads no_proxy first, so both names are set.
+func childEnv(env []string, live bool) []string {
+	out := setEnv(FilterEnv(env), "GIT_TERMINAL_PROMPT", "0")
+	if !live {
+		return out
+	}
+	out = setEnv(out, "NO_PROXY", loopbackNoProxy(envGet(out, "NO_PROXY")))
+	out = setEnv(out, "no_proxy", loopbackNoProxy(envGet(out, "no_proxy")))
+	return out
+}
+
+func loopbackNoProxy(existing string) string {
+	var parts []string
+	seen := map[string]bool{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[strings.ToLower(s)] {
+			return
+		}
+		seen[strings.ToLower(s)] = true
+		parts = append(parts, s)
+	}
+	for _, part := range strings.Split(existing, ",") {
+		add(part)
+	}
+	add("127.0.0.1")
+	add("localhost")
+	return strings.Join(parts, ",")
+}
+
+// proxyLive reports whether any curated provider is connected.
+func proxyLive(st egresscontract.Status) bool {
+	return st.Has("github") || st.Has("digitalocean")
 }

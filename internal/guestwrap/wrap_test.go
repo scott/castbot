@@ -110,6 +110,9 @@ func TestGitStaysInertUntilLive(t *testing.T) {
 	if strings.Contains(text, "insteadOf") || strings.Contains(text, fixtureValue) || strings.Contains(act.joinedArgs(), "credential.helper") {
 		t.Fatal("inert git rewrote, kept a helper, or kept the env value")
 	}
+	if strings.Contains(text, "NO_PROXY=") {
+		t.Fatal("inert git set NO_PROXY")
+	}
 	if !strings.Contains(strings.Join(act.Argv, " "), "user.email=fixture@example.com") {
 		t.Fatalf("args %v", act.Argv)
 	}
@@ -128,6 +131,23 @@ func TestGitStaysInertUntilLive(t *testing.T) {
 	if strings.Contains(joined(act), fixtureValue) {
 		t.Fatal("live git kept the env value")
 	}
+	if !hasEnv(act.Env, "NO_PROXY", "127.0.0.1,localhost") || !hasEnv(act.Env, "no_proxy", "127.0.0.1,localhost") {
+		t.Fatalf("live git env %v", act.Env)
+	}
+	withProxy := append(envWithToken(), "HTTP_PROXY=http://proxy.example:8080", "NO_PROXY=example.com")
+	act = planGit(live, DefaultEgress, []string{"status"}, withProxy)
+	if !hasEnv(act.Env, "NO_PROXY", "example.com,127.0.0.1,localhost") || !hasEnv(act.Env, "HTTP_PROXY", "http://proxy.example:8080") {
+		t.Fatalf("proxy env %v", act.Env)
+	}
+}
+
+func hasEnv(env []string, key, want string) bool {
+	for _, item := range env {
+		if item == key+"="+want {
+			return true
+		}
+	}
+	return false
 }
 
 func (a Action) joinedArgs() string { return strings.Join(a.Argv, " ") }
@@ -179,6 +199,46 @@ func TestCLIsFailClosed(t *testing.T) {
 	}
 }
 
+func TestAuthFlagsDoNotBypass(t *testing.T) {
+	withStatus(t, egresscontract.Status{})
+	refused := []struct {
+		name string
+		args []string
+	}{
+		{"doctl output", []string{"doctl", "--output", "json", "auth", "init"}},
+		{"doctl context", []string{"doctl", "--context", "default", "auth", "init"}},
+		{"doctl dash", []string{"doctl", "--", "auth", "init"}},
+		{"doctl short output", []string{"doctl", "-o", "json", "auth", "list"}},
+		{"doctl verbose", []string{"doctl", "--verbose", "auth", "list"}},
+		{"gh hostname", []string{"gh", "--hostname", "github.com", "auth", "token"}},
+		{"gh short hostname", []string{"gh", "-h", "github.com", "auth", "token"}},
+		{"gh dash", []string{"gh", "--", "auth", "login"}},
+		{"gh between", []string{"gh", "auth", "--hostname", "github.com", "token"}},
+		{"gh protocol", []string{"gh", "--git-protocol", "https", "auth", "login"}},
+		{"gh with token", []string{"gh", "--with-token"}},
+		{"gh with token value", []string{"gh", "auth", "login", "--with-token=true"}},
+	}
+	for _, tc := range refused {
+		act := Plan(tc.name[:strings.Index(tc.name, " ")], tc.args[1:], envWithToken())
+		if len(act.Argv) != 0 || !strings.Contains(act.Stderr, "disabled") || strings.Contains(joined(act), fixtureValue) {
+			t.Fatalf("%s argv %v stderr %s", tc.name, act.Argv, act.Stderr)
+		}
+	}
+	kept := Plan("gh", []string{"auth", "status"}, envWithToken())
+	if len(kept.Argv) == 0 || strings.Contains(kept.Stderr, "disabled") {
+		t.Fatal("gh auth status was refused")
+	}
+	plain := Plan("doctl", []string{"--output", "json", "account", "get"}, envWithToken())
+	if len(plain.Argv) == 0 || !strings.Contains(strings.Join(plain.Argv, " "), "account get") {
+		t.Fatalf("account get %v", plain.Argv)
+	}
+	tok := "guest-token-value"
+	stripped := Plan("doctl", []string{"account", "get", "--", "--access-token", tok, "-t", tok, "--access-token=" + tok}, envWithToken())
+	if strings.Contains(joined(stripped), tok) || strings.Contains(strings.Join(stripped.Argv, " "), "--access-token") || strings.Contains(strings.Join(stripped.Argv, " "), "-t") {
+		t.Fatalf("token flag survived %v", stripped.Argv)
+	}
+}
+
 func TestCLIsRedirectWhenLive(t *testing.T) {
 	live := egresscontract.Status{Enabled: true, Providers: []string{"github", "digitalocean"}}
 	withStatus(t, live)
@@ -203,6 +263,9 @@ func TestCLIsRedirectWhenLive(t *testing.T) {
 	}
 	if strings.Contains(joined(do), fixtureValue) || strings.Contains(text, "api.digitalocean.com") {
 		t.Fatal("doctl kept the env value or the public API")
+	}
+	if !hasEnv(do.Env, "NO_PROXY", "127.0.0.1,localhost") || !hasEnv(do.Env, "no_proxy", "127.0.0.1,localhost") {
+		t.Fatalf("live doctl env %v", do.Env)
 	}
 	for _, item := range do.Env {
 		if strings.HasPrefix(item, "DIGITALOCEAN_ACCESS_TOKEN=") && item != "DIGITALOCEAN_ACCESS_TOKEN="+egresscontract.DummyCredential {

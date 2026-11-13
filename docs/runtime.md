@@ -22,7 +22,7 @@ The four downloaded archives are checked with SHA256 during the image build. The
 
 `CAST_AGENT_DIR=/app/agent`, so the built-in git tools look at the agent directory. `GIT_PYTHON_REFRESH=quiet` stays set. Project repositories under `workspace/` are used through `bash` and the `git` binary. Write tools in the castbot catalog stay `ask`. Read tools stay `always-allow`.
 
-Until a later Cast change adds a fetch tool, fetching a page is `bash` plus `curl`, and `bash` stays `ask`.
+The castbot catalog does not include `write_file`, `edit_file`, or `web_fetch` yet. Those wait for a later Cast pin. Upstream, `web_fetch` now defaults to `ask` (castagent#427). Until that pin, fetching a page is `bash` plus `curl`, and `bash` stays `ask`.
 
 ## Writable prefix
 
@@ -43,12 +43,14 @@ The image carries the guest side of Connections so a later control-plane change 
 | --- | --- |
 | `git` | Runs the real git binary. It does not rewrite `https://github.com/`. Credential helpers and `http.extraHeader` passed with `-c` are removed. `GIT_TERMINAL_PROMPT=0`, so a missing credential does not wait for a prompt. |
 | `castbot-git-credential` | Prints no username and no password. Stderr says connections are not available. |
-| `gh` | Runs the real `gh` with an empty config directory and no token. `gh auth login`, `gh auth token`, `gh auth setup-git`, and `gh auth refresh` are refused. |
-| `doctl` | Runs the real `doctl` with an empty config and no token. `doctl auth` is refused. |
+| `gh` | Runs the real `gh` with an empty config directory and no token. `gh auth login`, `gh auth token`, `gh auth setup-git`, `gh auth refresh`, and `gh --with-token` are refused, including when flags or `--` come first. |
+| `doctl` | Runs the real `doctl` with an empty config and no token. `doctl auth` is refused, including when flags or `--` come first. `--access-token` and `-t` are removed, including after `--`. |
 | `castbot-mcp github` and `castbot-mcp digitalocean` | Speak MCP over stdio. `initialize` succeeds. `tools/list` and `tools/call` return the fixed not-connected sentence and do not wait. |
 | `castbot-mcp request_secret` | Lists `request_secret`. A call returns the not-connected sentence, or rejects a connection id other than `github` or `digitalocean`. |
 
-When the host reports a provider as live, git rewrites `https://github.com/` and `https://www.github.com/` to the local git egress, doctl sends its API client at the local upstream prefix with the placeholder `castbot-local` (the egress strips that header), and `gh api` (flags `--method`, `--header`, `--input`, `--silent`, `--verbose`, `--hostname`) is posted to the local HTTP egress. Other `gh` commands stay unauthenticated, because `gh` has no plain HTTP API base URL that preserves the GitHub API without a guest token. The MCP shims are the GitHub and DigitalOcean tool path.
+When the host reports a provider as live, git rewrites `https://github.com/` and `https://www.github.com/` to the local git egress, doctl sends its API client at the local upstream prefix with the placeholder `castbot-local` (the egress strips that header), and `gh api` (flags `--method`, `--header`, `--input`, `--silent`, `--verbose`, `--hostname`) is posted to the local HTTP egress. Other `gh` commands stay unauthenticated, because `gh` has no plain HTTP API base URL that preserves the GitHub API without a guest token. The MCP shims are the GitHub and DigitalOcean tool path. `request_secret` is forwarded when the proxy is enabled, including when that provider is not connected yet. HTTP, git, and MCP are not.
+
+When any provider is live, git, gh, and doctl get `NO_PROXY` and `no_proxy` with `127.0.0.1` and `localhost` added, so they do not send the local egress through `HTTP_PROXY`. An existing list is kept.
 
 The fixed sentences are:
 
@@ -76,7 +78,7 @@ Local routes:
 | `GET` or `POST /git/{provider}/...` | Raw git smart HTTP. The path after the provider is the path on `github.com`. |
 | `GET` or `POST /upstream/{provider}/...` | Raw API HTTP. doctl uses base `http://127.0.0.1:8090/upstream/digitalocean/`. |
 
-`provider` and `server` and `connection` are `github` or `digitalocean`. `path` is an absolute path. The guest does not choose the upstream host or address. Methods are `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, and `DELETE`. Guest headers named authorization, cookie, host, and the hop-by-hop names are dropped. `X-Castbot-Approval` may carry an id of up to 80 letters, digits, `_`, or `-`. The buffered body cap is 32 MiB. A `3xx` from the host is not relayed and the `Location` is dropped.
+`provider` and `server` and `connection` are `github` or `digitalocean`. `path` is an absolute path. The guest does not choose the upstream host or address. Methods are `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, and `DELETE`. Guest headers named authorization, cookie, host, and the hop-by-hop names are dropped. `X-Castbot-Approval` may carry an id of up to 80 letters, digits, `_`, or `-`. The guest buffers each request and response up to 32 MiB. A git clone whose pack is larger than that cannot pass this egress. The cap stays as it is, and it is a known limit for the host git proxy. A `3xx` from the host is not relayed and the `Location` is dropped.
 
 Forward JSON, for `POST /http` and for the control-plane git and HTTP routes:
 
@@ -114,7 +116,7 @@ Control-plane routes, all under `{CASTBOT_URL}/api/castlet/agents/{agentID}` wit
 | `POST /egress/http` | API forward. Host maps `github` to `api.github.com` and `digitalocean` to `api.digitalocean.com`. |
 | `POST /egress/git` | Git smart HTTP. Host maps `github` to `https://github.com` plus `path`. |
 | `POST /egress/mcp` | One JSON-RPC message for `server`. |
-| `POST /egress/secret-request` | Card. May take up to 60 minutes. The result is only `saved`, `declined`, `expired`, or `already_configured`. |
+| `POST /egress/secret-request` | Card. Forwarded when liveness is enabled, including `{enabled:true, providers:[]}` and when only the other provider is listed. A disabled proxy, including `404` and a timeout, is refused at once and does not wait. When it is forwarded, the card may take up to 60 minutes. The result is only `saved`, `declined`, `expired`, or `already_configured`. |
 
 Castlet caches liveness for 5 seconds. A forward still goes to the host, which is the place that checks the grant, the allowlist, TLS, private addresses, redirects, and approval. The guest client does not follow a redirect and does not use `HTTP_PROXY` for these calls. `request_secret` reasons are trimmed to 500 characters and token-shaped fragments are replaced with `[redacted]` before they are sent.
 
