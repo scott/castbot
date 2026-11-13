@@ -1,6 +1,7 @@
 # Shared runtime image.
 # The default target (runtime) installs Cast from scott/castagent at a pinned
-# commit. It does not use install.sh, which would install anthropic unpinned.
+# commit, plus the coding tools in docs/runtime.md.
+# It does not use install.sh, which would install anthropic unpinned.
 # The stand-in target is only for local tests and CI.
 #
 #   docker build -t castbot-runtime:s07 .
@@ -16,7 +17,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/castlet ./cmd/castlet \
- && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/cast-standin ./cmd/cast-standin
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/cast-standin ./cmd/cast-standin \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/castbot-guest ./cmd/castbot-guest
 
 FROM python:3.11-slim-bookworm AS cast
 ARG CAST_COMMIT=5fc2bdb46c4041831fc51c9f909d59e54f887d31
@@ -46,15 +48,38 @@ WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/castlet"]
 
 FROM python:3.11-slim-bookworm AS runtime
-# The base image already has CA certificates, so this stage does not run apt.
-RUN mkdir -p /app/agent \
- && chown -R nobody:nogroup /app
+COPY deploy/runtime-install.sh /tmp/runtime-install.sh
+RUN sh /tmp/runtime-install.sh && rm /tmp/runtime-install.sh \
+ && mkdir -p /app/.local/bin /app/.local/share/castbot /app/.local/cache/go-build /app/.local/go/pkg/mod /app/agent \
+ && chown -R nobody:nogroup /app \
+ && chmod 755 /app /app/.local /app/.local/bin
 COPY --from=gobuild /out/castlet /usr/local/bin/castlet
+COPY --from=gobuild /out/castbot-guest /usr/local/bin/castbot-guest
+RUN ln -sf castbot-guest /usr/local/bin/git \
+ && ln -sf castbot-guest /usr/local/bin/gh \
+ && ln -sf castbot-guest /usr/local/bin/doctl \
+ && ln -sf castbot-guest /usr/local/bin/castbot-mcp \
+ && ln -sf castbot-guest /usr/local/bin/castbot-git-credential
 COPY --from=cast /opt/cast /opt/cast
-ENV PATH="/opt/cast/bin:${PATH}"
+COPY deploy/mcp /opt/castbot/mcp
+# /usr/local/bin is before the Cast venv so python3 and pip are the image
+# interpreter. pip install --user honors PYTHONUSERBASE. The runtime process
+# is started with the absolute /opt/cast/bin/python path below.
+ENV PATH="/app/.local/bin:/opt/node/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/opt/cast/bin"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV HOME=/app
-# GitPython raises on import when git is absent. Chat does not need it.
+ENV PYTHONUSERBASE=/app/.local
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV NPM_CONFIG_PREFIX=/app/.local
+ENV GOROOT=/usr/local/go
+ENV GOPATH=/app/.local/go
+ENV GOBIN=/app/.local/bin
+ENV GOCACHE=/app/.local/cache/go-build
+ENV GOMODCACHE=/app/.local/go/pkg/mod
+ENV GOTOOLCHAIN=local
+ENV CAST_AGENT_DIR=/app/agent
+ENV CASTLET_EGRESS_URL=http://127.0.0.1:8090
+# GitPython raises on import when git is absent. The binary is present now.
 ENV GIT_PYTHON_REFRESH=quiet
 ENV CASTLET_RUNTIME="/opt/cast/bin/python -m cast.runtime --agent-path /app/agent --port 8081 --host 127.0.0.1"
 EXPOSE 8080

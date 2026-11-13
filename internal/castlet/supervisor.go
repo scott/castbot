@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/bundle"
+	"github.com/scott/castbot/internal/egresscontract"
 )
 
 const (
@@ -87,6 +88,8 @@ type Supervisor struct {
 	version      string
 	sha          string
 	secrets      []secret
+	egressAt     time.Time
+	egressView   egresscontract.Status
 	proc         *exec.Cmd
 	procDone     chan struct{}
 	bootErr      string

@@ -18,7 +18,7 @@ One line per live machine: agent name, state, image tag, and `update available` 
 castbot admin replace-machine <agent id or Cast CLI slug> [--dry-run] [--yes] [--no-copy]
 ```
 
-This is the same replace the Machine tab runs. It starts a new machine on `CASTBOT_IMAGE`, copies memory and workspace files, and deletes the old machine only after the new one is healthy.
+This is the same replace the Machine tab runs. It starts a new machine on `CASTBOT_IMAGE`, copies memory and workspace files, and deletes the old machine only after the new one is healthy. It does not copy `/app/.local`, so language packages installed on the old machine are not on the new one.
 
 `--dry-run` prints the agent, the machine id prefix, the state, the current image, the target image, and any reason the replace would be refused. It does not call the machine API.
 
