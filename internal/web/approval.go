@@ -575,13 +575,24 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, allow bool) {
 }
 
 func (s *Server) writeCard(w http.ResponseWriter, user store.User, row store.Approval, csrf string) {
-	body, err := execTemplate("approvalCard", s.presentApproval(row, user, csrf))
+	view := s.presentApproval(row, user, csrf)
+	body, err := execTemplate("approvalCard", view)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
+	// The chat card and the pane card share an id, and the form target
+	// resolves to the first match. This copy settles every match, so the
+	// in-chat card updates when the click was in the pane.
+	view.OOB = true
+	if extra, err := execTemplate("approvalCard", view); err == nil {
+		body += extra
+	}
 	if chrome, cerr := s.approvalChrome(context.Background(), user, row.AgentID, row.RunID); cerr == nil {
 		body += chrome
+	}
+	if sync, serr := s.approvalsSyncHTML(context.Background(), user, row.AgentID, csrf); serr == nil {
+		body += sync
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

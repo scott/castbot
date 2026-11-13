@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -411,13 +412,17 @@ func (s *Server) fileGlance(r *http.Request, user store.User, agent store.Agent,
 }
 
 func (s *Server) fillApprovals(r *http.Request, user store.User, agent store.Agent, p *page) {
-	rows, err := s.store.ListAgentApprovals(r.Context(), user.ID, agent.ID)
+	s.fillApprovalsCtx(r.Context(), user, agent, from(r).CSRF, p)
+}
+
+func (s *Server) fillApprovalsCtx(ctx context.Context, user store.User, agent store.Agent, csrf string, p *page) {
+	rows, err := s.store.ListAgentApprovals(ctx, user.ID, agent.ID)
 	if err != nil {
 		return
 	}
 	var earlier []earlierRow
 	for _, row := range rows {
-		card := s.presentApproval(row, user, from(r).CSRF)
+		card := s.presentApproval(row, user, csrf)
 		if row.Status == "expired" {
 			card.Line = "No answer in 10 min, denied"
 		}
@@ -437,6 +442,23 @@ func (s *Server) fillApprovals(r *http.Request, user store.User, agent store.Age
 		earlier[i], earlier[j] = earlier[j], earlier[i]
 	}
 	p.ApprovalsEarlier = earlier
+}
+
+// approvalsSyncHTML is the approvals list, tab count, and header pill.
+// Callers append it only when the fragment changed, so an unrelated
+// activity tick does not remount the pane.
+func (s *Server) approvalsSyncHTML(ctx context.Context, user store.User, agentID, csrf string) (string, error) {
+	agent, err := s.store.GetAgent(ctx, user.ID, agentID)
+	if err != nil {
+		return "", err
+	}
+	p := page{
+		Agent:   presentAgent(agent, true, userLocation(user.Timezone)),
+		CSRF:    csrf,
+		SwapOOB: true,
+	}
+	s.fillApprovalsCtx(ctx, user, agent, csrf, &p)
+	return execTemplate("approvalsSync", p)
 }
 
 func (s *Server) fillToasts(w http.ResponseWriter, r *http.Request, current string, p *page) {

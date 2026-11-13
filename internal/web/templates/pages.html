@@ -149,7 +149,7 @@
 {{end}}
 
 {{define "approvalCard"}}
-<div class="appr{{if .Approved}} done{{end}}{{if not .Pending}} settled{{end}}" id="appr-{{.ID}}">
+<div class="appr{{if .Approved}} done{{end}}{{if not .Pending}} settled{{end}}" id="appr-{{.ID}}"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>
 <div class="appr-h"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg></span><h3>{{.Tool}}</h3>{{if .When}}<span class="stamp">{{.When}}</span>{{end}}</div>
 {{if .From}}<p class="stamp">{{.From}}</p>{{end}}
 {{if .Args}}<dl class="kv">{{range .Args}}<dt>{{.Key}}</dt><dd>{{if .Hidden}}<span class="faint">Hidden</span>{{else if .Long}}<details><summary>{{.Short}}</summary><pre class="cmd">{{.Value}}</pre></details>{{else}}<span class="mono">{{.Value}}</span>{{end}}</dd>{{end}}</dl>{{end}}
@@ -174,6 +174,7 @@
 <span class="av {{.Color}}" aria-hidden="true">{{.Letter}}</span>
 <div class="body">
 <div class="cards" sse-swap="card" hx-swap="innerHTML">{{template "liveCards" .}}</div>
+<div sse-swap="approvals" hx-swap="none" hidden></div>
 <p class="stream" sse-swap="text" hx-swap="beforeend" hidden></p>
 <div class="tools" sse-swap="tools" hx-swap="innerHTML">{{.Tools}}</div>
 <div class="md" id="md-{{.RunID}}" aria-busy="true" sse-swap="block" hx-swap="beforeend">{{.Blocks}}</div>
