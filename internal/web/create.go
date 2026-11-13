@@ -51,6 +51,8 @@ type setupView struct {
 	Auto, Stripped, Conflict, HasKey, Editing, ServerKey            bool
 	Alt, Block, Why                                                 string
 	Models                                                          []modelChoice
+	Pick                                                            modelPick
+	KeyFine                                                         keyFine
 	Sizes                                                           []sizeChoice
 	Idles                                                           []idleChoice
 }
@@ -185,13 +187,17 @@ func (s *Server) presentDraft(ctx context.Context, user store.User, doc draftDoc
 		card := *doc.Card
 		s.refreshCard(ctx, user.ID, &card)
 		view.Card = presentSetup(card, doc.Editing)
+		view.Card.Pick = s.modelPick(ctx, user.ID, card.Model, "setup")
 	}
 	return view
 }
 
 func (s *Server) refreshCard(ctx context.Context, userID string, card *setupState) {
 	if card.Model == "" {
-		card.Model = defaultModelID()
+		card.Model = s.defaultConfiguredModel(ctx, userID)
+		if card.Model == "" {
+			card.Model = defaultModelID()
+		}
 	}
 	if card.Size == "" {
 		card.Size = createSize
@@ -307,6 +313,7 @@ func presentSetup(card setupState, editing bool) setupView {
 		v.Why = "Add a model key to create."
 		v.Block = "Add a model key first."
 	}
+	v.KeyFine = keyFine{Line: v.KeyLine, Label: v.KeyLabel, Server: v.ServerKey}
 	v.Models = modelChoices(card.Model)
 	v.Sizes = []sizeChoice{
 		{createSize, "Small · $0.039/h", card.Size == createSize || card.Size == ""},
@@ -543,7 +550,10 @@ func (s *Server) cardFrom(ctx context.Context, userID, text string, prop Proposa
 	if schedule == "" {
 		schedule = scheduleFrom(text)
 	}
-	model := defaultModelID()
+	model := s.defaultConfiguredModel(ctx, userID)
+	if model == "" {
+		model = defaultModelID()
+	}
 	card := setupState{
 		Name: name, Title: title, Instructions: instructions, Job: job,
 		Schedule: schedule, Reason: reason, Model: model, Size: createSize, Idle: createIdle,
@@ -631,7 +641,7 @@ func (s *Server) saveCreate(w http.ResponseWriter, r *http.Request) {
 		instructions = instructionsFor(name, job, job)
 	}
 	model := strings.TrimSpace(r.FormValue("model"))
-	if !castcfg.KnownModel(model) {
+	if !s.AcceptModel(r.Context(), user.ID, model, card.Model) {
 		model = card.Model
 	}
 	size := strings.TrimSpace(r.FormValue("size"))

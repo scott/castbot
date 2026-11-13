@@ -35,6 +35,7 @@ type agentForm struct {
 	Skipped, LeftOut, Removed     []string
 	KeptLines                     []castcfg.KeptItem
 	HasAvatar, Editing            bool
+	Pick                          modelPick
 	AgentID                       string
 	Back, Job, KeyLine, Size      string
 	Color, ColorErr, Letter       string
@@ -598,7 +599,7 @@ func (s *Server) reviewImport(w http.ResponseWriter, r *http.Request, user store
 	} else if folder.MissingInstructions {
 		f.InstructionsErr = instructionsProblem(folder.InstructionsFile, "was not in the folder")
 	}
-	if f.Model != "" && !castcfg.KnownModel(f.Model) {
+	if f.Model != "" && !s.AcceptModel(r.Context(), user.ID, f.Model, base.Model) {
 		f.ModelErr = "That model is not in the provider manifest."
 	}
 	f.keepModel()
@@ -730,10 +731,18 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 		f.SectionErr = "Choose a section."
 		good = false
 	}
+	userID := ""
+	if u := from(r).User; u != nil {
+		userID = u.ID
+	}
+	prev := ""
+	if f.Editing {
+		prev = previous
+	}
 	if f.Model == "" {
 		f.ModelErr = "Choose a model from the list."
 		good = false
-	} else if !castcfg.KnownModel(f.Model) && !(f.Editing && f.Model == previous) {
+	} else if !s.AcceptModel(r.Context(), userID, f.Model, prev) {
 		f.ModelErr = "That model is not in the provider manifest."
 		good = false
 	}
@@ -947,7 +956,7 @@ func (s *Server) storeBundle(ctx context.Context, userID, agentID string, spec c
 	if err != nil {
 		return "", err
 	}
-	if !castcfg.Agree(spec, parsed) || strings.TrimSpace(spec.Model) == "" || (!allowUnknown && !castcfg.KnownModel(spec.Model)) {
+	if !castcfg.Agree(spec, parsed) || strings.TrimSpace(spec.Model) == "" || (!allowUnknown && !s.AcceptModel(ctx, userID, spec.Model, "")) {
 		return "", errFormMismatch
 	}
 	for _, name := range parsed.Tools {
@@ -1062,6 +1071,8 @@ func (s *Server) showForm(w http.ResponseWriter, r *http.Request, user store.Use
 	}
 	f.Letter = letter(f.Name)
 	f.Colors = colorSwatches(f.Color)
+	f.Pick = s.modelPick(r.Context(), user.ID, f.Model, "form")
+	f.Models = modelIDs(f.Pick)
 	p.AgentForm = f
 	s.render(w, status, "app", finish(p))
 }

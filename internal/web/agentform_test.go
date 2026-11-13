@@ -24,6 +24,7 @@ import (
 )
 
 func TestAgentFormRoundTrip(t *testing.T) {
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-form-key")
 	ip := "203.0.113.180:9"
 	h := newHarness(t)
 	user, secret := h.account("form@example.com", "Form Owner", "correct-horse-1")

@@ -1,0 +1,23 @@
+{{define "modelPicker"}}
+<div class="mpick" id="model-pick"{{if .Refresh}} hx-get="/model-picker" hx-trigger="load once" hx-include="#model-pick" hx-target="#model-pick" hx-swap="outerHTML"{{end}}>
+<input type="hidden" name="surface" value="{{.Surface}}">
+<div class="field"><span class="lab">Provider</span><div class="selwrap"><select class="sel" name="provider" aria-label="Provider"{{if .Disabled}} disabled{{end}}{{if not .Disabled}} hx-get="/model-picker" hx-trigger="change" hx-include="#model-pick" hx-target="#model-pick" hx-swap="outerHTML"{{end}}>
+{{if not .Provider}}<option value="" selected>Choose a provider</option>{{end}}
+{{range .Providers}}<option value="{{.Key}}"{{if .On}} selected{{end}}>{{.Name}}</option>{{end}}
+</select></div></div>
+<div class="field"><span class="lab">Model</span>
+{{if .Disabled}}<input type="hidden" name="model" value="{{.Model}}">{{end}}
+<div class="selwrap"><select class="sel" name="model" aria-label="Model"{{if .Disabled}} disabled{{end}}>
+<option value=""{{if not .Model}} selected{{end}}>Choose a model</option>
+{{range .Models}}<option value="{{.ID}}"{{if .On}} selected{{end}}>{{.Label}}</option>{{end}}
+</select></div>
+{{if .Warning}}<span class="err">{{.Warning}}</span>{{end}}
+{{if .Help}}<p class="help">{{.Help}}</p>{{end}}
+</div>
+{{if .Disabled}}<div class="keymiss"><span class="grow"><b>Add a model key first.</b> A provider key is required before you can choose a model.</span><a class="btn sm" href="/settings/secrets">Add a key in Secrets</a></div>{{end}}
+</div>
+{{end}}
+
+{{define "modelKeyFine"}}
+<p class="fineprint" id="model-key-line"{{if .OOB}} hx-swap-oob="true"{{end}}>{{if .Server}}Values are never shown. {{.Line}}{{else}}From your vault. Values are never shown.{{if .Label}} {{.Label}}{{end}}{{end}}</p>
+{{end}}

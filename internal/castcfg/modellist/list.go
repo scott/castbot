@@ -150,6 +150,33 @@ func (c *Catalog) SetOffline() {
 	c.mu.Unlock()
 }
 
+// AllowsFetch reports whether List may dial. Snapshot never dials.
+func (c *Catalog) AllowsFetch() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.offline
+}
+
+// HasLive reports a warm live list for this token. A cold cache is a miss.
+// This does not dial.
+func (c *Catalog) HasLive(provider, token string) bool {
+	list, ok := c.cached(provider, token)
+	return ok && !list.Fallback
+}
+
+// DefaultID is the manifest default for a provider, already prefixed.
+func DefaultID(provider string) string {
+	e, ok := findEntry(provider)
+	if !ok || e.Impl == "reserved" {
+		return ""
+	}
+	list := offlineList(e)
+	if len(list.Models) == 0 {
+		return ""
+	}
+	return list.Models[0].ID
+}
+
 // OllamaConfigured reports whether a base URL was set for ollama.
 // The keyless flag in the manifest does not count as configured.
 func OllamaConfigured() bool {
