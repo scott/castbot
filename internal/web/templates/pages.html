@@ -209,8 +209,9 @@
 {{end}}
 
 {{define "resumeLive"}}
-<div id="resume-live"{{if .ResumePoll}} hx-post="/agents/{{.Agent.ID}}/resume" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>{{if .ResumeErr}}<div class="banner err" role="alert"><span class="grow">{{.ResumeErr}}</span></div>{{else}}{{.ResumeAct}}{{end}}</div>
-{{template "chromeOOB" .}}
+<div id="resume-live"{{if .ResumePoll}} hx-post="/agents/{{.Agent.ID}}/resume" hx-trigger="every 2s" hx-swap="outerHTML" hx-include="this"{{end}}>{{if .ResumeErr}}<div class="banner err" role="alert"><span class="grow">{{.ResumeErr}}</span></div>{{else}}{{.ResumeAct}}{{end}}{{if .ResumePoll}}<input type="hidden" name="dot" value="{{.Agent.Dot}}"><input type="hidden" name="chip" value="{{.Agent.ChipClass}}"><input type="hidden" name="label" value="{{.Agent.ChipLabel}}"><input type="hidden" name="sub" value="{{.Agent.Sub}}"><input type="hidden" name="subc" value="{{.Agent.SubClass}}"><input type="hidden" name="act" value="1">{{end}}</div>
+{{if .ResumeChrome}}{{template "chromeOOB" .}}{{end}}
+{{if .ResumeClearAct}}<div id="resume-act" hx-swap-oob="delete"></div>{{end}}
 {{end}}
 
 {{define "chromeOOB"}}
@@ -231,7 +232,7 @@
 {{if eq .Tab "chat"}}
 {{if .Threads}}<nav class="thread-switch" aria-label="Threads">{{range .Threads}}<a href="{{.Href}}"{{if .On}} class="on" aria-current="page"{{end}}>{{.Title}}</a>{{end}}</nav>{{end}}
 <div class="ch-body"><div class="msgs" id="msgs">{{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}{{if .Run.On}}<div class="tbar"><a class="btn sm tback" href="{{.Run.Back}}">&lt; {{.Agent.Name}} chat</a><div class="grow"><div class="t1"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>{{.Run.Name}}</div><div class="t2">{{.Run.When}}</div></div><span class="rst {{.Run.Class}}">{{.Run.Pill}}</span></div>{{end}}{{if .Run.Fail}}<div class="banner err" role="status"><span class="grow"><b>{{.Run.FailLead}}</b> {{.Run.FailRest}}</span><form method="post" action="{{.Run.RunNow}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Run now</button></form><a class="btn sm" href="{{.Run.Machine}}">Open machine</a></div>{{end}}{{if .Run.Wake}}<div class="sysline{{if .Run.Fail}} err{{else}} ok{{end}}">{{.Run.Wake}}</div>{{end}}{{if .Replace.Lock}}<div class="banner start" role="status"><span class="grow"><b>{{.Replace.ChatBold}}</b> {{.Replace.ChatRest}}</span><a class="btn sm" href="/agents/{{.Agent.ID}}?panel=machine" data-open-panel>View progress</a></div>{{end}}{{template "bootSlot" .}}{{template "messages" .}}{{template "askJob" .}}{{if .Run.Done}}<div class="sysline ok">{{.Run.Done}}</div>{{end}}{{template "lives" .}}</div></div>
-<div class="comp-wrap">{{if .AutoResume}}<div id="resume-live" hx-post="/agents/{{.Agent.ID}}/resume" hx-trigger="load" hx-swap="outerHTML">{{.ResumeAct}}</div>{{end}}<div class="netbar" id="netbar" role="status" hidden><svg class="i off" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M8.5 16.5a5 5 0 0 1 7 0M5 13a10 10 0 0 1 4-2.4M19 13a10 10 0 0 0-3.2-2.1M2 9.5a15 15 0 0 1 4.5-3M22 9.5A15 15 0 0 0 11 5.5"/><circle cx="12" cy="19.5" r=".8"/></svg><span class="grow"><b>Connection lost.</b> {{.Agent.Name}} keeps working on its machine. The reply catches up when you are back.</span><button class="btn sm" type="button" id="netbar-retry">Try now</button></div><div id="pending-bar" class="pending-bar"{{if eq .Agent.Approvals 0}} hidden{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span class="grow">{{if eq .Agent.Approvals 1}}1 approval waiting{{if .PendingTool}}: {{.PendingTool}}{{end}}{{else if gt .Agent.Approvals 1}}{{.Agent.Approvals}} approvals waiting{{end}}</span><a class="btn sm" href="/agents/{{.Agent.ID}}?panel=approvals" data-open-panel>Review</a></div>
+<div class="comp-wrap">{{if .AutoResume}}<div id="resume-act">{{.ResumeAct}}</div><div id="resume-live" hx-post="/agents/{{.Agent.ID}}/resume" hx-trigger="load" hx-swap="outerHTML" hx-include="this"><input type="hidden" name="dot" value="{{.Agent.Dot}}"><input type="hidden" name="chip" value="{{.Agent.ChipClass}}"><input type="hidden" name="label" value="{{.Agent.ChipLabel}}"><input type="hidden" name="sub" value="{{.Agent.Sub}}"><input type="hidden" name="subc" value="{{.Agent.SubClass}}"><input type="hidden" name="act" value="1"></div>{{end}}<div class="netbar" id="netbar" role="status" hidden><svg class="i off" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M8.5 16.5a5 5 0 0 1 7 0M5 13a10 10 0 0 1 4-2.4M19 13a10 10 0 0 0-3.2-2.1M2 9.5a15 15 0 0 1 4.5-3M22 9.5A15 15 0 0 0 11 5.5"/><circle cx="12" cy="19.5" r=".8"/></svg><span class="grow"><b>Connection lost.</b> {{.Agent.Name}} keeps working on its machine. The reply catches up when you are back.</span><button class="btn sm" type="button" id="netbar-retry">Try now</button></div><div id="pending-bar" class="pending-bar"{{if eq .Agent.Approvals 0}} hidden{{end}}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span class="grow">{{if eq .Agent.Approvals 1}}1 approval waiting{{if .PendingTool}}: {{.PendingTool}}{{end}}{{else if gt .Agent.Approvals 1}}{{.Agent.Approvals}} approvals waiting{{end}}</span><a class="btn sm" href="/agents/{{.Agent.ID}}?panel=approvals" data-open-panel>Review</a></div>
 {{if .StartMachine}}<p class="start-note">No machine yet. Start it to chat.</p>{{end}}
 {{if .LowSpace}}<div class="calm" id="low-space-note" role="{{if eq .Panel "files"}}status{{else}}alert{{end}}"{{if ne .Panel "files"}} hidden{{end}}><span class="ico" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/></svg></span><p><b>The server is low on space.</b> Upload is paused.</p></div>{{end}}
 {{if .Replace.Lock}}<div class="comp locked" id="composer"><p class="ph">This machine is being replaced. You can chat again when it is done.</p></div>{{else}}<form class="comp" id="composer" data-agent-id="{{.Agent.ID}}" method="post" action="/agents/{{.Agent.ID}}/messages" hx-post="/agents/{{.Agent.ID}}/messages" hx-target="#msgs" hx-swap="beforeend" data-upload="/agents/{{.Agent.ID}}/uploads" data-agent="{{.Agent.Name}}" data-low="{{if .LowSpace}}1{{end}}">
@@ -391,7 +392,7 @@
 {{end}}
 
 {{define "machinePanel"}}
-<div class="page-b machine" id="machine-root"{{if .Replace.Poll}} hx-get="/agents/{{.Agent.ID}}/machine/card" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+<div class="page-b machine" id="machine-root">
 <h2>Machine</h2>
 <p class="muted" id="machine-lead">{{.Machine.Lead}}</p>
 {{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
@@ -401,7 +402,7 @@
 <span class="chip {{.Agent.ChipClass}}" id="machine-chip"><span class="pip"></span>{{.Agent.ChipLabel}}</span>
 <div class="meta-grid"><div><div class="k">Size</div><div class="v">{{.Agent.SizeLabel}}</div></div><div><div class="k">Auto-pause</div><div class="v">{{.Agent.IdleLabel}}</div></div>{{if .Replace.HasImage}}<div><div class="k">Image</div><div class="v{{if .Replace.Update}} upd{{end}}">{{.Replace.ImageLine}}</div></div>{{end}}{{if .Machine.ShowFirst}}<div><div class="k">First running</div><div class="v">{{.Machine.FirstRunning}}</div></div>{{end}}{{if .Machine.LastWake}}<div><div class="k">Last wake</div><div class="v">{{.Machine.LastWake}}</div></div>{{end}}</div>
 {{if .Replace.NoMachine}}<div class="nomach"><div><b>{{.Agent.Name}} has no machine right now.</b><p>Start one to chat. The agent, its chats and its settings are all here.</p></div></div>{{end}}
-{{if .Replace.Steps}}<ol class="rsteps steps">{{range .Replace.Steps}}<li class="step{{if .Done}} done{{end}}{{if .Now}} now{{end}}"><span class="s">{{if .Done}}<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>{{else if .Now}}<span class="spin"></span>{{end}}</span><span class="grow">{{.Title}}{{if .Detail}}<span class="ssub">{{.Detail}}</span>{{end}}</span></li>{{end}}</ol>{{if .Replace.Fine}}<p class="fineprint">{{.Replace.Fine}}</p>{{end}}{{end}}
+{{if .Replace.Steps}}{{template "replaceProgress" .}}{{end}}
 <div class="acts racts">
 {{if or .Machine.CanStart .Machine.CanRetry}}<form method="post" action="/agents/{{.Agent.ID}}/machine"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>{{if .Machine.CanRetry}}Try again{{else}}Start machine{{end}}</button></form>{{end}}
 {{if .Machine.CanPause}}<form method="post" action="/agents/{{.Agent.ID}}/machine/pause"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Pause</button></form>{{end}}
@@ -417,6 +418,13 @@
 {{if .Replace.History}}<section class="hist"><h3>Machine history</h3><ul class="evs">{{range .Replace.History}}<li><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}</ul></section>{{end}}
 {{if .Replace.LogNote}}<p class="fineprint">{{.Replace.LogNote}}</p>{{end}}
 <p class="fineprint">State from the cloud API. Checking it does not wake the machine.</p>
+</div>
+{{end}}
+
+{{define "replaceProgress"}}
+<div id="replace-progress" hx-get="/agents/{{.Agent.ID}}/machine/card" hx-trigger="every 2s" hx-swap="outerHTML">
+<ol class="rsteps steps">{{range .Replace.Steps}}<li class="step{{if .Done}} done{{end}}{{if .Now}} now{{end}}"><span class="s">{{if .Done}}<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>{{else if .Now}}<span class="spin"></span>{{end}}</span><span class="grow">{{.Title}}{{if .Detail}}<span class="ssub">{{.Detail}}</span>{{end}}</span></li>{{end}}</ol>
+{{if .Replace.Fine}}<p class="fineprint">{{.Replace.Fine}}</p>{{end}}
 </div>
 {{end}}
 

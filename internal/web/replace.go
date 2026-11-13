@@ -365,17 +365,28 @@ func (s *Server) machineCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if _, err := s.store.GetAgent(r.Context(), user.ID, id); s.missing(w, err) {
+	agent, err := s.store.GetAgent(r.Context(), user.ID, id)
+	if s.missing(w, err) {
 		return
 	}
 	// A finished replace has to reload the whole page. The poll only swaps
-	// the machine panel, so the chip and the sidebar would stay on Replacing.
+	// the progress block, so the chip and the sidebar would stay on Replacing.
 	if !s.replacing(r.Context(), user.ID, id) {
 		w.Header().Set("HX-Redirect", "/agents/"+url.PathEscape(id)+"/machine")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	s.renderChat(w, r, user, id, false, "machine", http.StatusOK, "")
+	row, err := s.store.LatestReplacement(r.Context(), user.ID, agent.ID)
+	if err != nil || row.State != "running" {
+		w.Header().Set("HX-Redirect", "/agents/"+url.PathEscape(id)+"/machine")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	out := s.progressView(replaceView{}, row, user, userLocation(user.Timezone))
+	s.render(w, http.StatusOK, "replaceProgress", page{
+		Agent:   agentView{ID: agent.ID, Name: agent.Name},
+		Replace: out,
+	})
 }
 
 func (s *Server) postReplace(w http.ResponseWriter, r *http.Request) {
