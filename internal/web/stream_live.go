@@ -15,15 +15,22 @@ import (
 // stream already sent. The fold grows with each new event so a chunk
 // does not read the whole history again.
 type liveSend struct {
-	run       store.Run
-	pending   bool
-	machine   string
-	fold      runFold
-	lastTools string
-	actReady  bool
-	actHidden bool
-	actCopy   string
+	run        store.Run
+	pending    bool
+	machine    string
+	fold       runFold
+	lastTools  string
+	actReady   bool
+	actHidden  bool
+	actCopy    string
+	lastTail   string
+	lastTailAt time.Time
+	heldTail   string
 }
+
+// tailGap caps live markdown tail swaps at about 13 frames a second.
+// A block, a tool, an approval, or the end of the run flushes sooner.
+const tailGap = 75 * time.Millisecond
 
 // runFold is the text and tool rows seen so far on one stream.
 type runFold struct {
@@ -175,4 +182,56 @@ func (st *liveSend) putAct(fw *frameWriter, w io.Writer, out activityOut, elapse
 func (s *Server) syncActivity(w io.Writer, st *liveSend) error {
 	out, elapsed := s.activityNow(st)
 	return st.putAct(nil, w, out, elapsed)
+}
+
+// emitTail sends the open markdown immediately on the first frame and on
+// a block, tool, or approval. Other text chunks are held so the tail is
+// swapped at most once per tailGap.
+func (st *liveSend) emitTail(w io.Writer, inner string, immediate bool) error {
+	if !immediate && !st.lastTailAt.IsZero() && time.Since(st.lastTailAt) < tailGap {
+		if inner == st.lastTail {
+			st.heldTail = ""
+		} else {
+			st.heldTail = inner
+		}
+		return nil
+	}
+	return st.sendTail(w, inner)
+}
+
+// flushTail writes a tail that was held for the cadence window.
+func (st *liveSend) flushTail(w io.Writer) error {
+	if st.heldTail == "" {
+		return nil
+	}
+	return st.sendTail(w, st.heldTail)
+}
+
+func (st *liveSend) sendTail(w io.Writer, inner string) error {
+	st.heldTail = ""
+	if inner == st.lastTail {
+		return nil
+	}
+	if err := writeSSE(w, "", "tail", inner); err != nil {
+		return err
+	}
+	st.lastTail = inner
+	st.lastTailAt = time.Now()
+	return nil
+}
+
+// tailDelay shortens the stream wait so a held tail is not stuck behind
+// the normal poll interval.
+func (st *liveSend) tailDelay(max time.Duration) time.Duration {
+	if st.heldTail == "" || st.lastTailAt.IsZero() {
+		return max
+	}
+	left := tailGap - time.Since(st.lastTailAt)
+	if left <= 0 {
+		return 0
+	}
+	if left < max {
+		return left
+	}
+	return max
 }

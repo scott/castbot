@@ -126,6 +126,12 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 		if err := r.Context().Err(); err != nil {
 			return
 		}
+		if st.heldTail != "" && time.Since(st.lastTailAt) >= tailGap {
+			if err := st.flushTail(w); err != nil {
+				return
+			}
+			flush()
+		}
 		if time.Since(lastKA) >= s.keepaliveEvery() {
 			gap := time.Since(lastKA)
 			if gap > 20*time.Second {
@@ -243,14 +249,16 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			case <-timer.C:
 			}
 		case <-signals:
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(st.tailDelay(200 * time.Millisecond)):
 		}
 	}
 }
 
 // resumePos is how far the browser got inside one store sequence.
-// A text event is several frames (text, tail, each closed block, tools, act)
-// that share one store seq. A plain query after=N means the page already
+// A text event is several frames (text, each closed block, tools, act)
+// that share one store seq. The tail frame is not one of them: it is sent
+// on its own cadence and carries no id, so holding it does not move the
+// resume cursor. A plain query after=N means the page already
 // painted every frame of N. A Last-Event-ID of N means only frame 0 arrived.
 // A dotted id N.k means frame k arrived, so later frames of N must be resent.
 type resumePos struct {
@@ -372,6 +380,9 @@ func (s *Server) writeRunEvent(ctx context.Context, w io.Writer, user store.User
 		err = s.writeMarkdownProgress(fw, st, ev)
 		return
 	case "error":
+		if err = st.flushTail(fw.w); err != nil {
+			return
+		}
 		var payload struct {
 			Message string `json:"message"`
 		}
@@ -389,6 +400,9 @@ func (s *Server) writeRunEvent(ctx context.Context, w io.Writer, user store.User
 		err = fw.write("fail", body)
 		return
 	case "done":
+		if err = st.flushTail(fw.w); err != nil {
+			return
+		}
 		var payload struct {
 			MessageID string `json:"messageId"`
 		}
@@ -399,6 +413,9 @@ func (s *Server) writeRunEvent(ctx context.Context, w io.Writer, user store.User
 		return
 	case "permission":
 		st.pending = true
+		if err = st.flushTail(fw.w); err != nil {
+			return
+		}
 		var body string
 		body, err = s.cardsHTML(ctx, user, runRow.ID, csrf)
 		if err != nil {
@@ -479,7 +496,8 @@ func (s *Server) writeMarkdownProgress(fw *frameWriter, st *liveSend, ev store.R
 	} else {
 		inner = strings.ReplaceAll(inner, `<span class="caret" aria-hidden="true"></span>`, "")
 	}
-	if err := fw.write("tail", inner); err != nil {
+	immediate := len(closed) > len(prev) || ev.Kind == "tool" || st.pending
+	if err := st.emitTail(fw.w, inner, immediate); err != nil {
 		return err
 	}
 	for i := len(prev); i < len(closed); i++ {

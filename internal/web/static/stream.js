@@ -6,6 +6,15 @@
     var el = box();
     if (el && stick) el.scrollTop = el.scrollHeight;
   }
+  var scrollQueued = false;
+  function scrollSoon() {
+    if (scrollQueued) return;
+    scrollQueued = true;
+    requestAnimationFrame(function () {
+      scrollQueued = false;
+      scroll();
+    });
+  }
   var stick = true;
   function nearBottom(el) {
     return el.scrollHeight - el.scrollTop - el.clientHeight < 64;
@@ -44,12 +53,15 @@
       bubble.setAttribute("sse-connect", "/runs/" + bubble.id.slice(4) + "/events?after=" + resume);
     }
     if (d.type === "fail") settle();
-    else if ((t && t.closest && t.closest("#msgs")) || d.type === "done") scroll();
+    else if ((t && t.closest && t.closest("#msgs")) || d.type === "done") scrollSoon();
   });
   document.addEventListener("htmx:afterSettle", function () { pinRetry(); });
   document.addEventListener("htmx:afterSwap", function (ev) {
     var t = ev.detail && ev.detail.target;
-    if (t && (t.id === "msgs" || (t.closest && t.closest("#msgs")) || (t.classList && t.classList.contains("errbox")))) settle();
+    if (!t) return;
+    // A live reply swaps several nodes per batch. Scroll once for the frame.
+    if (t.id === "msgs" || (t.classList && t.classList.contains("errbox"))) settle();
+    else if (t.closest && t.closest("#msgs")) scrollSoon();
   });
   document.addEventListener("htmx:afterRequest", function (ev) {
     var elt = ev.detail && ev.detail.elt;
