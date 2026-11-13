@@ -350,6 +350,8 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .field > .lab { font-size: 13px; font-weight: 650; color: var(--tx2); display: flex; align-items: center; gap: 6px; }
 .field > .lab .opt { font-weight: 500; color: var(--tx3); }
 .field .help { font-size: 12.5px; color: var(--tx3); }
+.mpick { display: grid; gap: 14px; min-width: 0; }
+.mpick .field, .mpick .selwrap, .mpick select.sel { min-width: 0; max-width: 100%; }
 .inp { height: 44px; border-radius: 10px; border: 1px solid var(--line2); background: var(--surf); padding: 0 12px; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; }
 .inp input, .inp select { border: 0; background: transparent; outline: none; flex: 1; min-width: 0; height: 100%; }
 .inp.mono input { font-family: var(--mono); font-size: 14.5px; letter-spacing: .02em; }

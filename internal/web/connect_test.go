@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/bundle"
+	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/store"
 )
@@ -30,6 +31,7 @@ import (
 const connectCanary = "test-connection-value"
 
 func TestConnectionTokenStaysOutOfGuest(t *testing.T) {
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-or-key")
 	ip := "203.0.113.48:9"
 	h := newHarness(t)
 	user, secret := h.account("connect-guest@example.com", "Ada", "correct-horse-1")

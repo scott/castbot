@@ -615,7 +615,7 @@ func TestCreateUsesServerKey(t *testing.T) {
 			t.Fatalf("card create without a key %d", code)
 		}
 		got := createFromForm(t, h, user, ip, "Scout", "")
-		if got.StatusCode != http.StatusBadRequest || !strings.Contains(got.Body, "Add a model key first") || !strings.Contains(got.Body, "your own "+slot.Title+" key") {
+		if got.StatusCode != http.StatusBadRequest || !strings.Contains(got.Body, "That model is not in the provider manifest.") || !strings.Contains(got.Body, "Add a model key first") {
 			t.Fatal("form create without a key was not blocked")
 		}
 		if len(agentRows(t, h, user.ID)) != 0 || len(fake.Creates) != 0 {

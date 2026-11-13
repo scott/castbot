@@ -24,6 +24,7 @@ import (
 )
 
 func TestAgentFormRoundTrip(t *testing.T) {
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-form-key")
 	ip := "203.0.113.180:9"
 	h := newHarness(t)
 	user, secret := h.account("form@example.com", "Form Owner", "correct-horse-1")
@@ -187,6 +188,7 @@ func TestImportReviewAndRejects(t *testing.T) {
 }
 
 func TestSaveReloadsRunningAndLeavesPaused(t *testing.T) {
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-or-key")
 	ip := "203.0.113.182:9"
 	h, fake, agent := machineUser(t, ip)
 	model := firstModel(t)
@@ -261,6 +263,7 @@ func TestSaveReloadsRunningAndLeavesPaused(t *testing.T) {
 }
 
 func TestSaveDoesNotWakeAnAutoPausedMachine(t *testing.T) {
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-or-key")
 	ip := "203.0.113.186:9"
 	h, fake, agent := machineUser(t, ip)
 	model := firstModel(t)
@@ -303,6 +306,7 @@ func TestSaveDoesNotWakeAnAutoPausedMachine(t *testing.T) {
 }
 
 func TestAgentFormAuthz(t *testing.T) {
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-or-key")
 	ip := "203.0.113.183:9"
 	h := newHarness(t)
 	owner, secret := h.account("owner-form@example.com", "Owner", "correct-horse-1")
@@ -480,6 +484,7 @@ func TestSecretInstructionsAreSkipped(t *testing.T) {
 }
 
 func TestNestedSecretsStayOffThePageAndTheBundle(t *testing.T) {
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-or-key")
 	ip := "203.0.113.189:9"
 	h := newHarness(t)
 	user, secret := h.account("nested@example.com", "Nested Owner", "correct-horse-1")
@@ -534,6 +539,7 @@ func TestNestedSecretsStayOffThePageAndTheBundle(t *testing.T) {
 }
 
 func TestTamperedPostCannotAddAModelOrTool(t *testing.T) {
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-or-key")
 	ip := "203.0.113.191:9"
 	h := newHarness(t)
 	user, secret := h.account("tamper@example.com", "Tamper Owner", "correct-horse-1")
@@ -564,6 +570,7 @@ func TestTamperedPostCannotAddAModelOrTool(t *testing.T) {
 }
 
 func TestPendingReloadDoesNotBlockAndKeepsANewerSave(t *testing.T) {
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-or-key")
 	ip := "203.0.113.192:9"
 	h, fake, agent := machineUser(t, ip)
 	model := firstModel(t)
@@ -659,6 +666,7 @@ func TestPendingReloadDoesNotBlockAndKeepsANewerSave(t *testing.T) {
 }
 
 func TestFailedReloadBacksOff(t *testing.T) {
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-or-key")
 	ip := "203.0.113.193:9"
 	h, fake, agent := machineUser(t, ip)
 	model := firstModel(t)

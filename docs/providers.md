@@ -1,6 +1,8 @@
 # Provider keys
 
-A saved model id, such as `digitalocean/deepseek-v3.2`, is written into the agent bundle as `brain.model`. The key is not written into that file.
+A saved model id, such as `digitalocean/deepseek-3.2`, is written into the agent bundle as `brain.model`. The key is not written into that file.
+
+The model picker lists a provider only when this user has a key for it, from the vault or from the server environment. It then loads that provider's current chat models. The page shows ids and labels. It does not show the key. If the provider cannot be reached, the picker uses the ids saved in the manifest. A saved id that is no longer listed stays selected, and saving that same id is allowed. A different id that is not listed is rejected.
 
 The control plane reads one environment variable per provider. The name is `CASTBOT_PROVIDER_KEY_` plus the provider id in uppercase, with hyphens turned into underscores. For the digitalocean provider that is `CASTBOT_PROVIDER_KEY_DIGITALOCEAN`. For openai-api it is `CASTBOT_PROVIDER_KEY_OPENAI_API`.
 

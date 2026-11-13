@@ -29,6 +29,7 @@ import (
 )
 
 func TestShots(t *testing.T) {
+	t.Setenv("CASTBOT_MODELS_OFFLINE", "1")
 	if _, err := parseShotWait(os.Getenv("CASTBOT_SHOT_WAIT")); err != nil {
 		t.Fatal(err)
 	}
@@ -341,6 +342,34 @@ func TestShots(t *testing.T) {
 	t.Run("secret-paste", func(t *testing.T) {
 		shootSecretPaste(t, browserCtx)
 	})
+	dirModels := filepath.Join("..", "..", "docs", "evidence", "models")
+	if err := os.MkdirAll(dirModels, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, vp := range []struct {
+		w, h int
+		name string
+	}{{1280, 800, "1280"}, {390, 844, "390"}} {
+		vp := vp
+		t.Run("models-setup-"+vp.name, func(t *testing.T) {
+			shootModelSetup(t, browserCtx, dirModels, vp.w, vp.h, vp.name)
+		})
+		t.Run("models-advanced-"+vp.name, func(t *testing.T) {
+			shootModelAdvanced(t, browserCtx, dirModels, vp.w, vp.h, vp.name)
+		})
+		t.Run("models-edit-"+vp.name, func(t *testing.T) {
+			shootModelEdit(t, browserCtx, dirModels, vp.w, vp.h, vp.name)
+		})
+		t.Run("models-do-"+vp.name, func(t *testing.T) {
+			shootModelDO(t, browserCtx, dirModels, vp.w, vp.h, vp.name)
+		})
+		t.Run("models-delisted-"+vp.name, func(t *testing.T) {
+			shootModelDelisted(t, browserCtx, dirModels, vp.w, vp.h, vp.name)
+		})
+		t.Run("models-nokey-"+vp.name, func(t *testing.T) {
+			shootModelNoKey(t, browserCtx, dirModels, vp.w, vp.h, vp.name)
+		})
+	}
 }
 
 // htmxApproveReady is true once HTMX has processed the approve control.
@@ -764,7 +793,9 @@ func longTab(t *testing.T, browser context.Context, d time.Duration) context.Con
 
 func shootAgentForm(t *testing.T, browser context.Context, dir string, width, height int, theme, name string) {
 	t.Helper()
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-shot-key")
 	h := newHarness(t)
+	h.srv.ModelCatalog().SetOffline()
 	fake := host.NewFake()
 	h.srv.SetHost(fake, "example.invalid/castbot-runtime:s05", "https://castbot.example")
 	user, secret := h.account("s05-"+theme+"-"+name+"@example.com", "Shot User", "correct-horse-1")

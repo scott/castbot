@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/store"
 )
 
@@ -101,6 +102,7 @@ func TestChatCreateStoresAutoColor(t *testing.T) {
 }
 
 func TestAdvancedColorChoiceAndDefault(t *testing.T) {
+	t.Setenv(castcfg.ProviderKeyEnv("openrouter"), "fixture-or-key")
 	h := newHarness(t)
 	user, secret := h.account("advanced-color@example.com", "Alex Rivera", "correct-horse-1")
 	ip := "203.0.113.228:9"

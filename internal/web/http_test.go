@@ -56,6 +56,9 @@ func newHarnessWith(t *testing.T, client runtime.Client) *harness {
 	}
 	srv := New(st, key, client)
 	srv.SetDevEcho(true)
+	if os.Getenv("CASTBOT_MODELS_OFFLINE") == "1" {
+		srv.ModelCatalog().SetOffline()
+	}
 	if testStatusRefresh != nil {
 		testStatusRefresh(srv)
 	}

@@ -351,6 +351,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /settings/sessions", s.sessionsEnd)
 
 	mux.HandleFunc("GET /models/{provider}", s.providerModels)
+	mux.HandleFunc("GET /model-picker", s.modelPicker)
 	mux.HandleFunc("GET /new-agent", s.newAgent)
 	mux.HandleFunc("POST /new-agent", s.createAgent)
 	mux.HandleFunc("POST /new-agent/describe", s.describeAgent)

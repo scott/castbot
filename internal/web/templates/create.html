@@ -96,8 +96,9 @@
 <div class="field"><span class="lab">Name</span><div class="inp"><input name="name" maxlength="40" value="{{.Create.Card.Name}}" aria-label="Name" required></div></div>
 <div class="field"><span class="lab">Job</span><textarea class="ta sm" name="job" maxlength="160" aria-label="Job">{{.Create.Card.Job}}</textarea></div>
 <div class="field"><span class="lab">Instructions</span><textarea class="ta" name="instructions" maxlength="8000" aria-label="Instructions">{{.Create.Card.Instructions}}</textarea><p class="help">This becomes instructions.md. Do not put keys here; add them in Settings, Secrets.</p></div>
-<div class="field"><span class="lab">Model</span><div class="selwrap"><select class="sel" name="model" aria-label="Model">{{range .Create.Card.Models}}<option value="{{.ID}}"{{if .On}} selected{{end}}>{{.Label}}</option>{{end}}</select></div></div>
-<div class="field"><span class="lab">Model key</span><p class="fineprint">{{if .Create.Card.ServerKey}}Values are never shown. {{.Create.Card.KeyLine}}{{else}}From your vault. Values are never shown.{{if .Create.Card.KeyLabel}} {{.Create.Card.KeyLabel}}{{end}}{{end}}</p></div>
+{{template "modelPicker" .Create.Card.Pick}}
+{{if .Create.Card.ModelErr}}<span class="err">{{.Create.Card.ModelErr}}</span>{{end}}
+<div class="field"><span class="lab">Model key</span>{{template "modelKeyFine" .Create.Card.KeyFine}}</div>
 <div class="field"><span class="lab">Machine</span><div class="sugs">{{range .Create.Card.Sizes}}<label class="pchip"><input type="radio" name="size" value="{{.ID}}"{{if .On}} checked{{end}}>{{.Label}}</label>{{end}}</div></div>
 <div class="field"><span class="lab">Pause</span><div class="selwrap"><select class="sel" name="idle" aria-label="Pause after idle">{{range .Create.Card.Idles}}<option value="{{.Sec}}"{{if .On}} selected{{end}}>{{.Label}}</option>{{end}}</select></div><p class="help">Size and idle time are fixed once the machine exists.</p></div>
 </div>
