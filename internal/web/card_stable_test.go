@@ -70,11 +70,15 @@ func TestCardsHTMLStableAcrossElapsedTicks(t *testing.T) {
 	if aside != later || strings.Contains(later, ">6s<") || strings.Contains(later, ">7s<") {
 		t.Fatal("badge chrome included the activity clock")
 	}
+	pane, err := h.srv.approvalsSyncHTML(context.Background(), user, agent.ID, csrf)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	freeze(h, base.Add(4*time.Second))
 	rec := httptest.NewRecorder()
 	last := ""
-	lastPane := aside
+	lastPane := pane
 	if err := h.srv.writeLiveCards(context.Background(), rec, user, runRow, csrf, &last, &lastPane); err != nil {
 		t.Fatal(err)
 	}
