@@ -2,6 +2,9 @@
 
 package web
 
+// Shot wait helpers live in a test file so they can call js from
+// shots_test.go. go vet checks non-test files on their own.
+
 import (
 	"context"
 	"errors"

@@ -335,6 +335,30 @@ func TestShots(t *testing.T) {
 	}
 }
 
+// htmxApproveReady is true once HTMX has processed the approve control.
+// The button and its form carry htmx-internal-data, the form is listening
+// for submit, and the control is not still swapping or settling.
+func htmxApproveReady(sel string) string {
+	return `(function(){
+		var btn = document.querySelector('` + sel + `');
+		if (!btn || !window.htmx) return false;
+		var form = btn.form || (btn.closest && btn.closest('form'));
+		if (!form) return false;
+		var bd = btn['htmx-internal-data'];
+		var fd = form['htmx-internal-data'];
+		if (!bd || !bd.firstInitCompleted || !fd || !fd.firstInitCompleted) return false;
+		if (!fd.listenerInfos || !fd.listenerInfos.length) return false;
+		function settling(el) {
+			if (!el || !el.classList) return false;
+			return el.classList.contains('htmx-added') || el.classList.contains('htmx-settling') || el.classList.contains('htmx-swapping') || el.classList.contains('htmx-request');
+		}
+		if (settling(btn) || settling(form) || settling(document.body)) return false;
+		var cards = form.closest && form.closest('.cards');
+		if (settling(cards)) return false;
+		return true;
+	})()`
+}
+
 // shootDecisionBar clicks Approve on a live card and checks the waiting bar
 // and the nav badges clear. The stream can swap the card before the click
 // response lands, so the bar has to ride the stream event.
@@ -365,7 +389,9 @@ func shootDecisionBar(t *testing.T, browser context.Context, width, height, n in
 		if err := chromedp.Run(ctx, shotVisible(t, sel, chromedp.ByQuery)); err != nil {
 			t.Fatalf("button %d: %v", i, err)
 		}
-		if err := chromedp.Run(ctx, shotPoll(t, "htmx on the approval button", js(`!!(window.htmx&&document.querySelector('`+sel+`'))`))); err != nil {
+		// The button is in the DOM before HTMX settles the swap and binds the
+		// form. A click in that gap is a full page POST.
+		if err := chromedp.Run(ctx, shotPoll(t, "htmx processed the approve button", js(htmxApproveReady(sel)))); err != nil {
 			t.Fatalf("htmx %d: %v", i, err)
 		}
 		if err := chromedp.Run(ctx, chromedp.Evaluate(js(`document.querySelector('`+sel+`').click()`), nil)); err != nil {
