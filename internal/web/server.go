@@ -115,6 +115,9 @@ type Server struct {
 	greetMu   sync.Mutex
 	greetRuns map[string]struct{}
 
+	statusMu   sync.Mutex
+	statusWant map[string]statusJob
+
 	connectDial *connect.Dial
 	mcp         *connect.Pool
 }
@@ -367,6 +370,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /agents/{id}/avatar", s.agentAvatar)
 	mux.HandleFunc("GET /agents/{id}/machine", s.redirectAgentPanel)
 	mux.HandleFunc("GET /agents/{id}/machine/card", s.machineCard)
+	mux.HandleFunc("GET /agents/{id}/machine/sync", s.machineSync)
+	mux.HandleFunc("POST /agents/{id}/machine/refresh", s.refreshMachinePanel)
 	mux.HandleFunc("GET /agents/{id}/machine/replace", s.confirmReplace)
 	mux.HandleFunc("POST /agents/{id}/machine/replace", s.postReplace)
 	mux.HandleFunc("GET /agents/{id}/routines", s.redirectAgentPanel)

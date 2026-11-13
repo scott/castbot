@@ -6,6 +6,7 @@
 <span class="hsp"></span>
 <span id="approval-pill">{{template "approvalPill" .}}</span>
 <a class="ibtn ptoggle{{if .Pane}} on{{end}}" data-panel-toggle href="/agents/{{.Agent.ID}}?panel=agent" data-open-panel hx-get="/agents/{{.Agent.ID}}?panel=agent" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" aria-expanded="{{if .Pane}}true{{else}}false{{end}}" aria-controls="agent-panel" aria-label="Agent panel"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></a>
+{{if not .AutoResume}}<div id="vm-sync" hidden hx-get="/agents/{{.Agent.ID}}/machine/sync?dot={{.Agent.Dot}}&amp;chip={{.Agent.ChipClass}}&amp;label={{urlquery .Agent.ChipLabel}}&amp;sub={{urlquery .Agent.Sub}}&amp;subc={{urlquery .Agent.SubClass}}" hx-trigger="load delay:2s, load delay:6s" hx-swap="none"></div>{{end}}
 </header>
 {{end}}
 

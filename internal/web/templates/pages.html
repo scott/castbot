@@ -210,10 +210,19 @@
 
 {{define "resumeLive"}}
 <div id="resume-live"{{if .ResumePoll}} hx-post="/agents/{{.Agent.ID}}/resume" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>{{if .ResumeErr}}<div class="banner err" role="alert"><span class="grow">{{.ResumeErr}}</span></div>{{else}}{{.ResumeAct}}{{end}}</div>
+{{template "chromeOOB" .}}
+{{end}}
+
+{{define "chromeOOB"}}
 <a class="vmchip" id="vmchip" href="/agents/{{.Agent.ID}}?panel=machine" data-open-panel data-panel-tab hx-get="/agents/{{.Agent.ID}}?panel=machine" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" hx-swap-oob="outerHTML" aria-label="Open machine"><span class="chip {{.Agent.ChipClass}}"><span class="pip"></span>{{.Agent.ChipLabel}}{{if .Agent.ChipMeta}} <span class="meta">{{.Agent.ChipMeta}}</span>{{end}}</span></a>
 <span class="sub{{if .Agent.SubClass}} {{.Agent.SubClass}}{{end}}" id="ag-sub-{{.Agent.ID}}" hx-swap-oob="outerHTML">{{if .Agent.ActSub}}{{.Agent.ActSub}}{{else}}{{.Agent.Sub}}{{end}}</span>
 <span class="dot {{.Agent.Dot}}" id="ag-dot-{{.Agent.ID}}" hx-swap-oob="outerHTML"></span>
 <span class="dot {{.Agent.Dot}}" id="hd-dot" hx-swap-oob="outerHTML"></span>
+{{end}}
+
+{{define "machineSync"}}
+{{template "chromeOOB" .}}
+<p class="muted" id="machine-lead" hx-swap-oob="outerHTML">{{.Machine.Lead}}</p>
 {{end}}
 
 {{define "chatMain"}}
@@ -383,7 +392,7 @@
 {{define "machinePanel"}}
 <div class="page-b machine" id="machine-root"{{if .Replace.Poll}} hx-get="/agents/{{.Agent.ID}}/machine/card" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
 <h2>Machine</h2>
-<p class="muted">{{.Machine.Lead}}</p>
+<p class="muted" id="machine-lead">{{.Machine.Lead}}</p>
 {{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
 {{if eq .Replace.Banner "ok"}}<div class="banner ok" role="status"><span class="grow"><b>{{.Replace.BannerBold}}</b> {{.Replace.BannerRest}}{{if .Replace.BannerExtra}} {{.Replace.BannerExtra}}{{end}}</span></div>{{end}}
 {{if eq .Replace.Banner "err"}}<div class="banner err" role="alert"><span class="grow"><b>{{.Replace.BannerBold}}</b> {{.Replace.BannerRest}} <b>{{.Replace.BannerExtra}}</b> {{.Replace.BannerWarn}}</span>{{if .Replace.TryAgain}}<a class="btn sm" href="/agents/{{.Agent.ID}}/machine/replace">Try again</a>{{end}}</div>{{end}}
@@ -396,6 +405,7 @@
 {{if or .Machine.CanStart .Machine.CanRetry}}<form method="post" action="/agents/{{.Agent.ID}}/machine"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>{{if .Machine.CanRetry}}Try again{{else}}Start machine{{end}}</button></form>{{end}}
 {{if .Machine.CanPause}}<form method="post" action="/agents/{{.Agent.ID}}/machine/pause"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Pause</button></form>{{end}}
 {{if .Machine.CanWake}}<form method="post" action="/agents/{{.Agent.ID}}/machine/wake"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Wake</button></form>{{end}}
+{{if .Machine.CanDelete}}<form method="post" action="/agents/{{.Agent.ID}}/machine/refresh" hx-post="/agents/{{.Agent.ID}}/machine/refresh" hx-target="#machine-root" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Refresh</button></form>{{end}}
 {{if .Replace.CanReplace}}<a class="btn sm" id="replace-open" href="/agents/{{.Agent.ID}}/machine/replace?opener=replace-open">Replace machine</a>{{else if .Replace.ShowButton}}<button class="btn sm" type="button" disabled>Replace machine</button>{{end}}
 </div>
 {{if .Replace.LockLine}}<p class="lockline">This machine is being replaced. Pause, Wake, Delete and Add to Cast CLI are off until it is done.</p>{{end}}

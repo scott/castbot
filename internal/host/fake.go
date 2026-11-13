@@ -47,6 +47,12 @@ type Fake struct {
 	WakeWait <-chan struct{}
 	// WakeErr is returned from Wake after WakeWait. The text is not stored.
 	WakeErr error
+	// StatusBlock makes Status wait until it is closed or the context ends.
+	// A page render must not hit this. It does not call the guest.
+	StatusBlock <-chan struct{}
+	// Warm is a Status result already in memory. CachedStatus returns it and
+	// does not record a status call.
+	Warm map[string]Machine
 	// ProbeErr is returned from Probe. The text is not stored.
 	ProbeErr error
 	// HealthErr is returned from Health. The text is not stored.
@@ -219,10 +225,21 @@ func (f *Fake) Create(ctx context.Context, spec CreateSpec) (Machine, error) {
 }
 
 // Status returns the stored machine and does not count as an edge call.
-func (f *Fake) Status(_ context.Context, id string) (Machine, error) {
+// It does not wake the guest.
+func (f *Fake) Status(ctx context.Context, id string) (Machine, error) {
+	f.mu.Lock()
+	block := f.StatusBlock
+	f.Calls = append(f.Calls, "status")
+	f.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return Machine{}, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.Calls = append(f.Calls, "status")
 	m, ok := f.Machines[id]
 	if !ok {
 		return Machine{}, ErrNotSupported
@@ -231,6 +248,28 @@ func (f *Fake) Status(_ context.Context, id string) (Machine, error) {
 		m.State = f.ForceState
 	}
 	return m, nil
+}
+
+// CachedStatus returns a warm Status result without calling Status.
+// A miss is false. It does not wake the guest.
+func (f *Fake) CachedStatus(id string) (Machine, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Warm == nil {
+		return Machine{}, false
+	}
+	m, ok := f.Warm[id]
+	if !ok || m.State == "" {
+		return Machine{}, false
+	}
+	return m, true
+}
+
+// ForgetStatus drops a warm result. It does not wake the guest.
+func (f *Fake) ForgetStatus(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.Warm, id)
 }
 
 // Wake marks the machine running.

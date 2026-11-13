@@ -575,6 +575,14 @@ func (s *Server) applyPendingExcept(ctx context.Context, userID, agentID, except
 }
 
 func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Agent) machineView {
+	return s.machineFromStore(ctx, userID, agent, true)
+}
+
+// machineFromStore paints a machine from the saved row.
+// A warm status cache can update that row. It does not call the machine API.
+// queue records the machine for a background Status refresh. That refresh
+// does not wake the guest.
+func (s *Server) machineFromStore(ctx context.Context, userID string, agent *store.Agent, queue bool) machineView {
 	view := machineView{Lead: "No machine is attached."}
 	h, image, publicURL := s.hostConfig()
 	vm, err := s.store.LiveVM(ctx, userID, agent.ID)
@@ -583,25 +591,17 @@ func (s *Server) syncMachine(ctx context.Context, userID string, agent *store.Ag
 		return view
 	}
 	has := err == nil
-	if has && h != nil && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
-		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		got, serr := h.Status(cctx, vm.MicroVMID)
-		cancel()
-		if serr == nil {
-			s.noteIfEdgeResume(ctx, userID, agent.ID, vm.MicroVMID, vm.State, got.State)
-			_ = s.store.ApplyVMState(ctx, userID, agent.ID, got.State, got.Endpoint, "")
-			if fresh, ferr := s.store.GetAgent(ctx, userID, agent.ID); ferr == nil {
-				*agent = fresh
+	if has && vm.MicroVMID != "" && vm.MicroVMID != "pending" {
+		if got, ok := cachedMachine(h, vm.MicroVMID); ok {
+			if got.State != vm.State || (got.Endpoint != "" && got.Endpoint != vm.Endpoint) {
+				vm = s.observeMachine(ctx, userID, agent, vm, got)
 			}
-			if fresh, ferr := s.store.LiveVM(ctx, userID, agent.ID); ferr == nil {
-				vm = fresh
-			}
-			if vm.State == "running" {
-				if pending, perr := s.store.PendingBundle(ctx, userID, agent.ID); perr == nil && pending != "" {
-					s.kickReload(userID, agent.ID)
-				}
-			}
+		} else if queue {
+			s.noteStatusRefresh(userID, agent.ID)
 		}
+	}
+	if has && vm.State == "running" {
+		s.kickIfPending(ctx, userID, agent.ID)
 	}
 	switch {
 	case !has && h != nil && image != "" && publicURL != "":

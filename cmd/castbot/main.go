@@ -76,6 +76,7 @@ func serve(args []string) {
 		app.SetExplicitRuntime(true)
 	}
 	app.RunReconciler(ctx, time.Minute)
+	app.RunStatusRefresh(ctx, 2*time.Second)
 	attachMachine(app, cfg)
 	recoverCtx, recoverCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	app.RecoverReplacements(recoverCtx)

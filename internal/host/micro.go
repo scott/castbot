@@ -1090,11 +1090,34 @@ func (m *MicroVM) checkEdge(endpoint, agentToken string) error {
 	return nil
 }
 
+const (
+	// statusReuse is how long Status itself skips the API.
+	statusReuse = 5 * time.Second
+	// statusWarm is how long a page may paint a saved Status without calling the API.
+	statusWarm = 30 * time.Second
+)
+
 func (m *MicroVM) cached(id string) (Machine, bool) {
+	return m.cachedFor(id, statusReuse)
+}
+
+// CachedStatus returns a Status result already in memory.
+// A miss does not call the API and does not wake the guest.
+func (m *MicroVM) CachedStatus(id string) (Machine, bool) {
+	return m.cachedFor(id, statusWarm)
+}
+
+// ForgetStatus drops a saved Status so the next read calls the API.
+// It does not wake the guest.
+func (m *MicroVM) ForgetStatus(id string) {
+	m.forget(id)
+}
+
+func (m *MicroVM) cachedFor(id string, max time.Duration) (Machine, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	hit, ok := m.cache[id]
-	if !ok || time.Since(hit.at) >= 5*time.Second {
+	if !ok || time.Since(hit.at) >= max {
 		return Machine{}, false
 	}
 	return hit.vm, true
