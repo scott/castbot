@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/scott/castbot/internal/castcfg/modellist"
 	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/run"
@@ -120,6 +121,7 @@ type Server struct {
 
 	connectDial *connect.Dial
 	mcp         *connect.Pool
+	models      *modellist.Catalog
 }
 
 // pauseSweeps stops the background approval ticker. Tests call the follow-up
@@ -132,7 +134,7 @@ func (s *Server) pauseSweeps() {
 // client talks to the agent runtime. S03 and S04 swap that client.
 func New(st *store.Store, key []byte, client runtime.Client) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Server{store: st, key: key, client: client, runs: run.New(ctx, st, client), cancel: cancel, base: ctx, approvalFor: approvalWaitFromEnv()}
+	s := &Server{store: st, key: key, client: client, runs: run.New(ctx, st, client), cancel: cancel, base: ctx, approvalFor: approvalWaitFromEnv(), models: modellist.New()}
 	s.runs.SetOpen(s.openRun)
 	s.runs.SetApprovalTimeout(s.approvalFor)
 	s.store.SetReplaceDone(func(userID, agentID string) {
@@ -348,6 +350,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /settings/sessions", s.sessionsConfirm)
 	mux.HandleFunc("POST /settings/sessions", s.sessionsEnd)
 
+	mux.HandleFunc("GET /models/{provider}", s.providerModels)
 	mux.HandleFunc("GET /new-agent", s.newAgent)
 	mux.HandleFunc("POST /new-agent", s.createAgent)
 	mux.HandleFunc("POST /new-agent/describe", s.describeAgent)

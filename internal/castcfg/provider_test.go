@@ -68,7 +68,8 @@ func TestProviderDisplayNames(t *testing.T) {
 func TestRewritePlaceholderKeepsRealModels(t *testing.T) {
 	real := []string{
 		"openrouter/minimax/minimax-m2.5",
-		"digitalocean/deepseek-v3.2",
+		"digitalocean/deepseek-v4.1-flash",
+		"digitalocean/deepseek-3.2",
 		"openai-api/gpt-4o",
 		"anthropic-api/claude-sonnet-5-5",
 		"gemini/gemini-3.8-flash",
@@ -97,11 +98,11 @@ func TestRewritePlaceholderKeepsRealModels(t *testing.T) {
 		t.Fatalf("small %s %v", small, changed)
 	}
 	ocean, changed := RewritePlaceholderModel("Provider B / model-large")
-	if !changed || ocean != "digitalocean/llama3.3-70b-instruct" {
+	if !changed || ocean != "digitalocean/deepseek-v4.1-flash" {
 		t.Fatalf("ocean %s %v", ocean, changed)
 	}
 	next, changed := RewritePlaceholderModel("Provider B / model-small")
-	if !changed || next != "digitalocean/deepseek-v3.2" {
+	if !changed || next != "digitalocean/deepseek-3.2" {
 		t.Fatalf("ocean small %s %v", next, changed)
 	}
 	plain, changed := RewritePlaceholderModel("model-large")

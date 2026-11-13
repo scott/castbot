@@ -31,7 +31,7 @@ func TestMigrateV21RewritesPlaceholdersOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	real := "digitalocean/deepseek-v3.2"
+	real := "digitalocean/deepseek-3.2"
 	if !castcfg.KnownModel(real) {
 		t.Fatal(real)
 	}
@@ -155,7 +155,7 @@ func TestMigrateV21RewritesPlaceholdersOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(draft.Payload, "digitalocean/llama3.3-70b-instruct") || strings.Contains(draft.Payload, "Provider ") {
+	if !strings.Contains(draft.Payload, "digitalocean/deepseek-v4.1-flash") || strings.Contains(draft.Payload, "Provider ") {
 		t.Fatalf("draft %s", draft.Payload)
 	}
 
