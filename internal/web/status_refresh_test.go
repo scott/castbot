@@ -176,6 +176,42 @@ func TestStatusRefreshLoopUpdatesTheRow(t *testing.T) {
 	}
 }
 
+func TestBackgroundRefreshFeedsThePage(t *testing.T) {
+	ip := "203.0.113.78:9"
+	h, fake, agent := pausedRig(t, ip, "status-catchup@example.com")
+	fake.SetForce("creating")
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
+	if code != 200 || !strings.Contains(body, "The machine is paused.") || callCount(fake, "status") != 0 {
+		t.Fatalf("paint %d status %d", code, callCount(fake, "status"))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.srv.RunStatusRefresh(ctx, 15*time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	var state string
+	for time.Now().Before(deadline) {
+		vm, err := h.st.LiveVM(context.Background(), agent.UserID, agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state = vm.State
+		if state == "creating" {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if state != "creating" || wakeCount(fake) != 0 {
+		t.Fatalf("state %s wake %d", state, wakeCount(fake))
+	}
+	code, body, _ = h.do(http.MethodGet, syncPath(t, body), "", ip, nil)
+	if code != 200 || !strings.Contains(body, "Waking") || !strings.Contains(body, "The machine is waking.") || !strings.Contains(body, `id="machine-lead"`) {
+		t.Fatalf("sync %d %s", code, body)
+	}
+	if wakeCount(fake) != 0 {
+		t.Fatal("status refresh woke the machine")
+	}
+}
+
 func runningRig(t *testing.T, ip, email string) (*harness, *host.Fake, store.Agent, string) {
 	t.Helper()
 	h := newHarness(t)

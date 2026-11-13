@@ -56,9 +56,16 @@ func newHarnessWith(t *testing.T, client runtime.Client) *harness {
 	}
 	srv := New(st, key, client)
 	srv.SetDevEcho(true)
+	if testStatusRefresh != nil {
+		testStatusRefresh(srv)
+	}
 	t.Cleanup(srv.Close)
 	return &harness{t: t, srv: srv, st: st, jar: map[string]*http.Cookie{}}
 }
+
+// testStatusRefresh starts a background status refresh for screenshot servers.
+// Unit tests leave it nil so a render does not call Status on its own later.
+var testStatusRefresh func(*Server)
 
 func (h *harness) account(email, name, password string) (store.User, string) {
 	h.t.Helper()
