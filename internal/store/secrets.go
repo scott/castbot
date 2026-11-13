@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/scott/castbot/internal/connect"
 	"golang.org/x/crypto/nacl/secretbox"
 )
 
@@ -58,6 +59,9 @@ func SecretNameOK(name string) bool {
 }
 
 func secretNameBlocked(name string) bool {
+	if connect.BlocksGuest(name) {
+		return true
+	}
 	switch name {
 	case "PATH", "HOME", "HOSTNAME", "CASTBOT_BOOTSTRAP_TOKEN", "CASTBOT_CA_FILE", "CASTLET_SECRET_COUNT":
 		return true
@@ -363,7 +367,7 @@ func (s *Store) ListSecrets(ctx context.Context, userID, providerFilter string) 
 	args := []any{userID}
 	switch providerFilter {
 	case "*":
-		q += ` AND provider = ''`
+		q += ` AND provider = '' AND kind = 'env'`
 	case "":
 	default:
 		q += ` AND provider = ?`
@@ -441,6 +445,13 @@ func (s *Store) grantSecret(ctx context.Context, userID, agentID, secretID strin
 	if sec.Provider != "" || sec.WorkspaceID != agent.WorkspaceID {
 		return ErrNotFound
 	}
+	var kind string
+	if err := s.db.QueryRowContext(ctx, `SELECT kind FROM secrets WHERE id = ? AND user_id = ?`, secretID, userID).Scan(&kind); err != nil {
+		return scanErr(err)
+	}
+	if kind == "connection" || connect.BlocksGuest(sec.Name) {
+		return ErrInvalid
+	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO agent_secret_grants(agent_id, secret_id, workspace_id, user_id) VALUES (?, ?, ?, ?)
 ON CONFLICT(agent_id, secret_id) DO NOTHING`, agentID, secretID, sec.WorkspaceID, userID)
 	return err
@@ -490,7 +501,7 @@ func (s *Store) GrantedMeta(ctx context.Context, userID, agentID string) ([]Secr
 	rows, err := s.db.QueryContext(ctx, `SELECT f.id, f.workspace_id, f.user_id, f.name, f.label, f.provider, f.created_at, f.rotated_at
 FROM secrets f
 JOIN agent_secret_grants g ON g.secret_id = f.id AND g.user_id = f.user_id
-WHERE g.user_id = ? AND g.agent_id = ? AND f.provider = '' ORDER BY f.name`, userID, agentID)
+WHERE g.user_id = ? AND g.agent_id = ? AND f.provider = '' AND f.kind = 'env' ORDER BY f.name`, userID, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -501,6 +512,9 @@ WHERE g.user_id = ? AND g.agent_id = ? AND f.provider = '' ORDER BY f.name`, use
 		var rotated sql.NullString
 		if err := rows.Scan(&sec.ID, &sec.WorkspaceID, &sec.UserID, &sec.Name, &sec.Label, &sec.Provider, &sec.CreatedAt, &rotated); err != nil {
 			return nil, err
+		}
+		if connect.BlocksGuest(sec.Name) {
+			continue
 		}
 		sec.RotatedAt = rotated.String
 		out = append(out, sec)
@@ -514,7 +528,7 @@ func (s *Store) grantedSecrets(ctx context.Context, userID, agentID string) ([]S
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT f.id, f.name, f.ciphertext, f.nonce FROM secrets f
 JOIN agent_secret_grants g ON g.secret_id = f.id AND g.user_id = f.user_id
-WHERE g.user_id = ? AND g.agent_id = ? AND f.provider = '' ORDER BY f.name`, userID, agentID)
+WHERE g.user_id = ? AND g.agent_id = ? AND f.provider = '' AND f.kind = 'env' ORDER BY f.name`, userID, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -525,6 +539,9 @@ WHERE g.user_id = ? AND g.agent_id = ? AND f.provider = '' ORDER BY f.name`, use
 		var ct, nonce []byte
 		if err := rows.Scan(&sec.ID, &sec.Name, &ct, &nonce); err != nil {
 			return nil, err
+		}
+		if connect.BlocksGuest(sec.Name) {
+			continue
 		}
 		val, err := s.openBox(ct, nonce)
 		if err != nil {

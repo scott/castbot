@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/scott/castbot/internal/agentfile"
 	"github.com/scott/castbot/internal/castcfg"
+	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/store"
 )
 
@@ -39,6 +41,8 @@ type agentForm struct {
 	Colors                        []colorSwatch
 	Idle                          int
 	Advanced, Prefill             bool
+	Connections                   []connField
+	Scopes                        string
 }
 
 type toolField struct {
@@ -113,6 +117,9 @@ func (s *Server) formFromAgent(ctx context.Context, user store.User, agent store
 	f.Heading = "Edit agent"
 	f.Sub = "Saving updates the bundle. A running machine reloads. A paused machine stays paused."
 	f.Submit = "Save"
+	if err := s.fillConnections(ctx, user.ID, agent.ID, &f); err != nil {
+		return agentForm{}, err
+	}
 	f.Name = agent.Name
 	f.Title = agent.Title
 	f.SectionID = agent.SectionID
@@ -151,6 +158,7 @@ func (s *Server) formFromAgent(ctx context.Context, user store.User, agent store
 		f.Model = spec.Model
 	}
 	f.Tools = toolFields(selectedTools(spec))
+	f.Scopes = scopesJSON(spec.Permissions)
 	f.keepModel()
 	return f, nil
 }
@@ -295,6 +303,8 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 		}
 		return
 	}
+	_, scopesPosted := r.Form["scopes"]
+	mergeScopes(&spec, f.Scopes, scopesPosted, nil)
 	if _, err := s.storeBundle(r.Context(), user.ID, agent.ID, spec, false); err != nil {
 		if errors.Is(err, errFormMismatch) {
 			f.SaveErr = "The agent file does not match this form."
@@ -357,6 +367,10 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 		f.SaveErr = keptErr(err)
 		good = false
 	}
+	if msg := s.connectionProblem(r, f); msg != "" {
+		f.SaveErr = msg
+		good = false
+	}
 	if !good {
 		s.showForm(w, r, user, f, http.StatusBadRequest)
 		return
@@ -382,6 +396,25 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	before, err := s.store.EnabledConnections(r.Context(), user.ID, agent.ID)
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	if err := s.applyConnectionPosts(r.Context(), user.ID, agent.ID, r, f); err != nil {
+		f.SaveErr = "That connection could not be saved."
+		f.HasAvatar = agent.AvatarPath != ""
+		s.showForm(w, r, user, f, http.StatusBadRequest)
+		return
+	}
+	var previous map[string]string
+	if current, err := s.store.LatestBundle(r.Context(), user.ID, agent.ID); err == nil {
+		if parsed, perr := castcfg.ParseYAML(current.YAML); perr == nil {
+			previous = parsed.Permissions
+		}
+	}
+	_, scopesPosted := r.Form["scopes"]
+	mergeScopes(&spec, f.Scopes, scopesPosted, previous)
 	version, err := s.storeBundle(r.Context(), user.ID, agent.ID, spec, spec.Model == agent.Model && agent.Model != "")
 	if err != nil {
 		if errors.Is(err, errFormMismatch) {
@@ -407,7 +440,17 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	_, reloadErr := s.applyBundle(r.Context(), user.ID, fresh, version)
+	after, err := s.store.EnabledConnections(r.Context(), user.ID, agent.ID)
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	var reloadErr error
+	if !sameNames(before, after) {
+		reloadErr = s.scheduleBundleReload(r.Context(), user.ID, agent.ID, version)
+	} else {
+		_, reloadErr = s.applyBundle(r.Context(), user.ID, fresh, version)
+	}
 	if reloadErr != nil {
 		f.SaveErr = "The agent could not be reloaded. The saved copy is updated. No new machine was created."
 		f.HasAvatar = fresh.AvatarPath != ""
@@ -526,6 +569,7 @@ func (s *Server) reviewImport(w http.ResponseWriter, r *http.Request, user store
 	f.Instructions = folder.Instructions
 	f.Version = spec.Version
 	f.Tools = toolFields(selectedTools(spec))
+	f.Scopes = scopesJSON(spec.Permissions)
 	f.Skipped = folder.Skipped
 	f.LeftOut = folder.LeftOut
 	f.Removed = spec.Removed
@@ -650,6 +694,26 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 	if len(posted) > 0 {
 		f.ToolErr = "Unknown tool."
 		good = false
+	}
+	if f.Editing {
+		chosen := map[string]bool{}
+		for _, name := range r.Form["connection"] {
+			chosen[strings.ToLower(strings.TrimSpace(name))] = true
+		}
+		known := map[string]bool{}
+		for i := range f.Connections {
+			known[f.Connections[i].ID] = true
+			f.Connections[i].On = chosen[f.Connections[i].ID]
+			delete(chosen, f.Connections[i].ID)
+		}
+		if len(chosen) > 0 {
+			f.SaveErr = "Unknown connection."
+			good = false
+		}
+		_ = known
+	}
+	if raw := strings.TrimSpace(r.FormValue("scopes")); raw != "" && len(raw) <= 8000 {
+		f.Scopes = scopesJSON(parseScopePost(raw))
 	}
 	if f.Name == "" {
 		f.NameErr = "A name is required."
@@ -863,6 +927,18 @@ func (s *Server) bindKept(ctx context.Context, userID, agentID string, f *agentF
 }
 
 func (s *Server) storeBundle(ctx context.Context, userID, agentID string, spec castcfg.Spec, allowUnknown bool) (string, error) {
+	version := strings.TrimSpace(spec.Version)
+	if version == "" {
+		version = "1"
+	}
+	enabled, err := s.store.EnabledConnections(ctx, userID, agentID)
+	if err != nil {
+		return "", err
+	}
+	applyConnectionPerms(&spec, enabled)
+	if err := castcfg.SetMCPServers(&spec, enabled); err != nil {
+		return "", err
+	}
 	raw, err := castcfg.RenderYAML(spec)
 	if err != nil {
 		return "", err
@@ -884,14 +960,18 @@ func (s *Server) storeBundle(ctx context.Context, userID, agentID string, spec c
 			return "", errFormMismatch
 		}
 	}
-	version := strings.TrimSpace(spec.Version)
-	if version == "" {
-		version = "1"
-	}
 	stamp := s.store.Now().UTC().Format("20060102150405.000000000")
 	version = stamp + "-" + version
-	_, err = s.store.PutBundle(ctx, userID, agentID, version, string(raw), spec.Instructions)
+	_, err = s.store.PutBundleFiles(ctx, userID, agentID, version, string(raw), spec.Instructions, connect.ShimFiles(enabled))
 	return version, err
+}
+
+func parseScopePost(raw string) map[string]string {
+	var extra map[string]string
+	if json.Unmarshal([]byte(raw), &extra) != nil {
+		return nil
+	}
+	return extra
 }
 
 func (s *Server) applyBundle(ctx context.Context, userID string, agent store.Agent, version string) (string, error) {

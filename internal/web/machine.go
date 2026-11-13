@@ -86,7 +86,7 @@ func (s *Server) writeBundle(w http.ResponseWriter, r *http.Request, userID stri
 	if mapStoreErr(w, r, err) {
 		return
 	}
-	raw, sum, err := bundle.Archive(b.YAML, b.Instructions)
+	raw, sum, err := bundle.ArchiveFiles(b.YAML, b.Instructions, b.Extras)
 	if err != nil || sum != b.SHA256 {
 		writeText(w, http.StatusInternalServerError, "Error\n")
 		return

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/bundle"
+	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/egresscontract"
 )
 
@@ -302,6 +303,9 @@ func (s *Supervisor) pullSecrets(ctx context.Context, token string) ([]secret, e
 }
 
 func blockedEnv(name string) bool {
+	if connect.BlocksGuest(name) {
+		return true
+	}
 	switch strings.ToUpper(name) {
 	case "PATH", "HOME", "HOSTNAME", "CASTBOT_BOOTSTRAP_TOKEN", "CASTBOT_CA_FILE", "CASTLET_SECRET_COUNT":
 		return true
@@ -504,6 +508,9 @@ func (s *Supervisor) childEnv() []string {
 	runtimeToken := s.runtimeToken
 	s.mu.Unlock()
 	for _, sec := range secrets {
+		if blockedEnv(sec.Name) {
+			continue
+		}
 		out = append(out, sec.Name+"="+sec.Value)
 	}
 	out = append(out, "CASTLET_SECRET_COUNT="+strconv.Itoa(len(secrets)))
