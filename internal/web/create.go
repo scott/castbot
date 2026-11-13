@@ -410,33 +410,49 @@ func costCopy(size string) (string, string) {
 	}
 }
 
+// setupProposal is the proposal used to build a setup card.
+// Short greetings still ask the opening question. For a real description,
+// a down, unclear, empty, or unparseable describe result falls back to a
+// local proposal so the page still shows a card with a proposed name.
+func setupProposal(text string, prop Proposal, err error) (Proposal, bool) {
+	if unclearText(text) {
+		return Proposal{Unclear: true}, true
+	}
+	if err == nil {
+		prop = scrubProposal(prop)
+		if !prop.Unclear && (prop.Name != "" || prop.Job != "" || prop.Instructions != "" || nameFromText(text) != "") {
+			return prop, false
+		}
+	}
+	return localProposal(text), false
+}
+
 func (s *Server) describeAgent(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.requireUser(w, r)
 	if !ok {
 		return
 	}
 	raw := strings.TrimSpace(r.FormValue("body"))
-	if raw == "" || unclearText(raw) {
+	if raw == "" {
+		// An empty post must not wipe an existing card or append the greeting.
+		s.showCreate(w, r, user)
+		return
+	}
+	if unclearText(raw) {
 		s.replyDescribe(w, r, user, s.repromptDoc(r.Context(), user.ID, raw))
 		return
 	}
 	redacted, stripped := redactSecrets(raw)
 	prop, err := s.describer().Describe(r.Context(), redacted)
 	if err != nil {
-		s.logger().Info("describe", "user_id", user.ID, "ok", false)
-		doc, _, _ := s.loadDraft(r.Context(), user.ID)
-		doc.Turns = append(doc.Turns, draftTurn{Role: "castbot", Kind: "reprompt", Body: "The setup step is not available right now. Try again in a moment."})
-		_ = s.saveDraft(r.Context(), user.ID, doc)
-		s.showCreate(w, r, user)
-		return
+		s.logger().Info("describe", "user_id", user.ID, "ok", false, "fallback", true)
+	} else {
+		s.logger().Info("describe", "user_id", user.ID, "ok", true)
 	}
-	s.logger().Info("describe", "user_id", user.ID, "ok", true)
-	prop = scrubProposal(prop)
-	if prop.Unclear || (prop.Name == "" && prop.Job == "" && prop.Instructions == "" && nameFromText(redacted) == "") {
-		if unclearText(redacted) || prop.Unclear {
-			s.replyDescribe(w, r, user, s.repromptDoc(r.Context(), user.ID, redacted))
-			return
-		}
+	prop, greet := setupProposal(redacted, prop, err)
+	if greet {
+		s.replyDescribe(w, r, user, s.repromptDoc(r.Context(), user.ID, redacted))
+		return
 	}
 	card := s.cardFrom(r.Context(), user.ID, redacted, prop, stripped)
 	doc, _, _ := s.loadDraft(r.Context(), user.ID)
@@ -572,6 +588,25 @@ func (s *Server) cancelCreate(w http.ResponseWriter, r *http.Request) {
 	doc.Editing = false
 	_ = s.saveDraft(r.Context(), user.ID, doc)
 	s.showCreate(w, r, user)
+}
+
+// resetCreate discards the in-progress create draft.
+// Start over returns to a fresh /new-agent page. Close ([X] or Escape)
+// goes home. A later visit to /new-agent is a new conversation.
+func (s *Server) resetCreate(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	_ = s.store.DeleteCreateDraft(r.Context(), user.ID)
+	http.Redirect(w, r, resetCreateNext(r.FormValue("next")), http.StatusSeeOther)
+}
+
+func resetCreateNext(next string) string {
+	if strings.TrimSpace(next) == "/" {
+		return "/"
+	}
+	return "/new-agent"
 }
 
 func (s *Server) saveCreate(w http.ResponseWriter, r *http.Request) {

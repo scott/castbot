@@ -65,9 +65,10 @@
   }
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
-    var a = document.querySelector("a.nclose");
-    if (!a) return;
-    window.location.assign(a.href);
+    var form = document.querySelector("form[data-create-close]");
+    if (!form) return;
+    e.preventDefault();
+    form.requestSubmit();
   });
   document.addEventListener("DOMContentLoaded", function () {
     wire(document);

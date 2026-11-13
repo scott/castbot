@@ -5,8 +5,9 @@
 .nh .grow { display: grid; min-width: 0; }
 .nh .nm { font: 650 16px var(--hd); }
 .nh .sub { font-size: 12.5px; color: var(--tx3); }
-.nh .advlink { font-size: 13.5px; display: inline-flex; align-items: center; min-height: 36px; padding: 0 6px; }
-.nclose { border: 1px solid var(--line2); }
+.nh .advlink, .nh .nreset { font-size: 13.5px; display: inline-flex; align-items: center; min-height: 36px; padding: 0 6px; background: none; border: 0; color: var(--acc); cursor: pointer; font-weight: 650; font-family: inherit; }
+.nclose-form, .nreset-form { display: inline-flex; margin: 0; }
+.nclose { border: 1px solid var(--line2); cursor: pointer; padding: 0; font: inherit; appearance: none; -webkit-appearance: none; }
 .ibtn.solid.on { box-shadow: 0 0 0 3px var(--acc-soft); }
 
 .create-col { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
@@ -85,7 +86,7 @@
   .create-col .comp-wrap { padding-left: 14px; padding-right: 14px; }
   .create-col:has(.nmain.hero) .comp-wrap { border-top: 0; background: transparent; }
   .nh .sub { display: none; }
-  .nh .advlink, .nfoot .link, .nclose { min-height: 44px; }
+  .nh .advlink, .nh .nreset, .nfoot .link, .nclose { min-height: 44px; }
   .nclose { width: 44px; height: 44px; }
   .sgrid { grid-template-columns: 1fr; }
   .setup { padding: 14px 12px; }

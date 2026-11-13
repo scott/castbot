@@ -875,10 +875,18 @@ func TestDescribeHTMXSwapsThePane(t *testing.T) {
 		`id="nmain"`,
 		`id="create-adv"`,
 		`id="nfoot"`,
+		`id="create-reset"`,
+		`data-create-close="1"`,
+		`action="/new-agent/reset"`,
+		`name="next" value="/"`,
+		`aria-label="Close new agent (Esc)"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("page missing %s", want)
 		}
+	}
+	if strings.Contains(body, "Start over") {
+		t.Fatal("empty page showed Start over")
 	}
 	if strings.Contains(body, `hx-swap-oob=`) {
 		t.Fatal("the first page should not mark swaps out of band")
@@ -898,6 +906,9 @@ func TestDescribeHTMXSwapsThePane(t *testing.T) {
 		"broken links",
 		`id="create-adv"`,
 		`id="nfoot"`,
+		`id="create-reset"`,
+		`Start over`,
+		`action="/new-agent/reset"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("swap missing %s\n%s", want, snippet(body))
@@ -909,6 +920,199 @@ func TestDescribeHTMXSwapsThePane(t *testing.T) {
 	if !strings.Contains(body, `id="create-adv" hx-swap-oob="outerHTML"></span>`) {
 		t.Fatal("header Advanced link stayed after the first message")
 	}
+}
+
+func TestDescribeFallsBackToASetupCard(t *testing.T) {
+	text := "Check example-org/docs for broken links every morning."
+	cases := []struct {
+		name string
+		stub *stubDescribe
+	}{
+		{"unclear", &stubDescribe{prop: Proposal{Unclear: true}}},
+		{"empty", &stubDescribe{}},
+		{"down", &stubDescribe{err: errDescribeDown}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, fake, _ := createLab(t)
+			h.srv.SetDescribe(tc.stub)
+			_, secret := h.account("fallback-"+tc.name+"@example.com", "Alex Rivera", "correct-horse-1")
+			ip := "203.0.113.254:9"
+			h.login("fallback-"+tc.name+"@example.com", "correct-horse-1", secret, ip, false)
+			code, body, _ := h.do(http.MethodPost, "/new-agent/describe", h.form(urlValues(text)), ip, map[string]string{"HX-Request": "true"})
+			if code != 200 {
+				t.Fatalf("hx %d %s", code, snippet(body))
+			}
+			if strings.Contains(body, "Happy to set one up") || strings.Contains(body, "not available right now") {
+				t.Fatalf("greeting\n%s", snippet(body))
+			}
+			if !strings.Contains(body, "Create Scout") || !strings.Contains(body, "broken links") {
+				t.Fatalf("card\n%s", snippet(body))
+			}
+			if !strings.Contains(body, text) {
+				t.Fatal("user text missing from the swap")
+			}
+			if strings.Contains(body, "<textarea") || strings.Contains(body, "<html") {
+				t.Fatal("swap included the composer or a full document")
+			}
+			if len(fake.Creates) != 0 {
+				t.Fatal("describe created a machine")
+			}
+			if tc.stub.n != 1 || tc.stub.last != text {
+				t.Fatalf("describe calls %d %q", tc.stub.n, tc.stub.last)
+			}
+		})
+	}
+}
+
+func TestDescribeEmptyKeepsTheCard(t *testing.T) {
+	h, fake, _ := createLab(t)
+	_, secret := h.account("empty-keep@example.com", "Alex Rivera", "correct-horse-1")
+	ip := "203.0.113.255:9"
+	h.login("empty-keep@example.com", "correct-horse-1", secret, ip, false)
+	text := "Check example-org/docs for broken links every morning."
+	code, body, _ := h.do(http.MethodPost, "/new-agent/describe", h.form(urlValues(text)), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 || !strings.Contains(body, "Create Scout") {
+		t.Fatalf("first %d %s", code, snippet(body))
+	}
+	code, body, _ = h.do(http.MethodPost, "/new-agent/describe", h.form(urlValues("")), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 {
+		t.Fatalf("empty %d %s", code, snippet(body))
+	}
+	if strings.Contains(body, "Happy to set one up") {
+		t.Fatalf("empty post appended the greeting\n%s", snippet(body))
+	}
+	if !strings.Contains(body, "Create Scout") || !strings.Contains(body, "broken links") {
+		t.Fatalf("empty post dropped the card\n%s", snippet(body))
+	}
+	if strings.Count(body, "class=\"m-user\"") != 1 {
+		t.Fatalf("user turns changed\n%s", snippet(body))
+	}
+	if len(fake.Creates) != 0 {
+		t.Fatal("empty post created a machine")
+	}
+}
+
+func TestSetupProposal(t *testing.T) {
+	text := "Check example-org/docs for broken links every morning."
+	prop, greet := setupProposal("hi", Proposal{Name: "Scout"}, nil)
+	if !greet || !prop.Unclear {
+		t.Fatalf("hi %+v greet=%v", prop, greet)
+	}
+	prop, greet = setupProposal(text, Proposal{Unclear: true}, nil)
+	if greet || prop.Job == "" || prop.Instructions == "" || prop.Unclear {
+		t.Fatalf("unclear fallback %+v greet=%v", prop, greet)
+	}
+	if !strings.Contains(strings.ToLower(prop.Job+prop.Instructions), "broken") {
+		t.Fatalf("local job %+v", prop)
+	}
+	prop, greet = setupProposal(text, Proposal{}, errDescribeDown)
+	if greet || prop.Job == "" || prop.Instructions == "" {
+		t.Fatalf("down fallback %+v greet=%v", prop, greet)
+	}
+	prop, greet = setupProposal(text, Proposal{Name: "Atlas", Job: "Watch the inbox.", Instructions: "Ask first."}, nil)
+	if greet || prop.Name != "Atlas" || prop.Job != "Watch the inbox." {
+		t.Fatalf("kept %+v greet=%v", prop, greet)
+	}
+}
+
+func TestResetCreateStartsOver(t *testing.T) {
+	h, _, _ := createLab(t)
+	user, secret := h.account("start-over@example.com", "Alex Rivera", "correct-horse-1")
+	ip := "203.0.113.201:9"
+	h.login("start-over@example.com", "correct-horse-1", secret, ip, false)
+	text := "Check example-org/docs for broken links every morning."
+	code, body, _ := h.do(http.MethodPost, "/new-agent/describe", h.form(urlValues(text)), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 || !strings.Contains(body, "Create Scout") || !strings.Contains(body, "Start over") {
+		t.Fatalf("card %d %s", code, snippet(body))
+	}
+	code, body, hdr := h.do(http.MethodPost, "/new-agent/reset", h.form(url.Values{}), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/new-agent" {
+		t.Fatalf("reset %d %s %s", code, hdr.Get("Location"), snippet(body))
+	}
+	if _, err := h.st.LoadCreateDraft(context.Background(), user.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("draft still there: %v", err)
+	}
+	code, body, _ = h.do(http.MethodGet, "/new-agent", "", ip, nil)
+	if code != 200 {
+		t.Fatalf("fresh %d", code)
+	}
+	if strings.Contains(body, "Create Scout") || strings.Contains(body, "Happy to set one up") || strings.Contains(body, text) || strings.Contains(body, "Start over") {
+		t.Fatalf("stale draft on fresh page\n%s", snippet(body))
+	}
+	if !strings.Contains(body, "What should your new agent do?") {
+		t.Fatal("fresh greeting missing")
+	}
+	code, body, _ = h.do(http.MethodPost, "/new-agent/describe", h.form(urlValues(text)), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 || !strings.Contains(body, "Create Scout") || !strings.Contains(body, "broken links") {
+		t.Fatalf("describe after reset %d %s", code, snippet(body))
+	}
+}
+
+func TestCloseDiscardsTheDraft(t *testing.T) {
+	h, _, _ := createLab(t)
+	user, secret := h.account("close-draft@example.com", "Alex Rivera", "correct-horse-1")
+	ip := "203.0.113.202:9"
+	h.login("close-draft@example.com", "correct-horse-1", secret, ip, false)
+	text := "Check example-org/docs for broken links every morning."
+	code, body, _ := h.do(http.MethodPost, "/new-agent/describe", h.form(urlValues(text)), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 || !strings.Contains(body, "Create Scout") {
+		t.Fatalf("card %d %s", code, snippet(body))
+	}
+	code, body, hdr := h.do(http.MethodPost, "/new-agent/reset", h.form(url.Values{"next": {"/"}}), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/" {
+		t.Fatalf("close %d %s %s", code, hdr.Get("Location"), snippet(body))
+	}
+	if _, err := h.st.LoadCreateDraft(context.Background(), user.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("draft still there: %v", err)
+	}
+	code, body, _ = h.do(http.MethodGet, "/new-agent", "", ip, nil)
+	if code != 200 || strings.Contains(body, "Create Scout") || strings.Contains(body, "Happy to set one up") || strings.Contains(body, text) {
+		t.Fatalf("reopen kept the draft %d %s", code, snippet(body))
+	}
+	if !strings.Contains(body, "What should your new agent do?") {
+		t.Fatal("reopen missing fresh greeting")
+	}
+	code, body, _ = h.do(http.MethodPost, "/new-agent/describe", h.form(urlValues(text)), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 || !strings.Contains(body, "Create Scout") {
+		t.Fatalf("describe after close %d %s", code, snippet(body))
+	}
+	code, _, hdr = h.do(http.MethodPost, "/new-agent/reset", h.form(url.Values{"next": {"https://example.com/"}}), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/new-agent" {
+		t.Fatalf("open redirect %d %s", code, hdr.Get("Location"))
+	}
+}
+
+func TestResetCreateRequiresCSRF(t *testing.T) {
+	h, _, _ := createLab(t)
+	user, secret := h.account("reset-csrf@example.com", "Alex Rivera", "correct-horse-1")
+	ip := "203.0.113.203:9"
+	h.login("reset-csrf@example.com", "correct-horse-1", secret, ip, false)
+	text := "Check example-org/docs for broken links every morning."
+	code, body, _ := h.do(http.MethodPost, "/new-agent/describe", h.form(urlValues(text)), ip, map[string]string{"HX-Request": "true"})
+	if code != 200 || !strings.Contains(body, "Create Scout") {
+		t.Fatalf("card %d %s", code, snippet(body))
+	}
+	code, body, _ = h.do(http.MethodPost, "/new-agent/reset", "csrf=nope&next=/", ip, nil)
+	if code != http.StatusForbidden {
+		t.Fatalf("csrf %d %s", code, snippet(body))
+	}
+	if _, err := h.st.LoadCreateDraft(context.Background(), user.ID); err != nil {
+		t.Fatalf("bad csrf dropped the draft: %v", err)
+	}
+}
+
+type stubDescribe struct {
+	prop Proposal
+	err  error
+	n    int
+	last string
+}
+
+func (s *stubDescribe) Describe(_ context.Context, text string) (Proposal, error) {
+	s.n++
+	s.last = text
+	return s.prop, s.err
 }
 
 type roundTripper func(*http.Request) (*http.Response, error)
