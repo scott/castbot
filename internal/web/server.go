@@ -351,6 +351,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /new-agent/edit", s.editCreate)
 	mux.HandleFunc("POST /new-agent/save", s.saveCreate)
 	mux.HandleFunc("POST /new-agent/cancel", s.cancelCreate)
+	mux.HandleFunc("POST /new-agent/reset", s.resetCreate)
 	mux.HandleFunc("POST /new-agent/create", s.confirmCreate)
 	mux.HandleFunc("GET /new-agent/drafts/{id}", s.createDraft)
 	mux.HandleFunc("POST /new-agent/import", s.importNew)

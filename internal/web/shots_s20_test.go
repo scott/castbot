@@ -367,7 +367,7 @@ func s20TapTargets(t *testing.T, ctx context.Context) {
 	var bad string
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){
 		var bad = [];
-		document.querySelectorAll('.nclose, .cacts .btn, .keymiss .btn, .boot-f .btn, .qreplies .pchip, .sugs .pchip, .nfoot .link, .nh .advlink').forEach(function(el){
+		document.querySelectorAll('.nclose, .cacts .btn, .keymiss .btn, .boot-f .btn, .qreplies .pchip, .sugs .pchip, .nfoot .link, .nh .advlink, .nh .nreset').forEach(function(el){
 			var r = el.getBoundingClientRect();
 			if (r.width < 1 || r.height < 1) return;
 			if (r.height < 44 || r.width < 44) bad.push((el.getAttribute('aria-label')||el.textContent||'').trim().slice(0,40)+' '+Math.round(r.width)+'x'+Math.round(r.height));

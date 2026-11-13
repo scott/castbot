@@ -6,6 +6,20 @@
 <span id="create-adv" hx-swap-oob="outerHTML">{{if .Create.ShowAdvanced}}<a class="link advlink" href="/new-agent?advanced=1">Advanced</a>{{end}}</span>
 {{end}}
 
+{{define "createReset"}}
+<span id="create-reset">{{if or .Create.Turns .Create.HasCard .Create.DraftID}}<form method="post" action="/new-agent/reset" class="nreset-form">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<button class="link nreset" type="submit">Start over</button>
+</form>{{end}}</span>
+{{end}}
+
+{{define "createResetSwap"}}
+<span id="create-reset" hx-swap-oob="outerHTML">{{if or .Create.Turns .Create.HasCard .Create.DraftID}}<form method="post" action="/new-agent/reset" class="nreset-form">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<button class="link nreset" type="submit">Start over</button>
+</form>{{end}}</span>
+{{end}}
+
 {{define "createFoot"}}
 <p class="nfoot" id="nfoot"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/></svg><span>Do not paste passwords or keys here. Add them later in Settings, Secrets.</span>{{if .Create.ShowAdvanced}}<a class="link" href="/new-agent?advanced=1">Advanced</a>{{end}}</p>
 {{end}}
@@ -45,7 +59,12 @@
 <span class="nh-ico" aria-hidden="true">{{template "mark" .}}</span>
 <span class="grow"><span class="nm">New agent</span><span class="sub">Describe it in chat. castbot sets it up.</span></span>
 {{template "createAdv" .}}
-<a class="ibtn nclose" href="/" aria-label="Close new agent (Esc)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></a>
+{{template "createReset" .}}
+<form method="post" action="/new-agent/reset" class="nclose-form" data-create-close="1">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<input type="hidden" name="next" value="/">
+<button class="ibtn nclose" type="submit" aria-label="Close new agent (Esc)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+</form>
 </header>
 <div class="create-col">
 {{template "createPane" .}}
@@ -62,6 +81,7 @@
 
 {{define "createSwap"}}
 {{template "createAdvSwap" .}}
+{{template "createResetSwap" .}}
 {{template "createPane" .}}
 {{template "createFootSwap" .}}
 {{end}}
