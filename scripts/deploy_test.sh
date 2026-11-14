@@ -11,6 +11,11 @@ trap 'rm -rf "$WORK"' EXIT
 fails=0
 CASE=""
 
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  printf 'sqlite3 is required to run deploy tests\n' >&2
+  exit 1
+fi
+
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck "$DEPLOY" "$CHECK" "$0"
 fi
@@ -43,17 +48,38 @@ shift || true
   printf 'ssh stub: unexpected host\n' >&2
   exit 1
 }
+rewrite() {
+  local text=$1
+  if [[ -n "${DEPLOY_TEST_PROC:-}" ]]; then
+    local proc="${DEPLOY_TEST_PROC%/}/"
+    text=${text//\/proc\//${proc}}
+  fi
+  if [[ -n "${DEPLOY_TEST_STATE:-}" ]]; then
+    text=${text//\/run\/lock\/castbot-deploy.lock/${DEPLOY_TEST_STATE}/castbot-deploy.lock}
+  fi
+  printf '%s' "$text"
+}
+log_remote() {
+  printf '%s\n' '--- remote ---' >>"${DEPLOY_TEST_STATE}/ssh.log"
+  printf '%s\n' "$1" >>"${DEPLOY_TEST_STATE}/ssh.log"
+  printf '%s\n' '--- end ---' >>"${DEPLOY_TEST_STATE}/ssh.log"
+}
 if [[ "${1:-}" == "bash" && "${2:-}" == "-s" ]]; then
   script=$(cat)
-  if [[ -n "${DEPLOY_TEST_PROC:-}" ]]; then
-    proc="${DEPLOY_TEST_PROC%/}/"
-    script=${script//\/proc\//${proc}}
+  log_remote "$script"
+  script=$(rewrite "$script")
+  if [[ -n "${DEPLOY_TEST_HOLD:-}" ]] && printf '%s\n' "$script" | grep -F -q -- "$DEPLOY_TEST_HOLD"; then
+    touch "${DEPLOY_TEST_STATE}/holding"
+    while [[ -f "${DEPLOY_TEST_STATE}/holding" ]]; do
+      sleep 0.05
+    done
   fi
   printf '%s\n' "$script" | bash -s
   exit "${PIPESTATUS[1]}"
 fi
 if [[ $# -eq 1 ]]; then
-  exec bash -c "$1"
+  log_remote "$1"
+  exec bash -c "$(rewrite "$1")"
 fi
 printf 'ssh stub: unexpected command\n' >&2
 exit 1
@@ -122,7 +148,12 @@ while [[ $i -lt ${#args[@]} ]]; do
 done
 body=""
 code="200"
-if [[ "$url" == *api.github.com*/actions/workflows/ci.yml/runs* ]]; then
+if [[ -f "${DEPLOY_TEST_STATE}/github_http" ]]; then
+  code=$(tr -d '[:space:]' <"${DEPLOY_TEST_STATE}/github_http")
+fi
+if [[ "$code" == "403" ]]; then
+  body='{"message":"API rate limit exceeded"}'
+elif [[ "$url" == *api.github.com*/actions/workflows/ci.yml/runs* ]]; then
   sha=${url#*head_sha=}
   sha=${sha%%&*}
   conclusion=success
@@ -169,6 +200,48 @@ cat >"$WORK/stubs/go" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"${DEPLOY_TEST_STATE}/go.log"
+if [[ "${1:-}" == "list" ]]; then
+  python3 - "$@" <<'PY'
+import os, re, sys
+args = sys.argv[1:]
+mod = ""
+try:
+    for line in open("go.mod", encoding="utf-8"):
+        parts = line.split()
+        if parts and parts[0] == "module":
+            mod = parts[1]
+            break
+except OSError:
+    sys.exit(1)
+roots = [a[2:] if a.startswith("./") else a for a in args if a.startswith("./") or (mod and a.startswith(mod + "/"))]
+imp_re = re.compile(r'"(%s/[^"]+)"' % re.escape(mod)) if mod else None
+seen = set()
+
+def walk(rel):
+    if not rel or rel in seen:
+        return
+    dirpath = rel if os.path.isdir(rel) else os.path.dirname(rel)
+    if not os.path.isdir(dirpath):
+        return
+    seen.add(rel)
+    for name in os.listdir(dirpath):
+        if not name.endswith(".go") or name.endswith("_test.go"):
+            continue
+        text = open(os.path.join(dirpath, name), encoding="utf-8").read()
+        if imp_re is None:
+            continue
+        for match in imp_re.finditer(text):
+            walk(match.group(1)[len(mod) + 1:])
+
+for root in roots:
+    if root.startswith(mod + "/"):
+        root = root[len(mod) + 1:]
+    walk(root)
+for rel in sorted(seen):
+    sys.stdout.write("%s/%s\n" % (mod, rel))
+PY
+  exit 0
+fi
 if [[ "${1:-}" == "version" && "${2:-}" == "-m" ]]; then
   file=$3
   [[ -f "$file" ]] || exit 1
@@ -203,6 +276,56 @@ printf 'go stub: unexpected args\n' >&2
 exit 1
 EOF
 
+cat >"$WORK/stubs/install" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"${DEPLOY_TEST_STATE}/install.log"
+mode=0755
+src=""
+dst=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o | -g)
+      shift 2
+      ;;
+    -m)
+      mode=$2
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      printf 'install stub: %s\n' "$1" >&2
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+while [[ $# -gt 0 ]]; do
+  if [[ -z "$src" ]]; then
+    src=$1
+  else
+    dst=$1
+  fi
+  shift
+done
+[[ -n "$src" && -n "$dst" ]]
+mkdir -p "$(dirname "$dst")"
+cp -a "$src" "$dst"
+chmod "$mode" "$dst"
+EOF
+
+cat >"$WORK/stubs/readelf" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'There is no dynamic section in this file.\n' >&2
+exit 1
+EOF
+
 cat >"$WORK/stubs/sudo" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -228,13 +351,23 @@ case "$cmd" in
     printf 'active\n' >"${DEPLOY_TEST_STATE}/active"
     ;;
   is-active)
-    [[ "${1:-}" == "castbot" ]]
-    if [[ -f "${DEPLOY_TEST_STATE}/active" ]]; then
-      cat "${DEPLOY_TEST_STATE}/active"
-      exit 0
-    fi
-    printf 'inactive\n'
-    exit 3
+    case "${1:-}" in
+      castbot)
+        if [[ -f "${DEPLOY_TEST_STATE}/active" ]]; then
+          cat "${DEPLOY_TEST_STATE}/active"
+          exit 0
+        fi
+        printf 'inactive\n'
+        exit 3
+        ;;
+      caddy | fail2ban)
+        printf 'active\n'
+        ;;
+      *)
+        printf 'systemctl stub: unknown unit %s\n' "${1:-}" >&2
+        exit 1
+        ;;
+    esac
     ;;
   show)
     prop=""
@@ -285,20 +418,14 @@ if [[ -f "${DEPLOY_TEST_STATE}/journal_bad_sha" ]]; then
   bad=$(cat "${DEPLOY_TEST_STATE}/journal_bad_sha")
 fi
 if [[ -n "$bad" && "$rel" == "$bad" ]]; then
-  printf 'panic: CASTBOT_SESSION_KEY=journal_secret_MARKER\n'
+  printf 'castbot listening on 127.0.0.1:8080\npanic: CASTBOT_SESSION_KEY=journal_secret_MARKER\n'
   exit 0
 fi
 if [[ -f "${DEPLOY_TEST_STATE}/journal" ]]; then
   cat "${DEPLOY_TEST_STATE}/journal"
   exit 0
 fi
-printf 'castbot listening\n'
-EOF
-
-cat >"$WORK/stubs/file" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf 'ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, stripped\n'
+printf 'castbot listening on 127.0.0.1:8080\n'
 EOF
 
 cat >"$WORK/stubs/ldd" <<'EOF'
@@ -378,10 +505,11 @@ import sqlite3, sys
 db, queued = sys.argv[1], sys.argv[2] == "1"
 con = sqlite3.connect(db)
 con.execute("CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, user_id TEXT NOT NULL, token TEXT NOT NULL)")
+con.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)")
+con.execute("INSERT INTO schema_migrations(version) VALUES (4)")
 con.execute("INSERT INTO runs VALUES ('r1','done','user-1','tok_FAKE_SHOULD_NOT_APPEAR')")
 if queued:
     con.execute("INSERT INTO runs VALUES ('r2','queued','user-1','tok_FAKE_SHOULD_NOT_APPEAR')")
-con.execute("PRAGMA user_version=4")
 con.commit()
 PY
 }
@@ -444,6 +572,7 @@ run_deploy() {
       DEPLOY_LOG="$dir/deploy.log" \
       DEPLOY_TEST_STATE="$dir/state" \
       DEPLOY_TEST_PROC="$dir/proc" \
+      DEPLOY_TEST_HOLD="${DEPLOY_TEST_HOLD:-}" \
       GITHUB_TOKEN=ghp_FAKE_SHOULD_NOT_APPEAR \
       bash "$DEPLOY" "$@"
   ) >"$dir/stdout" 2>"$dir/stderr"
@@ -478,6 +607,32 @@ assert_ssh_strict() {
   fi
 }
 
+assert_privileged() {
+  local dir=$1
+  [[ -f "$dir/state/ssh.log" ]] || {
+    printf 'no ssh log\n' >&2
+    return 1
+  }
+  python3 - "$dir/state/ssh.log" <<'PY'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+blocks = re.findall(r"(?s)--- remote ---\n(.*?)--- end ---\n", text)
+if not blocks:
+    sys.stderr.write("no remote commands logged\n")
+    sys.exit(1)
+priv = re.compile(
+    r"sqlite3|journalctl|\bflock\b|\binstall\b|CASTBOT_IMAGE|\brm -rf\b|/proc/|\bln -sfn\b|\bRELEASE\b|\bsha256sum\b|\bmkdir\b|\bdf -P|\bchmod\b|\breadlink\b|\bcp -a\b"
+)
+for block in blocks:
+    if priv.search(block) and "sudo -n" not in block:
+        sys.stderr.write("privileged command without sudo -n:\n%s\n" % block[:800])
+        sys.exit(1)
+    if re.search(r"(^|[;&|\n])\s*sudo(?! -n\b)", block):
+        sys.stderr.write("sudo without -n:\n%s\n" % block[:800])
+        sys.exit(1)
+PY
+}
+
 happy() {
   local info dir repo app sha
   info=$(prepare)
@@ -485,7 +640,7 @@ happy() {
   repo=$(printf '%s\n' "$info" | sed -n '2p')
   app=$(printf '%s\n' "$info" | sed -n '3p')
   sha=$(printf '%s\n' "$info" | sed -n '4p')
-  printf 'castbot listening\nCASTBOT_SESSION_KEY=ses_FAKE_SHOULD_NOT_APPEAR\n' >"$dir/state/journal"
+  printf 'castbot listening on 127.0.0.1:8080\nCASTBOT_SESSION_KEY=ses_FAKE_SHOULD_NOT_APPEAR\n' >"$dir/state/journal"
   run_deploy "$dir"
   [[ "$(tr -d '[:space:]' <"$app/RELEASE")" == "$sha" ]]
   [[ "$(readlink -f "$app/bin/castbot")" == "$app/releases/$sha/castbot" ]]
@@ -495,20 +650,30 @@ happy() {
   [[ -f "$backup/castbot.db" && -f "$backup/RECORD" ]]
   record=$(cat "$backup/RECORD")
   printf '%s\n' "$record" | grep -q '^sha256 [0-9a-f]\{64\}$'
-  printf '%s\n' "$record" | grep -q '^user_version 4$'
+  printf '%s\n' "$record" | grep -q '^schema_version 4$'
   printf '%s\n' "$record" | grep -q '^integrity ok$'
+  [[ "$(stat -c '%a' "$backup")" == "700" ]]
   grep -q "sha=${sha} backup=" "$dir/deploy.log"
   grep -q 'result=ok$' "$dir/deploy.log"
   grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} M[SD]T ' "$dir/deploy.log"
   grep -q 'journal matches: 0' "$dir/stdout"
   grep -q 'flock -n' "$dir/state/ssh.log"
+  grep -q '/run/lock/castbot-deploy.lock' "$dir/state/ssh.log"
+  grep -q 'exec cat >/dev/null' "$dir/state/ssh.log"
+  grep -q 'install -o castbot -g castbot -m 0755' "$dir/state/ssh.log"
+  grep -q 'systemctl is-active caddy' "$dir/state/ssh.log"
+  grep -q 'systemctl is-active fail2ban' "$dir/state/ssh.log"
+  grep -q 'journalctl -u castbot _PID=' "$dir/state/ssh.log"
+  grep -q 'schema_migrations' "$dir/state/ssh.log"
+  grep -q 'http://127.0.0.1:8080/login' "$dir/state/ssh.log"
   grep -q -- '-trimpath' "$dir/state/go.log"
   grep -q -- '-ldflags=-s -w' "$dir/state/go.log"
   grep -q 'CGO=0 GOOS=linux GOARCH=amd64' "$dir/state/go.log"
   grep -q '\./cmd/castbot' "$dir/state/go.log"
   assert_ssh_strict "$dir"
+  assert_privileged "$dir"
   assert_no_secrets "$dir"
-  flock -n "$app/run/deploy.lock" true
+  flock -n "$dir/state/castbot-deploy.lock" true
   [[ "$repo" == "$dir/repo" ]]
 }
 
@@ -519,6 +684,13 @@ dry_run() {
   app=$(printf '%s\n' "$info" | sed -n '3p')
   run_deploy "$dir" --dry-run
   grep -q 'no backup, upload, or restart' "$dir/stdout"
+  grep -q 'rollback none' "$dir/stdout"
+  grep -q 'inflight 0' "$dir/stdout"
+  grep -q 'schema_version 4' "$dir/stdout"
+  grep -q 'journal readable' "$dir/stdout"
+  grep -q 'free_kb ' "$dir/stdout"
+  grep -q 'would prune none' "$dir/stdout"
+  grep -q 'sudo -n' "$dir/state/ssh.log"
   [[ ! -d "$app/backups" ]]
   [[ ! -e "$app/RELEASE" ]]
   if [[ -f "$dir/state/ssh.log" ]] && grep -q 'flock -n' "$dir/state/ssh.log"; then
@@ -526,6 +698,7 @@ dry_run() {
     return 1
   fi
   grep -q 'result=dry-run$' "$dir/deploy.log"
+  assert_privileged "$dir"
   assert_no_secrets "$dir"
 }
 
@@ -641,8 +814,13 @@ rollback() {
   grep -q 'result=rolled-back$' "$dir/deploy.log"
   grep -q 'journal matches: 1' "$dir/stderr"
   grep -q 'rolled back to' "$dir/stderr"
+  if grep -q 'journal_secret_MARKER' "$dir/stdout" "$dir/stderr"; then
+    printf 'journal line was printed\n' >&2
+    return 1
+  fi
+  assert_privileged "$dir"
   assert_no_secrets "$dir"
-  flock -n "$app/run/deploy.lock" true
+  flock -n "$dir/state/castbot-deploy.lock" true
 }
 
 skip_noninteractive_refused() {
@@ -805,10 +983,21 @@ source_guards() {
   local selects
   selects=$(grep -n 'SELECT' "$DEPLOY" || true)
   printf '%s\n' "$selects" | grep -q 'SELECT COUNT(\*) FROM runs WHERE status IN'
-  if printf '%s\n' "$selects" | grep -v 'SELECT COUNT(\*) FROM runs WHERE status IN' | grep -q 'SELECT'; then
+  printf '%s\n' "$selects" | grep -q 'SELECT COALESCE(MAX(version),0) FROM schema_migrations'
+  if printf '%s\n' "$selects" | grep -v 'SELECT COUNT(\*) FROM runs WHERE status IN' | grep -v 'SELECT COALESCE(MAX(version),0) FROM schema_migrations' | grep -q 'SELECT'; then
     printf 'unexpected SQL\n' >&2
     return 1
   fi
+  if grep -q 'user_version' "$DEPLOY"; then
+    printf 'script still uses user_version\n' >&2
+    return 1
+  fi
+  if grep -q 'sleep 3600' "$DEPLOY"; then
+    printf 'lock holder still sleeps\n' >&2
+    return 1
+  fi
+  grep -q 'exec cat >/dev/null' "$DEPLOY"
+  grep -q '/run/lock/castbot-deploy.lock' "$DEPLOY"
   bash "$CHECK"
 }
 
@@ -847,6 +1036,236 @@ check_rejects_private_files() {
   fi
 }
 
+already_live() {
+  local info dir app sha before after
+  info=$(prepare)
+  dir=$(printf '%s\n' "$info" | sed -n '1p')
+  app=$(printf '%s\n' "$info" | sed -n '3p')
+  sha=$(printf '%s\n' "$info" | sed -n '4p')
+  plant_binary "$app/releases/$sha/castbot" "$sha"
+  printf '%s\n' "$sha" >"$app/RELEASE"
+  ln -sfn "$app/releases/$sha/castbot" "$app/bin/castbot"
+  before=$(sha256sum "$app/releases/$sha/castbot")
+  if run_deploy "$dir"; then
+    printf 'live sha was deployed again\n' >&2
+    return 1
+  fi
+  grep -q 'sha is already live' "$dir/stderr"
+  after=$(sha256sum "$app/releases/$sha/castbot")
+  [[ "$before" == "$after" ]]
+  [[ ! -d "$app/backups" ]]
+  assert_no_secrets "$dir"
+  flock -n "$dir/state/castbot-deploy.lock" true
+}
+
+short_image_tag() {
+  local info dir repo sha short
+  info=$(prepare)
+  dir=$(printf '%s\n' "$info" | sed -n '1p')
+  repo=$(printf '%s\n' "$info" | sed -n '2p')
+  sha=$(printf '%s\n' "$info" | sed -n '4p')
+  short=$(git -C "$repo" rev-parse --short=7 HEAD)
+  cat >"$dir/server.env" <<EOF
+CASTBOT_DO_TOKEN=dop_v1_FAKE_SHOULD_NOT_APPEAR
+CASTBOT_IMAGE=example.invalid/castbot-runtime:${short}
+CASTBOT_SECRETS_KEY=sec_FAKE_SHOULD_NOT_APPEAR
+CASTBOT_SESSION_KEY=ses_FAKE_SHOULD_NOT_APPEAR
+CASTBOT_PROVIDER_KEY_OPENAI=pk_FAKE_SHOULD_NOT_APPEAR
+EOF
+  chmod 0600 "$dir/server.env"
+  run_deploy "$dir" --dry-run
+  grep -q 'no backup, upload, or restart' "$dir/stdout"
+  grep -q "runtime image commit ${sha}" "$dir/stdout"
+  assert_no_secrets "$dir"
+}
+
+guest_dir_ignored() {
+  local info dir repo
+  info=$(prepare)
+  dir=$(printf '%s\n' "$info" | sed -n '1p')
+  repo=$(printf '%s\n' "$info" | sed -n '2p')
+  mkdir -p "$repo/guest"
+  printf 'not part of the image\n' >"$repo/guest/README"
+  git -C "$repo" add guest/README
+  git -C "$repo" commit -m "guest dir" >/dev/null
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+  run_deploy "$dir" --dry-run
+  grep -q 'no backup, upload, or restart' "$dir/stdout"
+  if grep -q 'refusing to deploy ahead of the runtime image' "$dir/stderr"; then
+    printf 'guest/ was treated as an image input\n' >&2
+    return 1
+  fi
+  assert_no_secrets "$dir"
+}
+
+image_dep_change() {
+  local info dir repo image_sha
+  info=$(prepare)
+  dir=$(printf '%s\n' "$info" | sed -n '1p')
+  repo=$(printf '%s\n' "$info" | sed -n '2p')
+  mkdir -p "$repo/cmd/castlet" "$repo/internal/guestwrap"
+  printf 'package main\nimport _ "example.com/castbot/internal/guestwrap"\nfunc main() {}\n' >"$repo/cmd/castlet/main.go"
+  printf 'package guestwrap\nconst Marker = 1\n' >"$repo/internal/guestwrap/doc.go"
+  git -C "$repo" add cmd/castlet/main.go internal/guestwrap/doc.go
+  git -C "$repo" commit -m "guest dep" >/dev/null
+  image_sha=$(git -C "$repo" rev-parse HEAD)
+  cat >"$dir/server.env" <<EOF
+CASTBOT_DO_TOKEN=dop_v1_FAKE_SHOULD_NOT_APPEAR
+CASTBOT_IMAGE=example.invalid/castbot-runtime:${image_sha}
+CASTBOT_SECRETS_KEY=sec_FAKE_SHOULD_NOT_APPEAR
+CASTBOT_SESSION_KEY=ses_FAKE_SHOULD_NOT_APPEAR
+CASTBOT_PROVIDER_KEY_OPENAI=pk_FAKE_SHOULD_NOT_APPEAR
+EOF
+  chmod 0600 "$dir/server.env"
+  printf 'package guestwrap\nconst Marker = 2\n' >"$repo/internal/guestwrap/doc.go"
+  git -C "$repo" add internal/guestwrap/doc.go
+  git -C "$repo" commit -m "guest dep change" >/dev/null
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+  if run_deploy "$dir"; then
+    printf 'guest dependency change did not abort\n' >&2
+    return 1
+  fi
+  grep -q 'refusing to deploy ahead of the runtime image' "$dir/stderr"
+  grep -q 'internal/guestwrap/doc.go' "$dir/stderr"
+  assert_no_secrets "$dir"
+}
+
+dry_prune() {
+  local info dir app old mid ancient
+  info=$(prepare)
+  dir=$(printf '%s\n' "$info" | sed -n '1p')
+  app=$(printf '%s\n' "$info" | sed -n '3p')
+  old=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  mid=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  ancient=cccccccccccccccccccccccccccccccccccccccc
+  plant_binary "$app/releases/$old/castbot" "$old"
+  plant_binary "$app/releases/$mid/castbot" "$mid"
+  plant_binary "$app/releases/$ancient/castbot" "$ancient"
+  touch -d '2020-01-01 00:00:00' "$app/releases/$old"
+  touch -d '2024-01-01 00:00:00' "$app/releases/$mid"
+  touch -d '2022-01-01 00:00:00' "$app/releases/$ancient"
+  printf '%s\n' "$old" >"$app/RELEASE"
+  ln -sfn "$app/releases/$old/castbot" "$app/bin/castbot"
+  DEPLOY_KEEP_RELEASES=1 run_deploy "$dir" --dry-run
+  grep -q "would prune ${ancient}" "$dir/stdout"
+  grep -q "rollback ${old}" "$dir/stdout"
+  if grep -q "would prune ${old}" "$dir/stdout" || grep -q "would prune ${mid}" "$dir/stdout"; then
+    printf 'dry-run would prune a kept release\n' >&2
+    return 1
+  fi
+  [[ -d "$app/releases/$old" && -d "$app/releases/$mid" && -d "$app/releases/$ancient" ]]
+  [[ ! -d "$app/backups" ]]
+  assert_no_secrets "$dir"
+}
+
+github_403() {
+  local info dir
+  info=$(prepare)
+  dir=$(printf '%s\n' "$info" | sed -n '1p')
+  printf '403\n' >"$dir/state/github_http"
+  if run_deploy "$dir"; then
+    printf 'GitHub 403 did not abort\n' >&2
+    return 1
+  fi
+  grep -q 'GitHub API returned HTTP 403: API rate limit exceeded' "$dir/stderr"
+  assert_no_secrets "$dir"
+}
+
+xtrace_refused() {
+  local dir status=0
+  dir=$(case_dir)
+  env GITHUB_TOKEN=ghp_FAKE_SHOULD_NOT_APPEAR bash -x "$DEPLOY" --help >"$dir/stdout" 2>"$dir/stderr" || status=$?
+  [[ "$status" -ne 0 ]]
+  grep -q 'refusing to run under xtrace' "$dir/stderr"
+  if grep -q 'ghp_FAKE_SHOULD_NOT_APPEAR' "$dir/stdout" "$dir/stderr"; then
+    printf 'xtrace leaked the token\n' >&2
+    return 1
+  fi
+}
+
+kill_tree() {
+  local pid=$1 child
+  local kids
+  kids=$(ps -o pid= --ppid "$pid" 2>/dev/null || true)
+  for child in $kids; do
+    kill_tree "$child"
+  done
+  kill -9 "$pid" 2>/dev/null || true
+}
+
+lock_released_on_kill() {
+  local info dir app pid deploy_pid held
+  info=$(prepare)
+  dir=$(printf '%s\n' "$info" | sed -n '1p')
+  app=$(printf '%s\n' "$info" | sed -n '3p')
+  set -m
+  DEPLOY_TEST_HOLD='.backup' run_deploy "$dir" &
+  pid=$!
+  set +m
+  held=0
+  for _ in $(seq 1 300); do
+    if [[ -f "$dir/state/holding" ]]; then
+      held=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$held" != "1" ]]; then
+    kill_tree "$pid" || true
+    wait "$pid" 2>/dev/null || true
+    printf 'deploy did not reach the backup while holding the lock\n' >&2
+    return 1
+  fi
+  if flock -n "$dir/state/castbot-deploy.lock" true; then
+    kill_tree "$pid" || true
+    wait "$pid" 2>/dev/null || true
+    printf 'lock was not held\n' >&2
+    return 1
+  fi
+  deploy_pid=$(python3 - "$pid" <<'PY'
+import subprocess, sys
+root = int(sys.argv[1])
+found = []
+
+def children(pid):
+    proc = subprocess.run(["ps", "-o", "pid=", "--ppid", str(pid)], text=True, capture_output=True)
+    return [int(part) for part in proc.stdout.split()]
+
+def walk(pid):
+    try:
+        raw = open("/proc/%s/cmdline" % pid, "rb").read().replace(b"\0", b" ").decode()
+    except OSError:
+        return
+    if "deploy.sh" in raw:
+        found.append(pid)
+    for child in children(pid):
+        walk(child)
+
+walk(root)
+if not found:
+    sys.exit(1)
+print(found[0])
+PY
+  )
+  kill -9 "$deploy_pid"
+  held=1
+  for _ in $(seq 1 50); do
+    if flock -n "$dir/state/castbot-deploy.lock" true; then
+      held=0
+      break
+    fi
+    sleep 0.1
+  done
+  kill_tree "$pid" || true
+  wait "$pid" 2>/dev/null || true
+  rm -f "$dir/state/holding"
+  if [[ "$held" != "0" ]]; then
+    printf 'lock still held after the deploy process was killed\n' >&2
+    return 1
+  fi
+  [[ "$app" == "$dir/app" ]]
+}
+
 run_case happy happy
 run_case dry-run dry_run
 run_case ci-red ci_red
@@ -860,6 +1279,14 @@ run_case skip-flag skip_flag
 run_case skip-pty skip_pty_ok
 run_case skip-pty-wrong skip_pty_wrong
 run_case prune prune
+run_case already-live already_live
+run_case short-image-tag short_image_tag
+run_case guest-dir-ignored guest_dir_ignored
+run_case image-dep image_dep_change
+run_case dry-prune dry_prune
+run_case github-403 github_403
+run_case xtrace xtrace_refused
+run_case lock-kill lock_released_on_kill
 run_case source-guards source_guards
 run_case secret-files check_rejects_private_files
 

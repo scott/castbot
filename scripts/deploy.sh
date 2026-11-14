@@ -2,6 +2,11 @@
 # Deploy the castbot control plane from a laptop.
 # The runtime image is not built, pushed, or changed. The server env file is
 # only searched for the CASTBOT_IMAGE line. Secrets are not read or printed.
+if [[ $- == *x* ]]; then
+  set +x
+  printf 'deploy: refusing to run under xtrace\n' >&2
+  exit 1
+fi
 set -euo pipefail
 
 RESULT=fail
@@ -10,6 +15,7 @@ SHA_LOG="-"
 LOG_WRITTEN=0
 SWITCHED=0
 IN_ROLLBACK=0
+LOCK_FD=""
 LOCK_SSH=""
 LOCK_OUT=""
 WT=""
@@ -21,7 +27,7 @@ BIN=""
 BIN_SHA=""
 PREV=""
 IMAGE_VALUE=""
-USER_VERSION=""
+SCHEMA_BEFORE=""
 DRY=0
 SKIP_CI=0
 UNDERSTAND=0
@@ -36,8 +42,9 @@ host named by DEPLOY_HOST. The default commit is origin/main.
 
 Options:
   --dry-run                         Run preflight, the CI gate, the image
-                                    gate, and the build, then print the
-                                    remote plan. No backup, upload, or restart.
+                                    gate, the build, and the read-only remote
+                                    checks, then print the plan. No backup,
+                                    upload, or restart.
   --skip-ci-check                   Skip the CI gate. A terminal must type
                                     the short sha. A non-interactive run also
                                     needs --i-understand-ci-is-not-green.
@@ -74,9 +81,22 @@ write_log() {
 }
 
 release_lock() {
+  if [[ -n "${LOCK_FD}" ]]; then
+    eval "exec ${LOCK_FD}>&-"
+    LOCK_FD=""
+  fi
   if [[ -n "${LOCK_SSH}" ]] && kill -0 "$LOCK_SSH" 2>/dev/null; then
-    kill -- "-${LOCK_SSH}" 2>/dev/null || kill "$LOCK_SSH" 2>/dev/null || true
-    wait "$LOCK_SSH" 2>/dev/null || true
+    local i=0
+    while [[ "$i" -lt 30 ]] && kill -0 "$LOCK_SSH" 2>/dev/null; do
+      sleep 0.1
+      i=$((i + 1))
+    done
+    if kill -0 "$LOCK_SSH" 2>/dev/null; then
+      kill "$LOCK_SSH" 2>/dev/null || true
+      wait "$LOCK_SSH" 2>/dev/null || true
+    else
+      wait "$LOCK_SSH" 2>/dev/null || true
+    fi
   fi
   LOCK_SSH=""
   if [[ -n "${LOCK_OUT}" && -f "$LOCK_OUT" ]]; then
@@ -137,7 +157,7 @@ load_deploy_env() {
       val=${val:1:${#val}-2}
     fi
     case "$key" in
-      DEPLOY_HOST|DEPLOY_USER|DEPLOY_APP_DIR|DEPLOY_ENV_FILE|DEPLOY_PUBLIC_URL|DEPLOY_KEEP_RELEASES|DEPLOY_KNOWN_HOSTS|DEPLOY_LOG)
+      DEPLOY_HOST|DEPLOY_USER|DEPLOY_APP_DIR|DEPLOY_ENV_FILE|DEPLOY_PUBLIC_URL|DEPLOY_KEEP_RELEASES|DEPLOY_KNOWN_HOSTS|DEPLOY_LOG|DEPLOY_LOCAL_HEALTH_URL)
         if [[ -z "${!key:-}" ]]; then
           printf -v "$key" '%s' "$val"
           export "${key?}"
@@ -156,7 +176,8 @@ apply_defaults() {
   : "${DEPLOY_KEEP_RELEASES:=5}"
   : "${DEPLOY_KNOWN_HOSTS:=$ROOT/.deploy/known_hosts}"
   : "${DEPLOY_LOG:=$ROOT/.deploy/deploy.log}"
-  export DEPLOY_APP_DIR DEPLOY_ENV_FILE DEPLOY_KEEP_RELEASES DEPLOY_KNOWN_HOSTS DEPLOY_LOG
+  : "${DEPLOY_LOCAL_HEALTH_URL:=http://127.0.0.1:8080/login}"
+  export DEPLOY_APP_DIR DEPLOY_ENV_FILE DEPLOY_KEEP_RELEASES DEPLOY_KNOWN_HOSTS DEPLOY_LOG DEPLOY_LOCAL_HEALTH_URL
 }
 
 validate_config() {
@@ -168,6 +189,7 @@ validate_config() {
   [[ "$DEPLOY_APP_DIR" =~ ^/([A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+$ ]] || die "DEPLOY_APP_DIR is not an absolute path"
   [[ "$DEPLOY_ENV_FILE" =~ ^/([A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+$ ]] || die "DEPLOY_ENV_FILE is not an absolute path"
   [[ "$DEPLOY_PUBLIC_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/@%+-]*)?$ ]] || die "DEPLOY_PUBLIC_URL must be an https URL"
+  [[ "$DEPLOY_LOCAL_HEALTH_URL" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]{1,5})?(/[A-Za-z0-9._~:/@%+-]*)?$ ]] || die "DEPLOY_LOCAL_HEALTH_URL must be an http URL on 127.0.0.1 or localhost"
   [[ "$DEPLOY_KEEP_RELEASES" =~ ^[1-9][0-9]*$ ]] || die "DEPLOY_KEEP_RELEASES must be a positive integer"
   [[ -s "$DEPLOY_KNOWN_HOSTS" ]] || die "known hosts file is missing or empty"
   [[ "$DEPLOY_KNOWN_HOSTS" != *$'\n'* ]] || die "known hosts path is invalid"
@@ -189,24 +211,34 @@ remote_bash() {
   printf 'set -euo pipefail\n%s\n' "$script" | ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s
 }
 
+# Privileged remote work runs as root. The inner script is one bash -c
+# argument so the SSH user never needs to own the app directory.
+remote_root() {
+  local script=$1
+  remote_bash "sudo -n bash -c $(q "set -euo pipefail"$'\n'"$script")"
+}
+
 start_lock() {
-  local cmd
-  cmd="mkdir -p $(q "$DEPLOY_APP_DIR/run") && flock -n $(q "$DEPLOY_APP_DIR/run/deploy.lock") sh -c 'echo LOCKED; while true; do sleep 3600; done'"
   LOCK_OUT=$(mktemp)
-  set -m
-  # cmd is already escaped for the remote shell. -n keeps this
-  # session from reading the operator's stdin.
-  # shellcheck disable=SC2029
-  ssh -n "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "$cmd" >"$LOCK_OUT" &
+  # The write end of this pipe stays open in this process. The remote cat
+  # exits when that pipe closes, and flock exits with it. prctl makes the
+  # local ssh die with this process, so a kill still closes the session.
+  # flock -o keeps the lock on flock itself; cat must not inherit it.
+  exec {LOCK_FD}> >(python3 -c 'import ctypes, os, sys
+libc = ctypes.CDLL(None)
+libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+libc.prctl.restype = ctypes.c_int
+if libc.prctl(1, 9, 0, 0, 0) != 0:
+    sys.exit(1)
+os.execvp(sys.argv[1], sys.argv[1:])' ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "exec sudo -n flock -n -o /run/lock/castbot-deploy.lock sh -c 'echo LOCKED; exec cat >/dev/null'" >"$LOCK_OUT")
   LOCK_SSH=$!
-  set +m
   local tries=0
   while [[ "$tries" -lt 50 ]]; do
     tries=$((tries + 1))
-    if grep -q LOCKED "$LOCK_OUT"; then
+    if [[ -f "$LOCK_OUT" ]] && grep -q LOCKED "$LOCK_OUT"; then
       return 0
     fi
-    if ! kill -0 "$LOCK_SSH" 2>/dev/null; then
+    if [[ -n "$LOCK_SSH" ]] && ! kill -0 "$LOCK_SSH" 2>/dev/null; then
       die "could not take the deploy lock"
     fi
     sleep 0.1
@@ -218,11 +250,19 @@ db_path() {
   printf '%s' "$DEPLOY_APP_DIR/data/castbot.db"
 }
 
+trim_spaces() {
+  local v=$1
+  v=${v//$'\r'/}
+  v=${v#"${v%%[![:space:]]*}"}
+  v=${v%"${v##*[![:space:]]}"}
+  printf '%s' "$v"
+}
+
 inflight_count() {
   local db count
   db=$(db_path)
-  count=$(remote_bash "sqlite3 -readonly $(q "$db") \"SELECT COUNT(*) FROM runs WHERE status IN ('queued','streaming','waiting_approval');\"") || die "in-flight query failed"
-  count=${count//[[:space:]]/}
+  count=$(remote_root "sqlite3 -readonly $(q "$db") $(q "SELECT COUNT(*) FROM runs WHERE status IN ('queued','streaming','waiting_approval');")") || die "in-flight query failed"
+  count=$(trim_spaces "$count")
   [[ "$count" =~ ^[0-9]+$ ]] || die "in-flight query failed"
   printf '%s' "$count"
 }
@@ -235,17 +275,17 @@ abort_if_inflight() {
   fi
 }
 
-trim_spaces() {
-  local v=$1
-  v=${v//$'\r'/}
-  v=${v#"${v%%[![:space:]]*}"}
-  v=${v%"${v##*[![:space:]]}"}
-  printf '%s' "$v"
+read_schema() {
+  local db=$1 ver
+  ver=$(remote_root "sqlite3 -readonly $(q "$db") $(q "SELECT COALESCE(MAX(version),0) FROM schema_migrations;")") || return 1
+  ver=$(trim_spaces "$ver")
+  [[ "$ver" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$ver"
 }
 
 read_image_value() {
   local raw line val n
-  raw=$(remote_bash "grep -E '^CASTBOT_IMAGE=' -- $(q "$DEPLOY_ENV_FILE")") || {
+  raw=$(remote_root "grep -E '^CASTBOT_IMAGE=' -- $(q "$DEPLOY_ENV_FILE")") || {
     printf 'could not read CASTBOT_IMAGE\n' >&2
     return 1
   }
@@ -299,12 +339,59 @@ env_keys() {
   ' | sort -u
 }
 
+guest_rel_paths() {
+  local sha=$1 wt mod out status
+  wt=$(mktemp -d)
+  if ! git -C "$ROOT" worktree add --detach "$wt" "$sha" >/dev/null; then
+    rm -rf "$wt"
+    die "could not check out a commit to list runtime packages"
+  fi
+  out=$(mktemp)
+  set +e
+  (
+    cd "$wt"
+    go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/castlet ./cmd/castbot-guest ./cmd/cast-standin
+  ) >"$out"
+  status=$?
+  set -e
+  mod=$(awk '$1 == "module" { print $2; exit }' "$wt/go.mod")
+  git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  rm -rf "$wt"
+  if [[ "$status" != "0" ]]; then
+    rm -f "$out"
+    die "could not list runtime image packages"
+  fi
+  [[ -n "$mod" ]] || {
+    rm -f "$out"
+    die "go.mod has no module path"
+  }
+  awk -v mod="$mod" '
+    index($0, mod "/") == 1 {
+      print substr($0, length(mod) + 2)
+    }
+  ' "$out"
+  rm -f "$out"
+}
+
 image_gate() {
-  local value commit names gained
+  local value commit names gained paths p
   value=$(read_image_value) || die "could not read CASTBOT_IMAGE"
   IMAGE_VALUE=$value
   commit=$(image_commit "$value")
-  names=$(git -C "$ROOT" diff --name-only "$commit" "$SHA" -- Dockerfile guest internal/castlet cmd/castlet || true)
+  paths=$(
+    {
+      printf '%s\n' Dockerfile deploy go.mod go.sum cmd/castlet cmd/castbot-guest cmd/cast-standin internal/castlet
+      guest_rel_paths "$commit"
+      guest_rel_paths "$SHA"
+    } | awk 'NF && !seen[$0]++'
+  )
+  local -a path_args=()
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    [[ "$p" =~ ^[A-Za-z0-9._/-]+$ ]] || die "runtime image package path is unexpected"
+    path_args+=("$p")
+  done <<<"$paths"
+  names=$(git -C "$ROOT" diff --name-only "$commit" "$SHA" -- "${path_args[@]}") || die "could not diff the runtime image inputs"
   if [[ -n "$names" ]]; then
     printf 'runtime image inputs differ:\n%s\n' "$names" >&2
     die "refusing to deploy ahead of the runtime image"
@@ -334,9 +421,19 @@ print("%s/%s" % (m.group(1), m.group(2)))
   printf '%s' "$slug"
 }
 
+redact_text() {
+  sed -E \
+    -e 's/(CASTBOT_[A-Za-z0-9_]*|GITHUB_TOKEN|DEPLOY_[A-Za-z0-9_]*)=[^[:space:]]*/\1=***/g' \
+    -e 's/([A-Za-z0-9_]*(token|secret|password|key)[A-Za-z0-9_]*)[=:][^[:space:]]*/\1=***/Ig'
+}
+
 github_curl() {
   local url=$1
-  local out code
+  local out code msg tracing=0
+  if [[ $- == *x* ]]; then
+    tracing=1
+    set +x
+  fi
   out=$(mktemp)
   local -a args
   args=(-sS --max-time 30 -o "$out" -w '%{http_code}' -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
@@ -350,14 +447,41 @@ github_curl() {
     rm -f "$out"
     [[ -n "${TOKEN_HDR}" && -f "$TOKEN_HDR" ]] && rm -f "$TOKEN_HDR"
     TOKEN_HDR=""
+    [[ "$tracing" == "1" ]] && set -x
     die "GitHub API request failed"
   fi
   if [[ -n "${TOKEN_HDR}" && -f "$TOKEN_HDR" ]]; then
     rm -f "$TOKEN_HDR"
   fi
   TOKEN_HDR=""
+  if [[ "$tracing" == "1" ]]; then
+    set -x
+  fi
   if [[ "$code" != "200" ]]; then
+    msg=""
+    if [[ "$code" == "403" || "$code" == "401" ]]; then
+      msg=$(python3 - "$out" <<'PY' || true
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        data = json.load(fh)
+    text = data.get("message") or ""
+    if not isinstance(text, str):
+        text = ""
+    sys.stdout.write(text)
+except Exception:
+    pass
+PY
+)
+      msg=$(printf '%s' "$msg" | redact_text)
+      msg=${msg//$'\n'/ }
+      msg=${msg:0:200}
+      msg=$(trim_spaces "$msg")
+    fi
     rm -f "$out"
+    if [[ -n "$msg" ]]; then
+      die "GitHub API returned HTTP ${code}: ${msg}"
+    fi
     die "GitHub API returned HTTP ${code}"
   fi
   printf '%s' "$out"
@@ -475,11 +599,23 @@ check_ssh() {
   remote_bash "true" || die "SSH to the deploy host failed"
 }
 
+check_sudo() {
+  remote_root "true" || die "sudo -n failed"
+  remote_root "command -v sqlite3 >/dev/null" || die "sqlite3 is missing on the host"
+}
+
 assert_static() {
   local bin=$1
   local info ldd_out
-  info=$(file -b "$bin")
-  [[ "$info" == *"statically linked"* ]] || die "binary is not static"
+  set +e
+  info=$(readelf -d "$bin" 2>&1)
+  set -e
+  if printf '%s\n' "$info" | grep -q 'NEEDED'; then
+    die "binary is not static"
+  fi
+  if ! printf '%s\n' "$info" | grep -q 'no dynamic section'; then
+    die "binary is not static"
+  fi
   set +e
   ldd_out=$(ldd "$bin" 2>&1)
   set -e
@@ -525,39 +661,96 @@ build_binary() {
   printf 'binary sha256 %s\n' "$BIN_SHA"
 }
 
+read_release_file() {
+  local got
+  got=$(remote_root "if [[ -f $(q "$DEPLOY_APP_DIR/RELEASE") ]]; then tr -d '[:space:]' < $(q "$DEPLOY_APP_DIR/RELEASE"); fi") || return 1
+  trim_spaces "$got"
+}
+
+read_link_sha() {
+  local link prefix name
+  link=$(remote_root "if [[ -e $(q "$DEPLOY_APP_DIR/bin/castbot") || -L $(q "$DEPLOY_APP_DIR/bin/castbot") ]]; then readlink -f $(q "$DEPLOY_APP_DIR/bin/castbot"); fi") || return 1
+  link=$(trim_spaces "$link")
+  if [[ -z "$link" ]]; then
+    printf ''
+    return 0
+  fi
+  prefix="$DEPLOY_APP_DIR/releases/"
+  [[ "$link" == "$prefix"*"/castbot" ]] || return 1
+  name=${link#"$prefix"}
+  name=${name%"/castbot"}
+  [[ "$name" =~ ^[0-9a-f]{40}$ ]] || return 1
+  printf '%s' "$name"
+}
+
+ensure_rollback_target() {
+  local rel link
+  rel=$(read_release_file) || die "could not read RELEASE"
+  rel=$(trim_spaces "$rel")
+  link=$(read_link_sha) || die "symlink is not a release binary"
+  link=$(trim_spaces "$link")
+  if [[ -z "$rel" && -z "$link" ]]; then
+    PREV=""
+    printf 'rollback none\n'
+    return 0
+  fi
+  if [[ "$rel" != "$link" ]]; then
+    die "RELEASE does not match the symlink"
+  fi
+  [[ "$rel" =~ ^[0-9a-f]{40}$ ]] || die "RELEASE is not a commit sha"
+  remote_root "test -x $(q "$DEPLOY_APP_DIR/releases/$rel/castbot")" || die "rollback target binary is missing"
+  PREV=$rel
+  if [[ "$PREV" == "$SHA" ]]; then
+    die "sha is already live"
+  fi
+  printf 'rollback %s\n' "$PREV"
+}
+
 take_backup() {
-  local db dest sum uv check
+  local db dest sum ver check
   db=$(db_path)
   BACKUP_ID=$(TZ=America/Denver date '+%Y-%m-%d_%H%M')
   dest="$DEPLOY_APP_DIR/backups/$BACKUP_ID"
-  remote_bash "test -f $(q "$db")" || die "database is missing"
-  remote_bash "mkdir -p $(q "$DEPLOY_APP_DIR/backups") && mkdir $(q "$dest")" || die "backup directory already exists"
-  remote_bash "sqlite3 -readonly $(q "$db") \".backup $(q "$dest/castbot.db")\"" || die "sqlite backup failed"
-  check=$(remote_bash "sqlite3 -readonly $(q "$dest/castbot.db") \"PRAGMA integrity_check;\"") || die "integrity check failed"
+  remote_root "test -f $(q "$db")" || die "database is missing"
+  remote_root "mkdir -p -- $(q "$DEPLOY_APP_DIR/backups") && mkdir -- $(q "$dest") && chmod 0700 $(q "$dest")" || die "backup directory already exists"
+  remote_root "sqlite3 -readonly $(q "$db") $(q ".backup ${dest}/castbot.db")" || die "sqlite backup failed"
+  check=$(remote_root "sqlite3 -readonly $(q "$dest/castbot.db") $(q "PRAGMA integrity_check;")") || die "integrity check failed"
   check=$(trim_spaces "$check")
   [[ "$check" == "ok" ]] || die "integrity check failed"
-  uv=$(remote_bash "sqlite3 -readonly $(q "$dest/castbot.db") \"PRAGMA user_version;\"") || die "could not read user_version"
-  uv=$(trim_spaces "$uv")
-  [[ "$uv" =~ ^[0-9]+$ ]] || die "could not read user_version"
-  USER_VERSION=$uv
-  sum=$(remote_bash "sha256sum $(q "$dest/castbot.db")") || die "could not hash the backup"
+  ver=$(read_schema "$dest/castbot.db") || die "could not read schema_version"
+  SCHEMA_BEFORE=$ver
+  sum=$(remote_root "sha256sum -- $(q "$dest/castbot.db")") || die "could not hash the backup"
   sum=${sum%% *}
   [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || die "could not hash the backup"
-  remote_bash "printf \"%s\n\" $(q "sha256 ${sum}") $(q "user_version ${uv}") $(q "integrity ok") > $(q "$dest/RECORD")" || die "could not record the backup"
-  printf 'backup %s sha256=%s user_version=%s\n' "$BACKUP_ID" "$sum" "$uv"
+  remote_root "printf '%s\n' $(q "sha256 ${sum}") $(q "schema_version ${ver}") $(q "integrity ok") > $(q "$dest/RECORD")" || die "could not record the backup"
+  printf 'backup %s sha256=%s schema_version=%s\n' "$BACKUP_ID" "$sum" "$ver"
+}
+
+valid_temp() {
+  local path=$1
+  [[ "$path" =~ ^/(tmp|var/tmp)/[A-Za-z0-9._-]+$ ]]
 }
 
 upload_binary() {
-  local dest dir mode remote_sum
+  local tmp dest dir remote_sum mode
   dest="$DEPLOY_APP_DIR/releases/$SHA/castbot"
   dir="$DEPLOY_APP_DIR/releases/$SHA"
-  remote_bash "mkdir -p $(q "$dir")" || die "could not create the release directory"
-  scp "${SSH_OPTS[@]}" "$BIN" "${DEPLOY_USER}@${DEPLOY_HOST}:${dest}" || die "upload failed"
-  remote_bash "chmod 0755 $(q "$dest")" || die "could not set the binary mode"
-  mode=$(remote_bash "stat -c %a $(q "$dest")") || die "could not read the binary mode"
+  tmp=$(remote_bash "mktemp -d") || die "could not create a temp directory"
+  tmp=$(trim_spaces "$tmp")
+  valid_temp "$tmp" || die "temp directory is unexpected"
+  if ! scp "${SSH_OPTS[@]}" "$BIN" "${DEPLOY_USER}@${DEPLOY_HOST}:${tmp}/castbot"; then
+    remote_bash "rm -r -- $(q "$tmp")" || true
+    die "upload failed"
+  fi
+  if ! remote_root "mkdir -p -- $(q "$dir") && install -o castbot -g castbot -m 0755 -- $(q "$tmp/castbot") $(q "$dest")"; then
+    remote_bash "rm -r -- $(q "$tmp")" || true
+    die "could not install the binary"
+  fi
+  remote_bash "rm -r -- $(q "$tmp")" || die "could not remove the temp directory"
+  mode=$(remote_root "stat -c %a -- $(q "$dest")") || die "could not read the binary mode"
   mode=$(trim_spaces "$mode")
   [[ "$mode" == "755" ]] || die "remote binary mode is not 0755"
-  remote_sum=$(remote_bash "sha256sum $(q "$dest")") || die "could not hash the remote binary"
+  remote_sum=$(remote_root "sha256sum -- $(q "$dest")") || die "could not hash the remote binary"
   remote_sum=${remote_sum%% *}
   [[ "$remote_sum" == "$BIN_SHA" ]] || die "remote sha256 does not match"
 }
@@ -565,48 +758,75 @@ upload_binary() {
 switch_to() {
   local sha=$1
   local bin="$DEPLOY_APP_DIR/releases/$sha/castbot"
-  remote_bash "test -x $(q "$bin")" || return 1
+  local script
+  remote_root "test -x $(q "$bin")" || return 1
   SWITCHED=1
-  remote_bash "
-mkdir -p $(q "$DEPLOY_APP_DIR/bin")
-ln -sfn $(q "$bin") $(q "$DEPLOY_APP_DIR/bin/castbot.next")
-mv -Tf $(q "$DEPLOY_APP_DIR/bin/castbot.next") $(q "$DEPLOY_APP_DIR/bin/castbot")
-printf \"%s\n\" $(q "$sha") > $(q "$DEPLOY_APP_DIR/RELEASE.next")
-mv -Tf $(q "$DEPLOY_APP_DIR/RELEASE.next") $(q "$DEPLOY_APP_DIR/RELEASE")
-"
+  script=$(cat <<EOF
+mkdir -p -- $(q "$DEPLOY_APP_DIR/bin")
+ln -sfn -- $(q "$bin") $(q "$DEPLOY_APP_DIR/bin/castbot.next")
+mv -Tf -- $(q "$DEPLOY_APP_DIR/bin/castbot.next") $(q "$DEPLOY_APP_DIR/bin/castbot")
+printf '%s\n' $(q "$sha") > $(q "$DEPLOY_APP_DIR/RELEASE.next")
+mv -Tf -- $(q "$DEPLOY_APP_DIR/RELEASE.next") $(q "$DEPLOY_APP_DIR/RELEASE")
+EOF
+)
+  remote_root "$script" || return 1
 }
 
-read_release() {
-  local got
-  got=$(remote_bash "if [[ -f $(q "$DEPLOY_APP_DIR/RELEASE") ]]; then tr -d '[:space:]' < $(q "$DEPLOY_APP_DIR/RELEASE"); fi") || die "could not read RELEASE"
+service_active() {
+  local unit=$1 got
+  got=$(remote_bash "systemctl is-active $(q "$unit")" || true)
   got=$(trim_spaces "$got")
-  printf '%s' "$got"
+  [[ "$got" == "active" ]]
 }
 
-redact_text() {
-  sed -E \
-    -e 's/(CASTBOT_[A-Za-z0-9_]*|GITHUB_TOKEN|DEPLOY_[A-Za-z0-9_]*)=[^[:space:]]*/\1=***/g' \
-    -e 's/([A-Za-z0-9_]*(token|secret|password|key)[A-Za-z0-9_]*)[=:][^[:space:]]*/\1=***/Ig'
+wait_health() {
+  local deadline=$((SECONDS + 30))
+  local local_ok=0 public_ok=0 code base
+  base=${DEPLOY_PUBLIC_URL%/}
+  while ((SECONDS < deadline)); do
+    if [[ "$local_ok" == "0" ]]; then
+      code=$(remote_bash "curl -sS -o /dev/null -w '%{http_code}' --max-time 5 $(q "$DEPLOY_LOCAL_HEALTH_URL")" || true)
+      code=$(trim_spaces "$code")
+      [[ "$code" == "200" ]] && local_ok=1
+    fi
+    if [[ "$public_ok" == "0" ]]; then
+      code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "${base}/login" || true)
+      code=$(trim_spaces "$code")
+      [[ "$code" == "200" ]] && public_ok=1
+    fi
+    if [[ "$local_ok" == "1" && "$public_ok" == "1" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  if [[ "$local_ok" != "1" ]]; then
+    printf 'local /login did not return 200\n' >&2
+  fi
+  if [[ "$public_ok" != "1" ]]; then
+    printf 'public /login did not return 200\n' >&2
+  fi
+  return 1
 }
 
 verify_release() {
   local expect=$1
   local since=$2
-  local got link pid exe live_sum file_sum copy meta after image logs matches count code base
-  got=$(read_release) || {
+  local got link pid exe live_sum file_sum copy meta after image logs count copy_sum remote_tmp rev mod unit
+  got=$(read_release_file) || {
     printf 'could not read RELEASE\n' >&2
     return 1
   }
+  got=$(trim_spaces "$got")
   [[ "$got" == "$expect" ]] || {
     printf 'RELEASE does not match\n' >&2
     return 1
   }
-  link=$(remote_bash "readlink -f $(q "$DEPLOY_APP_DIR/bin/castbot")") || {
+  link=$(read_link_sha) || {
     printf 'could not read the symlink\n' >&2
     return 1
   }
   link=$(trim_spaces "$link")
-  [[ "$link" == "$DEPLOY_APP_DIR/releases/$expect/castbot" ]] || {
+  [[ "$link" == "$expect" ]] || {
     printf 'symlink does not match\n' >&2
     return 1
   }
@@ -619,7 +839,7 @@ verify_release() {
     printf 'castbot has no main process\n' >&2
     return 1
   }
-  exe=$(remote_bash "readlink -f /proc/${pid}/exe") || {
+  exe=$(remote_root "readlink -f /proc/${pid}/exe") || {
     printf 'could not read the running binary\n' >&2
     return 1
   }
@@ -628,17 +848,17 @@ verify_release() {
     printf 'running binary does not match\n' >&2
     return 1
   }
-  live_sum=$(remote_bash "sha256sum /proc/${pid}/exe") || {
+  live_sum=$(remote_root "sha256sum -- /proc/${pid}/exe") || {
     printf 'could not hash the running binary\n' >&2
     return 1
   }
   live_sum=${live_sum%% *}
-  file_sum=$(remote_bash "sha256sum $(q "$DEPLOY_APP_DIR/releases/$expect/castbot")") || {
+  file_sum=$(remote_root "sha256sum -- $(q "$DEPLOY_APP_DIR/releases/$expect/castbot")") || {
     printf 'could not hash the release\n' >&2
     return 1
   }
   file_sum=${file_sum%% *}
-  [[ "$live_sum" == "$file_sum" ]] || {
+  [[ "$live_sum" == "$file_sum" && "$live_sum" =~ ^[0-9a-f]{64}$ ]] || {
     printf 'running binary hash does not match the release\n' >&2
     return 1
   }
@@ -649,24 +869,42 @@ verify_release() {
     }
   fi
   copy=$(mktemp)
-  scp "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}:${exe}" "$copy" || {
+  remote_tmp=$(remote_bash "mktemp") || {
+    rm -f "$copy"
     printf 'could not copy the running binary\n' >&2
     return 1
   }
-  local copy_sum
+  remote_tmp=$(trim_spaces "$remote_tmp")
+  if ! valid_temp "$remote_tmp"; then
+    rm -f "$copy"
+    printf 'could not copy the running binary\n' >&2
+    return 1
+  fi
+  if ! remote_root "cp -a -- $(q "$DEPLOY_APP_DIR/releases/$expect/castbot") $(q "$remote_tmp") && chmod 0644 $(q "$remote_tmp")"; then
+    rm -f "$copy"
+    remote_bash "rm -f -- $(q "$remote_tmp")" || true
+    printf 'could not copy the running binary\n' >&2
+    return 1
+  fi
+  if ! scp "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_tmp}" "$copy"; then
+    rm -f "$copy"
+    remote_bash "rm -f -- $(q "$remote_tmp")" || true
+    printf 'could not copy the running binary\n' >&2
+    return 1
+  fi
+  remote_bash "rm -f -- $(q "$remote_tmp")" || true
   copy_sum=$(sha256sum "$copy" | awk '{ print $1 }')
-  [[ "$copy_sum" == "$file_sum" ]] || {
+  if [[ "$copy_sum" != "$file_sum" ]]; then
     rm -f "$copy"
     printf 'copied running binary hash does not match\n' >&2
     return 1
-  }
+  fi
   if ! meta=$(go version -m "$copy"); then
     rm -f "$copy"
     printf 'go version -m failed on the running binary\n' >&2
     return 1
   fi
   rm -f "$copy"
-  local rev mod
   rev=$(build_meta_field "$meta" revision) || {
     printf 'running binary has no vcs.revision\n' >&2
     return 1
@@ -679,33 +917,25 @@ verify_release() {
     printf 'running binary build info does not match\n' >&2
     return 1
   }
-  got=$(remote_bash "systemctl is-active castbot") || return 1
-  got=$(trim_spaces "$got")
-  [[ "$got" == "active" ]] || {
-    printf 'castbot.service is not active\n' >&2
+  for unit in castbot caddy fail2ban; do
+    if ! service_active "$unit"; then
+      printf '%s is not active\n' "$unit" >&2
+      return 1
+    fi
+  done
+  if ! wait_health; then
+    return 1
+  fi
+  [[ "$SCHEMA_BEFORE" =~ ^[0-9]+$ ]] || {
+    printf 'schema_version was not recorded\n' >&2
     return 1
   }
-  code=$(remote_bash "curl -sS -o /dev/null -w '%{http_code}' --max-time 15 http://127.0.0.1:8080/login") || return 1
-  code=$(trim_spaces "$code")
-  [[ "$code" == "200" ]] || {
-    printf 'local /login returned %s\n' "$code" >&2
+  after=$(read_schema "$(db_path)") || {
+    printf 'could not read schema_version\n' >&2
     return 1
   }
-  base=${DEPLOY_PUBLIC_URL%/}
-  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "${base}/login") || return 1
-  code=$(trim_spaces "$code")
-  [[ "$code" == "200" ]] || {
-    printf 'public /login returned %s\n' "$code" >&2
-    return 1
-  }
-  after=$(remote_bash "sqlite3 -readonly $(q "$(db_path)") \"PRAGMA user_version;\"") || return 1
-  after=$(trim_spaces "$after")
-  [[ "$after" =~ ^[0-9]+$ ]] || {
-    printf 'could not read user_version\n' >&2
-    return 1
-  }
-  if ((10#$after < 10#$USER_VERSION)); then
-    printf 'user_version went from %s to %s\n' "$USER_VERSION" "$after" >&2
+  if ((10#$after < 10#$SCHEMA_BEFORE)); then
+    printf 'schema_version went from %s to %s\n' "$SCHEMA_BEFORE" "$after" >&2
     return 1
   fi
   image=$(read_image_value) || return 1
@@ -713,12 +943,24 @@ verify_release() {
     printf 'CASTBOT_IMAGE changed\n' >&2
     return 1
   }
-  logs=$(remote_bash "journalctl -u castbot --since $(q "$since") -o cat --no-pager") || return 1
-  matches=$(printf '%s\n' "$logs" | grep -Ei 'panic|error|fatal' || true)
-  if [[ -n "$matches" ]]; then
-    count=$(printf '%s\n' "$matches" | wc -l | tr -d ' ')
+  logs=$(remote_root "journalctl -u castbot _PID=${pid} --since $(q "$since") --no-pager") || {
+    printf 'could not read the journal\n' >&2
+    return 1
+  }
+  logs=$(trim_spaces "$logs")
+  if [[ -z "$logs" ]]; then
+    printf 'journal is empty\n' >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$logs" | grep -F 'castbot listening on' >/dev/null; then
+    printf 'journal has no listening line\n' >&2
+    return 1
+  fi
+  count=$(printf '%s\n' "$logs" | grep -Eic 'error|warn|fail|panic|fatal' || true)
+  count=$(trim_spaces "$count")
+  [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  if [[ "$count" != "0" ]]; then
     printf 'journal matches: %s\n' "$count" >&2
-    printf '%s\n' "$matches" | redact_text >&2
     return 1
   fi
   printf 'journal matches: 0\n'
@@ -729,7 +971,7 @@ restart_service() {
   local since
   since=$(remote_bash "date -u '+%Y-%m-%d %H:%M:%S UTC'") || return 1
   since=$(trim_spaces "$since")
-  remote_bash "sudo -n systemctl restart castbot" || return 1
+  remote_root "systemctl restart castbot" || return 1
   printf '%s' "$since"
 }
 
@@ -767,37 +1009,78 @@ fail_switched() {
   die "$why"
 }
 
-prune_releases() {
-  local list line name kept
-  list=$(remote_bash "ls -1dt -- $(q "$DEPLOY_APP_DIR/releases")/*/") || die "could not list releases"
+each_prune() {
+  local mode=$1
   local -a names=()
   local -A keep=()
+  local raw line name kept=0 any=0 script
+  script=$(cat <<EOF
+if [[ -d $(q "$DEPLOY_APP_DIR/releases") ]]; then find $(q "$DEPLOY_APP_DIR/releases") -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n'; fi
+EOF
+)
+  raw=$(remote_root "$script") || die "could not list releases"
   while IFS= read -r line; do
-    line=${line%/}
     [[ -n "$line" ]] || continue
-    name=${line##*/}
+    name=${line##* }
     [[ "$name" =~ ^[0-9a-f]{40}$ ]] || die "refusing to touch an unexpected release name"
     names+=("$name")
-  done <<<"$list"
-  kept=0
-  for name in "${names[@]}"; do
-    if ((kept < DEPLOY_KEEP_RELEASES)); then
-      keep["$name"]=1
-      kept=$((kept + 1))
+  done < <(printf '%s\n' "$raw" | sort -nr)
+  if ((${#names[@]} > 0)); then
+    for name in "${names[@]}"; do
+      if ((kept < DEPLOY_KEEP_RELEASES)); then
+        keep["$name"]=1
+        kept=$((kept + 1))
+      fi
+    done
+  fi
+  [[ -n "$SHA" ]] && keep["$SHA"]=1
+  [[ -n "$PREV" ]] && keep["$PREV"]=1
+  if ((${#names[@]} == 0)); then
+    if [[ "$mode" == "print" ]]; then
+      printf 'would prune none\n'
     fi
-  done
-  keep["$SHA"]=1
-  if [[ -n "$PREV" ]]; then
-    keep["$PREV"]=1
+    return 0
   fi
   for name in "${names[@]}"; do
-    if [[ -n "${keep[$name]:-}" ]]; then
-      continue
-    fi
+    [[ -z "${keep[$name]:-}" ]] || continue
     [[ "$name" != "$SHA" && "$name" != "$PREV" ]] || die "refusing to delete the live release"
-    remote_bash "rm -rf -- $(q "$DEPLOY_APP_DIR/releases/$name")" || die "could not prune a release"
-    printf 'pruned %s\n' "$name"
+    if [[ "$mode" == "print" ]]; then
+      printf 'would prune %s\n' "$name"
+      any=1
+    else
+      remote_root "rm -rf -- $(q "$DEPLOY_APP_DIR/releases/$name")" || die "could not prune a release"
+      printf 'pruned %s\n' "$name"
+    fi
   done
+  if [[ "$mode" == "print" && "$any" == "0" ]]; then
+    printf 'would prune none\n'
+  fi
+}
+
+disk_free_kb() {
+  local raw kb script
+  script="df -Pk $(q "$DEPLOY_APP_DIR") | awk 'NR==2 { print \$4 }'"
+  raw=$(remote_root "$script") || return 1
+  kb=$(trim_spaces "$raw")
+  [[ "$kb" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$kb"
+}
+
+dry_run_report() {
+  local count ver free
+  ensure_rollback_target
+  count=$(inflight_count)
+  printf 'inflight %s\n' "$count"
+  if [[ "$count" != "0" ]]; then
+    die "abort: ${count} runs are queued, streaming, or waiting for approval"
+  fi
+  ver=$(read_schema "$(db_path)") || die "could not read schema_version"
+  printf 'schema_version %s\n' "$ver"
+  remote_root "journalctl -u castbot -n 0 --no-pager >/dev/null" || die "journalctl is not readable"
+  printf 'journal readable\n'
+  free=$(disk_free_kb) || die "could not read free disk"
+  printf 'free_kb %s\n' "$free"
+  each_prune print
 }
 
 print_plan() {
@@ -810,6 +1093,7 @@ host ${DEPLOY_HOST}
 user ${DEPLOY_USER}
 app ${DEPLOY_APP_DIR}
 public ${DEPLOY_PUBLIC_URL%/}/login
+local ${DEPLOY_LOCAL_HEALTH_URL}
 binary ${BIN_SHA}
 would backup ${DEPLOY_APP_DIR}/backups/${when}
 would install ${DEPLOY_APP_DIR}/releases/${SHA}/castbot
@@ -855,7 +1139,7 @@ parse_args() {
 
 main() {
   parse_args "$@"
-  need git go ssh scp curl python3 file sha256sum ldd
+  need git go ssh scp curl python3 readelf sha256sum ldd
   ROOT=$(git rev-parse --show-toplevel)
   cd "$ROOT"
   load_deploy_env
@@ -866,26 +1150,25 @@ main() {
   resolve_sha
   check_go
   check_ssh
+  check_sudo
   ci_gate
   image_gate
   build_binary
   if [[ "$DRY" == "1" ]]; then
+    dry_run_report
     print_plan
     RESULT=dry-run
     exit 0
   fi
   start_lock
+  ensure_rollback_target
   abort_if_inflight
   take_backup
   upload_binary
-  abort_if_inflight
-  PREV=$(read_release)
-  if [[ -n "$PREV" && ! "$PREV" =~ ^[0-9a-f]{40}$ ]]; then
-    die "RELEASE is not a commit sha"
-  fi
   if ! switch_to "$SHA"; then
     fail_switched "could not switch the release"
   fi
+  abort_if_inflight
   local since
   if ! since=$(restart_service); then
     fail_switched "restart failed"
@@ -893,7 +1176,7 @@ main() {
   if ! verify_release "$SHA" "$since"; then
     fail_switched "verify failed"
   fi
-  prune_releases
+  each_prune delete
   RESULT=ok
   printf 'deployed %s\n' "$SHA"
 }
