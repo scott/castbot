@@ -23,6 +23,7 @@ import (
 const stalePending = 10 * time.Minute
 
 func (s *Server) openRun(ctx context.Context, job run.Job, req runtime.Send) (runtime.Stream, error) {
+	req = s.withRoster(ctx, job, req)
 	if s.replacing(ctx, job.UserID, job.AgentID) {
 		return nil, &run.Notice{Text: replaceSentence}
 	}

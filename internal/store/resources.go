@@ -597,6 +597,12 @@ func (s *Store) DeleteThread(ctx context.Context, userID, id string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE thread_id = ? AND user_id = ?`, id, userID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM thread_participants WHERE thread_id = ? AND user_id = ?`, id, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_dispatches WHERE thread_id = ? AND user_id = ?`, id, userID); err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM threads WHERE id = ? AND user_id = ?`, id, userID)
 	if err != nil {
 		return err

@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS threads (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('dm', 'group', 'routine', 'cli')),
+  kind TEXT NOT NULL CHECK (kind IN ('dm', 'group', 'routine', 'cli', 'agent_dm', 'agent_chat')),
   agent_id TEXT,
   title TEXT NOT NULL DEFAULT '',
   cast_session_id TEXT NOT NULL DEFAULT '',
@@ -487,6 +487,11 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV24(); err != nil {
 		return err
 	}
+	// Version 25 lets one owner's agents message each other.
+	// agent_dm and agent_chat stay separate from a human group thread.
+	if err := s.migrateV25(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -657,6 +662,138 @@ func (s *Store) fixThreadsUserIndex() error {
 	}
 	_, err = s.db.Exec(`CREATE INDEX idx_threads_user ON threads(user_id, agent_id)`)
 	return err
+}
+
+// migrateV25 adds agent-to-agent threads. SQLite cannot alter a check,
+// so an older threads table is rebuilt. job_id is added after that rebuild.
+// The new tables carry user_id and workspace_id.
+func (s *Store) migrateV25() error {
+	if err := s.allowAgentThread(); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("threads", "job_id", `ALTER TABLE threads ADD COLUMN job_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_threads_job ON threads(user_id, job_id)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS thread_participants (
+  thread_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  PRIMARY KEY (thread_id, agent_id)
+)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_thread_participants_user ON thread_participants(user_id, agent_id)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS agent_jobs (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  owner_thread_id TEXT NOT NULL,
+  owner_message_id TEXT NOT NULL,
+  chief_agent_id TEXT NOT NULL,
+  specialist_turns INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_jobs_message ON agent_jobs(user_id, owner_message_id)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS agent_batches (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  owner_thread_id TEXT NOT NULL,
+  chief_agent_id TEXT NOT NULL,
+  prompt TEXT NOT NULL DEFAULT '',
+  links_md TEXT NOT NULL DEFAULT '',
+  delivered INTEGER NOT NULL DEFAULT 0,
+  delivery_message_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_agent_batches_job ON agent_batches(user_id, job_id)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS agent_dispatches (
+  id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  run_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('running', 'done', 'blocked', 'rejected')),
+  task TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  user_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_agent_dispatches_batch ON agent_dispatches(user_id, batch_id)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_agent_dispatches_run ON agent_dispatches(user_id, run_id)`); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (25) ON CONFLICT(version) DO NOTHING`)
+	return err
+}
+
+// allowAgentThread rebuilds threads when an older file still rejects
+// kind agent_dm. New databases already include the kind. The rebuild
+// does not add job_id. That column is added after the table exists.
+func (s *Store) allowAgentThread() error {
+	var ddl string
+	err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'threads'`).Scan(&ddl)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(ddl, "'agent_dm'") {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`CREATE TABLE threads_v25 (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('dm', 'group', 'routine', 'cli', 'agent_dm', 'agent_chat')),
+  agent_id TEXT,
+  title TEXT NOT NULL DEFAULT '',
+  cast_session_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO threads_v25(id, workspace_id, user_id, kind, agent_id, title, cast_session_id, created_at)
+SELECT id, workspace_id, user_id, kind, agent_id, title, cast_session_id, created_at FROM threads`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DROP TABLE threads`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE threads_v25 RENAME TO threads`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE INDEX idx_threads_user ON threads(user_id, agent_id)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE UNIQUE INDEX idx_threads_cli_session ON threads(user_id, agent_id, cast_session_id) WHERE kind = 'cli' AND cast_session_id != ''`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) indexColumns(name string) ([]string, error) {
