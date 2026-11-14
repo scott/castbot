@@ -10,7 +10,7 @@ Settings is the account avatar. Usage is a section of Settings. Old paths redire
 
 `TestPanelSwapKeepsComposer` returns the machine panel without the composer, and the full page still has the composer. The script keeps a `draft:` value in sessionStorage. `TestPanelCloseAndHistoryHooks` has the desktop Close control and the history helpers. `TestPhonePanelClose` has the visible Chat control and the peek strip. `TestSettingsCloseReturns` closes Settings back to the previous castbot view.
 
-`TestUsageSectionUnmetered` shows the unmetered copy, no dollar figure, and redirects `/usage` to `/settings#usage`. `TestLegacyRoutesRedirect` sends `/approvals`, `/routines`, `/files`, and the old agent paths to the panel targets with status 302. `TestApprovalsRedirectOldest` sends `/approvals` to the agent whose pending approval is oldest.
+`TestUsageSectionEstimate` shows this month's estimate, `$0.00` when nothing has run, and redirects `/usage` to `/settings#usage`. `TestLegacyRoutesRedirect` sends `/approvals`, `/routines`, `/files`, and the old agent paths to the panel targets with status 302. `TestApprovalsRedirectOldest` sends `/approvals` to the agent whose pending approval is oldest.
 
 `TestSameAgentApprovalAlerts` shows the header pill, the pending bar, and the Approvals tab badge on that agent, and does not toast. `TestOtherAgentApprovalToastOnce` toasts once for another agent's approval, names the agent and the tool, and leaves the arguments out. `TestPanelAuthz` returns 404 when another person opens those panels. `TestPanelCSRFUnchanged` still returns 403 for a bad token.
 

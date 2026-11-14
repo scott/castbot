@@ -264,7 +264,8 @@
 </section>
 {{template "secretsSummary" .}}
 <section class="card" id="usage" aria-labelledby="s-use-h"><div class="card-h"><h3 id="s-use-h">Usage</h3><span class="tag-new">New here</span></div>
-<div class="banner" role="status"><span class="grow"><b>Machine time is not metered in this version.</b> The estimate arrives with the machine panel update.</span></div>
+<div class="set-row"><div class="grow"><div class="k">This month</div><div class="v" id="month-total">{{if .Usage}}{{.Usage}}{{else}}$0.00{{end}}</div><span class="t2">Estimated machine time for this month. Running time at each size, plus disk while paused. An estimate, not a bill.</span></div></div>
+{{range .UsageLines}}<div class="set-row"><div class="grow"><div class="k"><a class="link" href="{{.Href}}">{{.Name}}</a></div><div class="v">{{.Amount}}</div></div></div>{{end}}
 <div class="set-row"><div class="grow"><div class="k">Machines</div><div class="v">{{if eq .AgentCount 1}}1 agent{{else}}{{.AgentCount}} agents{{end}}, each on its own machine</div><span class="t2">Machines pause after idle time, so a paused agent costs disk only.</span></div></div>
 <div class="set-row"><div class="grow"><div class="k">Model tokens</div><div class="v">Billed by your provider</div><span class="t2">castbot never adds a charge on top.</span></div></div>
 </section>
@@ -385,7 +386,8 @@
 {{if eq .Replace.Banner "err"}}<div class="banner err" role="alert"><span class="grow"><b>{{.Replace.BannerBold}}</b> {{.Replace.BannerRest}} <b>{{.Replace.BannerExtra}}</b> {{.Replace.BannerWarn}}</span>{{if .Replace.TryAgain}}<a class="btn sm" href="/agents/{{.Agent.ID}}/machine/replace">Try again</a>{{end}}</div>{{end}}
 {{if .Replace.BannerWarn}}{{if eq .Replace.Banner "ok"}}<p class="bline warnl">{{.Replace.BannerWarn}}</p>{{end}}{{end}}
 <span class="chip {{.Agent.ChipClass}}" id="machine-chip"><span class="pip"></span>{{.Agent.ChipLabel}}</span>
-<div class="meta-grid"><div><div class="k">Size</div><div class="v">{{.Agent.SizeLabel}}</div></div><div><div class="k">Auto-pause</div><div class="v">{{.Agent.IdleLabel}}</div></div>{{if .Replace.HasImage}}<div><div class="k">Image</div><div class="v{{if .Replace.Update}} upd{{end}}">{{.Replace.ImageLine}}</div></div>{{end}}{{if .Machine.ShowFirst}}<div><div class="k">First running</div><div class="v">{{.Machine.FirstRunning}}</div></div>{{end}}{{if .Machine.LastWake}}<div><div class="k">Last wake</div><div class="v">{{.Machine.LastWake}}</div></div>{{end}}</div>
+<div class="meta-grid"><div><div class="k">Size</div><div class="v">{{.Agent.SizeLabel}}</div></div><div><div class="k">Auto-pause</div><div class="v">{{.Agent.IdleLabel}}</div></div><div><div class="k">This month</div><div class="v" id="month-est">{{if .Machine.Estimate}}{{.Machine.Estimate}}{{else}}$0.00{{end}}</div></div>{{if .Replace.HasImage}}<div><div class="k">Image</div><div class="v{{if .Replace.Update}} upd{{end}}">{{.Replace.ImageLine}}</div></div>{{end}}{{if .Machine.ShowFirst}}<div><div class="k">First running</div><div class="v">{{.Machine.FirstRunning}}</div></div>{{end}}{{if .Machine.LastWake}}<div><div class="k">Last wake</div><div class="v">{{.Machine.LastWake}}</div></div>{{end}}</div>
+<p class="fineprint" id="month-note">Running time at this size, plus disk while paused. An estimate, not a bill.</p>
 {{if .Replace.NoMachine}}<div class="nomach"><div><b>{{.Agent.Name}} has no machine right now.</b><p>Start one to chat. The agent, its chats and its settings are all here.</p></div></div>{{end}}
 {{if .Replace.Steps}}{{template "replaceProgress" .}}{{end}}
 <div class="acts racts">
@@ -396,6 +398,13 @@
 {{if .Replace.CanReplace}}<a class="btn sm" id="replace-open" href="/agents/{{.Agent.ID}}/machine/replace?opener=replace-open">Replace machine</a>{{else if .Replace.ShowButton}}<button class="btn sm" type="button" disabled>Replace machine</button>{{end}}
 </div>
 {{if .Replace.LockLine}}<p class="lockline">This machine is being replaced. Pause, Wake, Delete and Add to Cast CLI are off until it is done.</p>{{end}}
+{{template "machineLogs" .}}
+<section class="mfiles" id="machine-files">
+<div class="mhead"><h3>Files</h3><a class="link" href="/agents/{{.Agent.ID}}?panel=files">Open files</a></div>
+{{if .Machine.FilesNote}}<p class="fineprint">{{.Machine.FilesNote}}</p>{{end}}
+{{if .Machine.Files}}<div class="inp fsearch"><input type="search" id="machine-file-filter" placeholder="Filter by name" aria-label="Filter machine files"></div>
+<div class="flist">{{range .Machine.Files}}<div class="frow"><a class="grow fmain" href="{{.Href}}"><span class="t1">{{.Name}}</span><span class="t2">{{.Meta}}</span></a><a class="ibtn line fdl" href="{{.Download}}" aria-label="Download {{.Name}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg></a></div>{{end}}</div>{{end}}
+</section>
 {{if .Replace.Reason}}<p class="reason">{{.Replace.Reason}}{{if .Replace.ReasonHref}} <a class="link" href="{{.Replace.ReasonHref}}">{{.Replace.ReasonLabel}}</a>{{end}}</p>{{end}}
 {{if .Replace.HintBold}}<div class="rhint{{if .Replace.Same}} quiet{{end}}"><div><b>{{.Replace.HintBold}}</b> {{.Replace.HintRest}}</div>{{if and .Replace.Update .Replace.CanReplace}}<a class="btn sm pri" id="replace-hint" href="/agents/{{.Agent.ID}}/machine/replace?opener=replace-hint">Replace machine</a>{{end}}</div>{{end}}
 {{template "cliBox" .}}
@@ -404,6 +413,14 @@
 {{if .Replace.LogNote}}<p class="fineprint">{{.Replace.LogNote}}</p>{{end}}
 <p class="fineprint">State from the cloud API. Checking it does not wake the machine.</p>
 </div>
+{{end}}
+
+{{define "machineLogs"}}
+<section class="mlogs" id="machine-logs"{{if .Machine.LogLive}} hx-get="/agents/{{.Agent.ID}}/machine/logs" hx-trigger="every 5s" hx-swap="outerHTML"{{end}}>
+<h3>Logs</h3>
+{{if .Machine.LogText}}<pre class="logtail">{{.Machine.LogText}}</pre>{{end}}
+{{if .Machine.LogNote}}<p class="fineprint">{{.Machine.LogNote}}</p>{{end}}
+</section>
 {{end}}
 
 {{define "replaceProgress"}}

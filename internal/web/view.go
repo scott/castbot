@@ -19,6 +19,16 @@ type machineView struct {
 	Lead, LastWake, FirstRunning                     string
 	ShowFirst                                        bool
 	CanStart, CanPause, CanWake, CanRetry, CanDelete bool
+	State                                            string
+	Estimate                                         string
+	LogText, LogNote                                 string
+	LogLive                                          bool
+	Files                                            []fileRow
+	FilesNote                                        string
+}
+
+type usageLine struct {
+	Name, Amount, Href string
 }
 
 type agentView struct {
@@ -132,6 +142,7 @@ type page struct {
 	OtherApprovals   int
 	AgentCount       int
 	Usage            string
+	UsageLines       []usageLine
 	Glance           []glanceRow
 	ModelTitle       string
 	ModelSub         string

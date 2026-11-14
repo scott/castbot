@@ -354,17 +354,18 @@
       });
     }
 
-    var filter = document.getElementById("file-filter");
-    if (filter) {
-      filter.addEventListener("input", function () {
-        var q = filter.value.trim().toLowerCase();
-        var rows = document.querySelectorAll(".frow");
-        for (var i = 0; i < rows.length; i++) {
-          var name = (rows[i].querySelector(".t1") || {}).textContent || "";
-          rows[i].hidden = q !== "" && name.toLowerCase().indexOf(q) === -1;
-        }
-      });
-    }
+    document.addEventListener("input", function (ev) {
+      var filter = ev.target;
+      if (!filter || (filter.id !== "file-filter" && filter.id !== "machine-file-filter")) return;
+      var q = (filter.value || "").trim().toLowerCase();
+      var root = document;
+      if (filter.id === "machine-file-filter") root = document.getElementById("machine-files") || document;
+      var rows = root.querySelectorAll(".frow");
+      for (var i = 0; i < rows.length; i++) {
+        var name = (rows[i].querySelector(".t1") || {}).textContent || "";
+        rows[i].hidden = q !== "" && name.toLowerCase().indexOf(q) === -1;
+      }
+    });
 
     var mention = document.getElementById("mention-file");
     if (mention) {

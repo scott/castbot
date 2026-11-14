@@ -603,6 +603,12 @@ func (s *Server) machineFromStore(ctx context.Context, userID string, agent *sto
 	if has && vm.State == "running" {
 		s.kickIfPending(ctx, userID, agent.ID)
 	}
+	if has {
+		view.State = vm.State
+		// A live machine from before usage tracking gets an interval from now.
+		// This is a database write only. It does not call the guest.
+		_ = s.store.EnsureUsage(ctx, userID, agent.ID)
+	}
 	switch {
 	case !has && h != nil && image != "" && publicURL != "":
 		view.CanStart = agent.Status == "draft" || agent.Status == "failed"

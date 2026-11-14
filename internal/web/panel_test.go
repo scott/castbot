@@ -163,7 +163,7 @@ func TestSettingsCloseReturns(t *testing.T) {
 	}
 }
 
-func TestUsageSectionUnmetered(t *testing.T) {
+func TestUsageSectionEstimate(t *testing.T) {
 	h, user, ip := panelSession(t, "use-s19@example.com", "Alex Rivera")
 	makeAgent(t, h.st, user.ID, "Atlas")
 	code, body, _ := h.do(http.MethodGet, "/settings", "", ip, nil)
@@ -171,8 +171,10 @@ func TestUsageSectionUnmetered(t *testing.T) {
 		t.Fatal(code)
 	}
 	for _, line := range []string{
-		"Machine time is not metered in this version.",
-		"The estimate arrives with the machine panel update.",
+		"This month",
+		"$0.00",
+		"An estimate, not a bill.",
+		"Estimated machine time for this month.",
 		"1 agent, each on its own machine",
 		"Machines pause after idle time, so a paused agent costs disk only.",
 		"Billed by your provider",
@@ -185,8 +187,8 @@ func TestUsageSectionUnmetered(t *testing.T) {
 			t.Fatalf("usage section missing %q", line)
 		}
 	}
-	if strings.Contains(body, "$7.42") || strings.Contains(body, "$0.00") {
-		t.Fatal("settings still shows a dollar figure")
+	if strings.Contains(body, "Machine time is not metered") || strings.Contains(body, "$7.42") {
+		t.Fatal("settings still uses the unmetered banner")
 	}
 	code, _, hdr := h.do(http.MethodGet, "/usage", "", ip, nil)
 	if code != http.StatusFound || hdr.Get("Location") != "/settings#usage" {

@@ -143,6 +143,13 @@ AND state_gen = ? AND deleted_at IS NULL`,
 	if _, err := tx.ExecContext(ctx, `UPDATE agents SET status = ?, activity = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, status, activity, agentID, userID); err != nil {
 		return false, err
 	}
+	var vmID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM agent_vms WHERE user_id = ? AND agent_id = ? AND microvm_id = ? AND deleted_at IS NULL`, userID, agentID, microID).Scan(&vmID); err != nil {
+		return false, err
+	}
+	if err := s.noteUsageTx(ctx, tx, agent.WorkspaceID, userID, agentID, vmID, agent.Size, "paused"); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
@@ -235,20 +242,45 @@ WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`,
 	if _, err := tx.ExecContext(ctx, `UPDATE agents SET status = ?, activity = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, status, activity, agentID, userID); err != nil {
 		return err
 	}
+	var vmID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM agent_vms WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, userID, agentID).Scan(&vmID); err != nil {
+		return err
+	}
+	if err := s.noteUsageTx(ctx, tx, agent.WorkspaceID, userID, agentID, vmID, agent.Size, state); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
 // ReleaseVM drops a reservation and marks the agent failed so the owner can retry.
+// An open usage interval for that machine is closed in the same write.
 func (s *Store) ReleaseVM(ctx context.Context, userID, agentID string) error {
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
 		return err
 	}
-	stamp := s.stamp(s.Now())
-	if _, err := s.db.ExecContext(ctx, `UPDATE agent_vms SET state = 'failed', deleted_at = ?, state_gen = state_gen + 1 WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, stamp, userID, agentID); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE agents SET status = 'failed', activity = '' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID)
-	return err
+	defer tx.Rollback()
+	stamp := s.stamp(s.Now())
+	var vmID string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM agent_vms WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, userID, agentID).Scan(&vmID)
+	if err == sql.ErrNoRows {
+		vmID = ""
+	} else if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE agent_vms SET state = 'failed', deleted_at = ?, state_gen = state_gen + 1 WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, stamp, userID, agentID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE agents SET status = 'failed', activity = '' WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, agentID, userID); err != nil {
+		return err
+	}
+	if err := closeUsageVMTx(ctx, tx, userID, vmID, stamp); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // NoteAgent stores a short status line on the caller's agent.
@@ -375,8 +407,10 @@ func (s *Store) MarkVMDeleted(ctx context.Context, userID, agentID string) error
 	if err := revokeAgentTokens(ctx, tx, userID, agentID, "", "", stamp); err != nil {
 		return err
 	}
+	if err := closeUsageVMTx(ctx, tx, userID, vmID, stamp); err != nil {
+		return err
+	}
 	_ = hash
-	_ = vmID
 	return tx.Commit()
 }
 

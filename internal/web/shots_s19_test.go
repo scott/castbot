@@ -202,7 +202,7 @@ func s19Shot(t *testing.T, theme, name, kind string) (*harness, string, string, 
 		needle = `(function(){var t=document.body.innerText||'';return t.indexOf('No files yet')>=0&&t.indexOf("Only Atlas's files")>=0;})()`
 	case "13f":
 		page = "/agents/" + atlas.ID
-		needle = `(function(){var t=document.body.innerText||'';return t.indexOf('Machine time is not metered in this version.')>=0&&t.indexOf('The estimate arrives with the machine panel update.')>=0&&t.indexOf('6 agents, each on its own machine')>=0&&t.indexOf('Billed by your provider')>=0&&t.indexOf('castbot never adds a charge on top.')>=0&&t.indexOf('$')<0;})()`
+		needle = `(function(){var t=document.body.innerText||'';return t.indexOf('This month')>=0&&t.indexOf('$0.00')>=0&&t.indexOf('An estimate, not a bill.')>=0&&t.indexOf('6 agents, each on its own machine')>=0&&t.indexOf('Billed by your provider')>=0&&t.indexOf('castbot never adds a charge on top.')>=0&&t.indexOf('Machine time is not metered')<0;})()`
 	case "13g":
 		page = "/agents/" + pip.ID
 		needle = `(function(){var t=document.body.innerText||'';return t.indexOf('Atlas needs your approval')>=0&&t.indexOf('git_push')>=0&&t.indexOf('ls demo')<0&&document.title.indexOf('(1)')===0;})()`

@@ -684,6 +684,16 @@ VALUES (?, ?, ?, ?, ?, ?, 0)`,
 		row.NewVMID, row.WorkspaceID, userID, row.AgentID, EventReplaceSwitch, stamp); err != nil {
 		return err
 	}
+	var size string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(size, '') FROM agents WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, row.AgentID, userID).Scan(&size); err != nil {
+		return err
+	}
+	if err := s.noteUsageTx(ctx, tx, row.WorkspaceID, userID, row.AgentID, row.OldVMID, size, ""); err != nil {
+		return err
+	}
+	if err := s.noteUsageTx(ctx, tx, row.WorkspaceID, userID, row.AgentID, row.NewVMID, size, vmState); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

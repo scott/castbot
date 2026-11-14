@@ -676,6 +676,19 @@ func (m *MicroVM) ImportMemory(ctx context.Context, endpoint, agentToken string,
 	return err
 }
 
+// Logs reads GET /castlet/logs.
+// Callers must not use it on a paused machine. A guest request wakes one.
+func (m *MicroVM) Logs(ctx context.Context, endpoint, agentToken string) (string, error) {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return "", err
+	}
+	body, code, err := m.streamRead(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/castlet/logs", agentToken, nil)
+	if err != nil || code != http.StatusOK {
+		return "", ErrGuest
+	}
+	return string(body), nil
+}
+
 // ListWorkspace reads GET /castlet/files.
 func (m *MicroVM) ListWorkspace(ctx context.Context, endpoint, agentToken string) ([]WorkspaceFile, error) {
 	if err := m.checkEdge(endpoint, agentToken); err != nil {
