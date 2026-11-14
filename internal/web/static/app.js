@@ -156,6 +156,15 @@
 
     document.addEventListener("change", function (ev) {
       var t = ev.target;
+      if (t && t.id === "conn-change" && t.checked) {
+        window.requestAnimationFrame(function () {
+          var token = document.getElementById("conn-token");
+          if (token) {
+            token.focus();
+          }
+        });
+        return;
+      }
       if (t && t.name === "on" && t.form && t.form.querySelector(".tog")) {
         t.form.submit();
         return;

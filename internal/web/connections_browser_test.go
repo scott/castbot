@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestConnectionsBrowser(t *testing.T) {
 			); err != nil {
 				t.Fatal(err)
 			}
-			browserWait(t, ctx, "connections grid", `!!document.querySelector('#conn-grid') && !!document.querySelector('nav.stoc a[href="/settings/connections"].on') && (document.body.innerText||'').indexOf('GitHub')>=0 && (document.body.innerText||'').indexOf('DigitalOcean')>=0 && (document.body.innerText||'').indexOf('Shell Actions')>=0`)
+			browserWait(t, ctx, "connections grid", `!!document.querySelector('#conn-grid') && !!document.querySelector('nav.stoc a[href="/settings/connections"].on') && (document.body.innerText||'').indexOf('GitHub')>=0 && (document.body.innerText||'').indexOf('DigitalOcean')>=0 && (document.body.innerText||'').indexOf('Shell Actions')>=0 && (document.body.innerText||'').indexOf('Configure')>=0 && (document.body.innerText||'').indexOf('Disconnect')<0`)
 			browserNoScroll(t, ctx, "grid")
 			browserNoDash(t, ctx, "grid")
 
@@ -81,9 +82,13 @@ func TestConnectionsBrowser(t *testing.T) {
 				t.Fatal(err)
 			}
 			browserClick(t, ctx, `#conn-save`)
-			browserWait(t, ctx, "github connected", `(document.body.innerText||'').indexOf('Connected. Every agent you own can use this.')>=0 && (document.body.innerText||'').indexOf('A token is saved')>=0 && (document.querySelector('#conn-token')||{}).value===''`)
+			browserWait(t, ctx, "github connected", `(function(){var edit=document.querySelector('.token-edit'); return (document.body.innerText||'').indexOf('Connected. Every agent you own can use this.')>=0 && (document.body.innerText||'').indexOf('brow-xxxxxxx')>=0 && (document.body.innerText||'').indexOf('Change')>=0 && !!edit && window.getComputedStyle(edit).display==='none' && (document.querySelector('#conn-token')||{}).value==='';})()`)
 			browserNoSecret(t, ctx)
 			browserNoScroll(t, ctx, "github saved")
+			browserClick(t, ctx, `label[for="conn-change"]`)
+			browserWait(t, ctx, "change token", `(function(){var edit=document.querySelector('.token-edit'); var input=document.querySelector('#conn-token'); return !!edit && window.getComputedStyle(edit).display!=='none' && !!input && input.value==='' && document.activeElement===input;})()`)
+			browserNoSecret(t, ctx)
+			browserNoScroll(t, ctx, "change token")
 
 			browserClick(t, ctx, `#conn-disconnect button`)
 			browserWait(t, ctx, "github disconnected", `(document.body.innerText||'').indexOf('Disconnected. Tool choices stay.')>=0 && (document.body.innerText||'').indexOf('Not connected')>=0`)
@@ -99,7 +104,7 @@ func TestConnectionsBrowser(t *testing.T) {
 				t.Fatal(err)
 			}
 			browserClick(t, ctx, `#conn-save`)
-			browserWait(t, ctx, "shell saved", `(document.body.innerText||'').indexOf('Saved. Every agent you own uses these choices.')>=0 || (document.body.innerText||'').indexOf('Connected. Every agent you own can use this.')>=0`)
+			browserWait(t, ctx, "shell saved", `location.pathname==='/settings/connections' && (document.body.innerText||'').indexOf('Saved. Every agent you own uses these choices.')>=0 && (document.body.innerText||'').indexOf('Configure')>=0`)
 			browserNoScroll(t, ctx, "shell saved")
 
 			edit := ts.URL + "/agents/" + agent.ID + "/edit"
@@ -137,7 +142,14 @@ func browserSession(t *testing.T, h *harness, userID string) string {
 
 func browserClick(t *testing.T, ctx context.Context, sel string) {
 	t.Helper()
-	err := chromedp.Run(ctx, chromedp.Click(sel, chromedp.ByQuery))
+	// Center the target first. A phone header is sticky, and a click that
+	// scrolls the control to the top of the page lands under that header.
+	var found bool
+	err := chromedp.Run(ctx, chromedp.Evaluate(`(function(){var el=document.querySelector(`+strconv.Quote(sel)+`); if(!el) return false; el.scrollIntoView({block:'center', inline:'nearest'}); return true;})()`, &found))
+	if err != nil || !found {
+		t.Fatalf("click %s: %v", sel, err)
+	}
+	err = chromedp.Run(ctx, chromedp.Click(sel, chromedp.ByQuery))
 	if err != nil && !strings.Contains(err.Error(), "navigat") && !strings.Contains(err.Error(), "canceled") {
 		t.Fatal(err)
 	}

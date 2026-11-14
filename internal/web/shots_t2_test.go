@@ -46,7 +46,7 @@ func shootT2Connections(t *testing.T, browser context.Context, dir string, width
 	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), page, width, height)...); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, shotPoll(t, "saved connection", js(`!!document.querySelector('#conn-token') && (document.body.innerText||'').indexOf('A token is saved')>=0`))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "saved connection", js(`!!document.querySelector('#conn-token-mask') && (document.body.innerText||'').indexOf('test-xxxxxxx')>=0 && (document.body.innerText||'').indexOf('Change')>=0`))); err != nil {
 		t.Fatal(err)
 	}
 	if err := chromedp.Run(ctx, chromedp.ScrollIntoView(`#conn-form`, chromedp.ByQuery)); err != nil {

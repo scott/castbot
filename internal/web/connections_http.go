@@ -26,9 +26,9 @@ type connCard struct {
 }
 
 type connDetail struct {
-	ID, Title, Body, TokenLabel string
-	NeedsSecret, On, HasSecret  bool
-	Tools                       []connTool
+	ID, Title, Body, TokenLabel, TokenMask string
+	NeedsSecret, On, HasSecret, EditToken  bool
+	Tools                                  []connTool
 }
 
 type connTool struct {
@@ -45,7 +45,9 @@ func (s *Server) connectionsList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	s.renderConnections(w, r, user, connPage{Phone: "Connections", Cards: cards}, http.StatusOK)
+	s.renderConnections(w, r, user, connPage{
+		Phone: "Connections", Cards: cards, Notice: connectionNotice(r.URL.Query().Get("notice")),
+	}, http.StatusOK)
 }
 
 func (s *Server) connectionShow(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +107,7 @@ func (s *Server) connectionSave(w http.ResponseWriter, r *http.Request) {
 		if tokenErr != "" {
 			msg = tokenErr
 		}
+		detail.EditToken = token != ""
 		s.renderConnections(w, r, user, connPage{Phone: panel.Title, Back: true, Detail: detail, Error: msg}, http.StatusBadRequest)
 		return
 	}
@@ -120,6 +123,7 @@ func (s *Server) connectionSave(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Error", http.StatusInternalServerError)
 				return
 			}
+			detail.EditToken = true
 			s.renderConnections(w, r, user, connPage{Phone: panel.Title, Back: true, Detail: detail, Error: "That token cannot be saved."}, http.StatusBadRequest)
 			return
 		}
@@ -136,11 +140,11 @@ func (s *Server) connectionSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	notice := "saved"
-	if !wasOn {
-		notice = "connected"
+	if wasOn {
+		http.Redirect(w, r, "/settings/connections?notice=saved", http.StatusSeeOther)
+		return
 	}
-	http.Redirect(w, r, "/settings/connections/"+url.PathEscape(panel.ID)+"?notice="+notice, http.StatusSeeOther)
+	http.Redirect(w, r, "/settings/connections/"+url.PathEscape(panel.ID)+"?notice=connected", http.StatusSeeOther)
 }
 
 func (s *Server) connectionDisconnect(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +192,7 @@ func (s *Server) connectionCards(ctx context.Context, userID string) ([]connCard
 		}
 		status, action := "Not connected", "Connect"
 		if on {
-			status, action = "Connected", "Disconnect"
+			status, action = "Connected", "Configure"
 		}
 		cards = append(cards, connCard{
 			ID: panel.ID, Title: panel.Title, Blurb: panel.Blurb,
@@ -205,9 +209,17 @@ func (s *Server) connectionDetail(ctx context.Context, userID string, panel conn
 		return connDetail{}, err
 	}
 	has := false
+	mask := ""
 	if panel.NeedsSecret {
 		_, secErr := s.store.ConnectionSecret(ctx, userID, panel.ID)
 		has = secErr == nil
+		if has {
+			value, verr := s.store.ConnectionValue(ctx, userID, panel.ID)
+			if verr != nil {
+				return connDetail{}, verr
+			}
+			mask = tokenMask(value)
+		}
 	}
 	if levels == nil {
 		levels, err = s.store.ConnectionLevels(ctx, userID, panel.ID)
@@ -227,8 +239,26 @@ func (s *Server) connectionDetail(ctx context.Context, userID string, panel conn
 	}
 	return connDetail{
 		ID: panel.ID, Title: panel.Title, Body: panel.Body, TokenLabel: panel.TokenLabel,
-		NeedsSecret: panel.NeedsSecret, On: on, HasSecret: has, Tools: tools,
+		TokenMask: mask, NeedsSecret: panel.NeedsSecret, On: on, HasSecret: has, Tools: tools,
 	}, nil
+}
+
+// tokenMask shows the first characters of a saved token. The rest stays
+// in the vault. A short value contributes one character so the mask is
+// not the secret itself.
+func tokenMask(value string) string {
+	rs := []rune(strings.TrimSpace(value))
+	if len(rs) == 0 {
+		return ""
+	}
+	n := 4
+	if len(rs) <= n {
+		n = 1
+	}
+	if len(rs) == 1 {
+		return "xxxxxxx"
+	}
+	return string(rs[:n]) + "-xxxxxxx"
 }
 
 func postedLevels(r *http.Request, panel connect.Panel) (map[string]string, string) {

@@ -11,7 +11,21 @@
 <section class="card" id="conn-detail" aria-labelledby="conn-title"><div class="card-h"><h3 id="conn-title">{{.Connections.Detail.Title}}</h3><span class="side">{{if .Connections.Detail.On}}Connected{{else}}Not connected{{end}}</span></div>
 <p>{{.Connections.Detail.Body}}</p>
 <form id="conn-form" method="post" action="/settings/connections/{{.Connections.Detail.ID}}"><input type="hidden" name="csrf" value="{{.CSRF}}">
-{{if .Connections.Detail.NeedsSecret}}<div class="field"><label class="lab" for="conn-token">{{.Connections.Detail.TokenLabel}}</label><div class="inp"><input id="conn-token" class="secret-in" type="password" name="token" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="{{.Connections.Detail.TokenLabel}}"></div>{{if .Connections.Detail.HasSecret}}<p class="fineprint">A token is saved. Leave the field blank to keep it.</p>{{end}}<p class="help">Leave this blank to keep a saved token. A new value replaces it. This page never shows the value.</p></div>{{end}}
+{{if .Connections.Detail.NeedsSecret}}<div class="field">
+{{if and .Connections.Detail.HasSecret (not .Connections.Detail.EditToken)}}
+<span class="lab">{{.Connections.Detail.TokenLabel}}</span>
+<div class="token-box">
+<input class="token-toggle vh" type="checkbox" id="conn-change" aria-label="Change token">
+<div class="token-have"><span class="mono" id="conn-token-mask">{{.Connections.Detail.TokenMask}}</span><label class="link" for="conn-change">Change</label></div>
+<div class="token-edit"><div class="inp"><input id="conn-token" class="secret-in" type="password" name="token" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="{{.Connections.Detail.TokenLabel}}"></div></div>
+</div>
+<p class="help">A new value replaces the saved token. Leave this blank to keep it.</p>
+{{else}}
+<label class="lab" for="conn-token">{{.Connections.Detail.TokenLabel}}</label>
+<div class="inp"><input id="conn-token" class="secret-in" type="password" name="token" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="{{.Connections.Detail.TokenLabel}}"></div>
+<p class="help">{{if .Connections.Detail.HasSecret}}A new value replaces the saved token. Leave this blank to keep it.{{else}}The token stays in your vault. After you save, this page shows the first characters only.{{end}}</p>
+{{end}}
+</div>{{end}}
 <div class="field"><span class="lab">Tools</span><p class="fineprint">Ask waits before the tool runs. Always allow runs it without asking. Deny keeps it listed and blocks it.</p>
 {{range .Connections.Detail.Tools}}<div class="toolrow"><div class="grow"><div class="t1">{{.Title}}</div><div class="t2 mono">{{.Name}}</div></div><div class="selwrap"><select class="sel" name="level_{{.Name}}" aria-label="{{.Title}} permission"><option value="ask"{{if eq .Level "ask"}} selected{{end}}>Ask</option><option value="always-allow"{{if eq .Level "always-allow"}} selected{{end}}>Always allow</option><option value="deny"{{if eq .Level "deny"}} selected{{end}}>Deny</option></select></div></div>{{end}}
 </div>

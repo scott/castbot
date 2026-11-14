@@ -29,7 +29,7 @@ func TestConnectionsGridAndDetails(t *testing.T) {
 			t.Fatalf("grid missing %s", want)
 		}
 	}
-	if strings.Count(body, "Not connected") < 2 || strings.Count(body, ">Connect<") < 2 || !strings.Contains(body, ">Disconnect<") {
+	if strings.Count(body, "Not connected") < 2 || strings.Count(body, ">Connect<") < 2 || !strings.Contains(body, ">Configure<") || strings.Contains(body, ">Disconnect<") {
 		t.Fatalf("grid actions %s", snippet(body))
 	}
 	code, body, _ = h.do(http.MethodGet, "/settings/connections/github", "", ip, nil)
@@ -88,8 +88,21 @@ func TestConnectGitHubFansOutAndDisconnectKeepsTheToken(t *testing.T) {
 		}
 	}
 	code, page, _ := h.do(http.MethodGet, "/settings/connections/github", "", ip, nil)
-	if code != 200 || strings.Contains(page, connectCanary) || !strings.Contains(page, "A token is saved") {
+	if code != 200 || strings.Contains(page, connectCanary) || !strings.Contains(page, "test-xxxxxxx") || !strings.Contains(page, ">Change<") {
 		t.Fatalf("detail leaked %d", code)
+	}
+	if strings.Contains(page, `name="token" value=`) {
+		t.Fatal("token value rendered")
+	}
+	code, grid, _ := h.do(http.MethodGet, "/settings/connections", "", ip, nil)
+	if code != 200 || !strings.Contains(grid, ">Configure<") || strings.Contains(grid, ">Disconnect<") {
+		t.Fatalf("connected grid %d", code)
+	}
+	code, body, _ = h.do(http.MethodPost, "/settings/connections/github", h.form(url.Values{
+		"token": {"bad\ntoken"},
+	}), ip, nil)
+	if code != http.StatusBadRequest || strings.Contains(body, connectCanary) || strings.Contains(body, "bad\ntoken") || strings.Contains(body, `id="conn-token-mask"`) || !strings.Contains(body, `id="conn-token"`) {
+		t.Fatalf("replace error %d", code)
 	}
 	audits, err := h.st.ListAudit(context.Background(), user.ID)
 	if err != nil {
@@ -118,8 +131,12 @@ func TestConnectGitHubFansOutAndDisconnectKeepsTheToken(t *testing.T) {
 	code, _, hdr = h.do(http.MethodPost, "/settings/connections/github", h.form(url.Values{
 		"level_create_issue": {"always-allow"},
 	}), ip, nil)
-	if code != http.StatusSeeOther || !strings.Contains(hdr.Get("Location"), "notice=saved") {
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/settings/connections?notice=saved" {
 		t.Fatalf("blank token %d %s", code, hdr.Get("Location"))
+	}
+	code, grid, _ = h.do(http.MethodGet, "/settings/connections?notice=saved", "", ip, nil)
+	if code != 200 || !strings.Contains(grid, "Saved. Every agent you own uses these choices.") || strings.Contains(grid, connectCanary) {
+		t.Fatalf("saved index %d", code)
 	}
 	saved, err := h.st.ConnectionValue(context.Background(), user.ID, connect.GitHub)
 	if err != nil || saved != connectCanary {
@@ -178,7 +195,7 @@ func TestShellActionsAppliesToEveryAgent(t *testing.T) {
 	code, _, hdr := h.do(http.MethodPost, "/settings/connections/shell", h.form(url.Values{
 		"level_bash": {"deny"},
 	}), ip, nil)
-	if code != http.StatusSeeOther {
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/settings/connections?notice=saved" {
 		t.Fatalf("save %d %s", code, hdr.Get("Location"))
 	}
 	for _, agent := range []store.Agent{one, two} {
@@ -211,6 +228,18 @@ func TestShellActionsAppliesToEveryAgent(t *testing.T) {
 	}
 	if _, err := h.st.ConnectionSecret(context.Background(), user.ID, connect.Shell); err == nil {
 		t.Fatal("shell stored a secret")
+	}
+}
+
+func TestTokenMaskKeepsTheRestHidden(t *testing.T) {
+	if got := tokenMask(connectCanary); got != "test-xxxxxxx" || strings.Contains(got, "connection") {
+		t.Fatal(got)
+	}
+	if tokenMask("  browser-flow-token ") != "brow-xxxxxxx" {
+		t.Fatal(tokenMask("  browser-flow-token "))
+	}
+	if tokenMask("abcd") != "a-xxxxxxx" || tokenMask("ab") != "a-xxxxxxx" || tokenMask("a") != "xxxxxxx" || tokenMask("  ") != "" {
+		t.Fatalf("short %q %q %q %q", tokenMask("abcd"), tokenMask("ab"), tokenMask("a"), tokenMask("  "))
 	}
 }
 

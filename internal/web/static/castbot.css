@@ -398,6 +398,13 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 .conn-grid .card, .conn-card { min-width: 0; }
 .conn-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .conn-acts form { display: inline-flex; margin: 0; }
+.token-box { display: grid; gap: 8px; min-width: 0; position: relative; }
+.token-have { display: flex; align-items: center; gap: 12px; min-width: 0; flex-wrap: wrap; }
+.token-have .mono { min-width: 0; overflow-wrap: anywhere; }
+.token-edit { display: none; min-width: 0; }
+.token-toggle:checked ~ .token-have { display: none; }
+.token-toggle:checked ~ .token-edit { display: block; }
+.token-toggle:focus-visible + .token-have .link { outline: 2px solid var(--acc); outline-offset: 2px; }
 @media (min-width: 800px) {
   .conn-grid { grid-template-columns: 1fr 1fr; }
 }
