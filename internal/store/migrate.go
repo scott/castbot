@@ -479,6 +479,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV22(); err != nil {
 		return err
 	}
+	// Version 23 is the account connection switch and tool levels.
+	if err := s.migrateV23(); err != nil {
+		return err
+	}
 	return nil
 }
 

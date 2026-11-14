@@ -22,11 +22,6 @@ const (
 	connectPoll        = 200 * time.Millisecond
 )
 
-type connField struct {
-	ID, Title, Detail, TokenLabel string
-	On, HasSecret                 bool
-}
-
 // SetConnectDial installs a test dialer. The allowlist still runs first.
 func (s *Server) SetConnectDial(d *connect.Dial) {
 	s.mu.Lock()
@@ -47,27 +42,6 @@ func (s *Server) mcpPool() *connect.Pool {
 		s.mcp = connect.NewPool(connect.FromEnv())
 	}
 	return s.mcp
-}
-
-func (s *Server) fillConnections(ctx context.Context, userID, agentID string, f *agentForm) error {
-	enabled := map[string]bool{}
-	if agentID != "" {
-		names, err := s.store.EnabledConnections(ctx, userID, agentID)
-		if err != nil {
-			return err
-		}
-		for _, name := range names {
-			enabled[name] = true
-		}
-	}
-	for _, entry := range connect.Catalog() {
-		_, err := s.store.ConnectionSecret(ctx, userID, entry.ID)
-		f.Connections = append(f.Connections, connField{
-			ID: entry.ID, Title: entry.Title, Detail: entry.Detail, TokenLabel: entry.TokenLabel,
-			On: enabled[entry.ID], HasSecret: err == nil,
-		})
-	}
-	return nil
 }
 
 func scopesJSON(perms map[string]string) string {
@@ -131,11 +105,28 @@ func mergeScopes(spec *castcfg.Spec, raw string, posted bool, previous map[strin
 	}
 }
 
-func applyConnectionPerms(spec *castcfg.Spec, enabled []string) {
+func applyConnectionPerms(spec *castcfg.Spec, enabled []string, levels map[string]map[string]string) {
 	if spec.Permissions == nil {
 		spec.Permissions = map[string]string{}
 	}
-	want := connect.PermissionsFor(enabled)
+	want := map[string]string{connect.RequestTool: "always-allow"}
+	if len(enabled) > 0 {
+		want["mcp"] = "ask"
+	}
+	for _, id := range enabled {
+		for _, tool := range connect.Tools(id) {
+			level := "always-allow"
+			if tool.Write {
+				level = "ask"
+			}
+			if lv := levels[id][tool.Name]; lv != "" {
+				if norm, ok := castcfg.NormalizeLevel(lv); ok {
+					level = norm
+				}
+			}
+			want[tool.Name] = level
+		}
+	}
 	managed := map[string]bool{}
 	for _, name := range connect.PermNames() {
 		managed[name] = true
@@ -152,51 +143,35 @@ func applyConnectionPerms(spec *castcfg.Spec, enabled []string) {
 	}
 }
 
-func (s *Server) connectionProblem(r *http.Request, f agentForm) string {
-	if !f.Editing {
-		return ""
+func applyShellTools(spec *castcfg.Spec, on bool, levels map[string]string) {
+	if spec.Permissions == nil {
+		spec.Permissions = map[string]string{}
 	}
-	for _, row := range f.Connections {
-		if !row.On {
+	var kept []string
+	for _, name := range spec.Tools {
+		if castcfg.KnownTool(name) {
 			continue
 		}
-		token := r.FormValue("token_" + row.ID)
-		if token == "" {
-			if !row.HasSecret {
-				return row.Title + " needs a token."
-			}
-			continue
-		}
-		if len(token) > store.SecretValueMax || strings.ContainsAny(token, "\x00\n\r") {
-			return "That token cannot be saved."
-		}
+		kept = append(kept, name)
 	}
-	return ""
-}
-
-func (s *Server) applyConnectionPosts(ctx context.Context, userID, agentID string, r *http.Request, f agentForm) error {
-	if !f.Editing {
-		return nil
+	for _, tool := range castcfg.Tools() {
+		delete(spec.Permissions, tool.Name)
 	}
-	for _, row := range f.Connections {
-		token := r.FormValue("token_" + row.ID)
-		if row.On {
-			if token != "" {
-				if _, err := s.store.SaveConnectionSecret(ctx, userID, row.ID, token); err != nil {
-					return err
-				}
-			}
-			if err := s.store.EnableConnection(ctx, userID, agentID, row.ID); err != nil {
-				return err
-			}
-			continue
-		}
-		err := s.store.RevokeConnection(ctx, userID, agentID, row.ID)
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
+	if !on {
+		spec.Tools = kept
+		return
 	}
-	return nil
+	for _, tool := range castcfg.Tools() {
+		level := castcfg.DefaultLevel(tool.Name)
+		if lv := levels[tool.Name]; lv != "" {
+			if norm, ok := castcfg.NormalizeLevel(lv); ok {
+				level = norm
+			}
+		}
+		kept = append(kept, tool.Name)
+		spec.Permissions[tool.Name] = level
+	}
+	spec.Tools = kept
 }
 
 func sameNames(a, b []string) bool {
@@ -422,34 +397,44 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 		writeEgressFail(w, "bad_request")
 		return
 	}
-	if connectNeedsApproval(server, msg) {
-		entry, _ := connect.Lookup(server)
-		hostName := "api.github.com"
-		if len(entry.Hosts) > 0 {
-			hostName = entry.Hosts[0]
-		}
-		tool := rpcTool(msg)
-		args := rpcArgs(msg)
-		hash, hashErr := connect.MCPHash(tool, args)
-		if hashErr != nil || tool == "" {
-			writeEgressFail(w, "bad_request")
-			return
-		}
-		call := connect.Call{
-			Connection: server,
-			Method:     "POST",
-			URL:        "https://" + hostName + "/mcp",
-			Tool:       tool,
-			Hash:       hash,
-			Summary:    connect.MCPSummary(tool, args),
-		}
-		if err := s.gateApproval(r.Context(), userID, agentID, call); err != nil {
-			outcome := connect.Code(err)
-			_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
-				"connection": server, "outcome": outcome, "tool": clipAudit(call.Tool),
-			})
-			writeEgressFail(w, egressCode(outcome))
-			return
+	switch s.namedToolGate(r.Context(), userID, server, msg) {
+	case "deny":
+		_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
+			"connection": server, "outcome": "denied", "tool": clipAudit(rpcTool(msg)),
+		})
+		writeEgressFail(w, "bad_request")
+		return
+	case "allow":
+	default:
+		if connectNeedsApproval(server, msg) {
+			entry, _ := connect.Lookup(server)
+			hostName := "api.github.com"
+			if len(entry.Hosts) > 0 {
+				hostName = entry.Hosts[0]
+			}
+			tool := rpcTool(msg)
+			args := rpcArgs(msg)
+			hash, hashErr := connect.MCPHash(tool, args)
+			if hashErr != nil || tool == "" {
+				writeEgressFail(w, "bad_request")
+				return
+			}
+			call := connect.Call{
+				Connection: server,
+				Method:     "POST",
+				URL:        "https://" + hostName + "/mcp",
+				Tool:       tool,
+				Hash:       hash,
+				Summary:    connect.MCPSummary(tool, args),
+			}
+			if err := s.gateApproval(r.Context(), userID, agentID, call); err != nil {
+				outcome := connect.Code(err)
+				_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
+					"connection": server, "outcome": outcome, "tool": clipAudit(call.Tool),
+				})
+				writeEgressFail(w, egressCode(outcome))
+				return
+			}
 		}
 	}
 	token, err := s.store.ConnectionValue(r.Context(), userID, server)
@@ -703,11 +688,7 @@ func (s *Server) submitSecret(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.store.EnableConnection(r.Context(), user.ID, agentID, row.Connection); err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	if err := s.refreshConnectionBundle(r.Context(), user.ID, agentID); err != nil && !errors.Is(err, store.ErrNotFound) {
+	if err := s.turnOnAccountConnection(r.Context(), user, row.Connection); err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
@@ -881,9 +862,9 @@ func (s *Server) presentSecret(user store.User, row store.SecretRequest, csrf st
 	switch row.Status {
 	case "pending":
 		view.Pending = true
-		view.Extra = "The token is saved in your vault. The agent does not see it. This request expires in 60 minutes."
+		view.Extra = "The token is saved in your vault. The agent does not see it. Connecting turns this on for every agent you own. This request expires in 60 minutes."
 	case "saved":
-		view.Line = "Saved. Tools from this connection show up on the next turn."
+		view.Line = "Saved. Every agent you own can use this on the next turn."
 	case "declined":
 		view.Line = "Declined."
 	case "expired":
@@ -941,6 +922,44 @@ func (s *Server) notifyAgent(ctx context.Context, userID, agentID string) {
 	id, _, err := s.store.OpenRun(ctx, userID, agentID)
 	if err == nil && id != "" {
 		s.runs.Hub.Notify(id)
+	}
+}
+
+// namedToolGate applies the account policy to a named adapter tool.
+// deny refuses the call. allow skips the host card. check keeps the
+// write-tool card. A read tool set to ask stays allow, so it does not
+// gain a second card on top of the runtime permission.
+func (s *Server) namedToolGate(ctx context.Context, userID, connection string, msg connect.RPC) string {
+	if msg.Method != "tools/call" {
+		return "check"
+	}
+	tool, ok := connect.FindTool(connection, rpcTool(msg))
+	if !ok {
+		return "check"
+	}
+	level := "always-allow"
+	if tool.Write {
+		level = "ask"
+	}
+	levels, err := s.store.ConnectionLevels(ctx, userID, connection)
+	if err != nil {
+		return "check"
+	}
+	if lv := levels[tool.Name]; lv != "" {
+		if norm, good := castcfg.NormalizeLevel(lv); good {
+			level = norm
+		}
+	}
+	switch level {
+	case "deny":
+		return "deny"
+	case "always-allow":
+		return "allow"
+	default:
+		if tool.Write {
+			return "check"
+		}
+		return "allow"
 	}
 }
 

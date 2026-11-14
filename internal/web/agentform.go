@@ -42,7 +42,6 @@ type agentForm struct {
 	Colors                        []colorSwatch
 	Idle                          int
 	Advanced, Prefill             bool
-	Connections                   []connField
 	Scopes                        string
 }
 
@@ -118,9 +117,6 @@ func (s *Server) formFromAgent(ctx context.Context, user store.User, agent store
 	f.Heading = "Edit agent"
 	f.Sub = "Saving updates the bundle. A running machine reloads. A paused machine stays paused."
 	f.Submit = "Save"
-	if err := s.fillConnections(ctx, user.ID, agent.ID, &f); err != nil {
-		return agentForm{}, err
-	}
 	f.Name = agent.Name
 	f.Title = agent.Title
 	f.SectionID = agent.SectionID
@@ -368,10 +364,6 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 		f.SaveErr = keptErr(err)
 		good = false
 	}
-	if msg := s.connectionProblem(r, f); msg != "" {
-		f.SaveErr = msg
-		good = false
-	}
 	if !good {
 		s.showForm(w, r, user, f, http.StatusBadRequest)
 		return
@@ -400,12 +392,6 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 	before, err := s.store.EnabledConnections(r.Context(), user.ID, agent.ID)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	if err := s.applyConnectionPosts(r.Context(), user.ID, agent.ID, r, f); err != nil {
-		f.SaveErr = "That connection could not be saved."
-		f.HasAvatar = agent.AvatarPath != ""
-		s.showForm(w, r, user, f, http.StatusBadRequest)
 		return
 	}
 	var previous map[string]string
@@ -673,46 +659,7 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 	f.Version = r.FormValue("version")
 	f.GitHub = strings.TrimSpace(r.FormValue("github"))
 	f.Notice = ""
-	posted := map[string]bool{}
-	for _, name := range r.Form["tool"] {
-		posted[name] = true
-	}
 	good := true
-	for i := range f.Tools {
-		f.Tools[i].On = posted[f.Tools[i].Name]
-		delete(posted, f.Tools[i].Name)
-		if lv := strings.TrimSpace(r.FormValue("perm_" + f.Tools[i].Name)); lv != "" {
-			norm, ok := castcfg.NormalizeLevel(lv)
-			if !ok {
-				f.ToolErr = "Choose ask, always allow, or deny."
-				good = false
-				f.Tools[i].Level = lv
-				continue
-			}
-			f.Tools[i].Level = norm
-		}
-	}
-	if len(posted) > 0 {
-		f.ToolErr = "Unknown tool."
-		good = false
-	}
-	if f.Editing {
-		chosen := map[string]bool{}
-		for _, name := range r.Form["connection"] {
-			chosen[strings.ToLower(strings.TrimSpace(name))] = true
-		}
-		known := map[string]bool{}
-		for i := range f.Connections {
-			known[f.Connections[i].ID] = true
-			f.Connections[i].On = chosen[f.Connections[i].ID]
-			delete(chosen, f.Connections[i].ID)
-		}
-		if len(chosen) > 0 {
-			f.SaveErr = "Unknown connection."
-			good = false
-		}
-		_ = known
-	}
 	if raw := strings.TrimSpace(r.FormValue("scopes")); raw != "" && len(raw) <= 8000 {
 		f.Scopes = scopesJSON(parseScopePost(raw))
 	}
@@ -765,17 +712,6 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 	spec := castcfg.Spec{
 		Name: f.Name, Title: f.Title, Version: safeVersion(f.Version),
 		Model: f.Model, Instructions: f.Instructions, Permissions: map[string]string{},
-	}
-	for _, tool := range f.Tools {
-		if !tool.On {
-			continue
-		}
-		level, ok := castcfg.NormalizeLevel(tool.Level)
-		if !ok {
-			level = castcfg.DefaultLevel(tool.Name)
-		}
-		spec.Tools = append(spec.Tools, tool.Name)
-		spec.Permissions[tool.Name] = level
 	}
 	return f, spec, avatar, mime, good
 }
@@ -940,11 +876,31 @@ func (s *Server) storeBundle(ctx context.Context, userID, agentID string, spec c
 	if version == "" {
 		version = "1"
 	}
+	if err := s.syncAccountGrants(ctx, userID, agentID); err != nil {
+		return "", err
+	}
 	enabled, err := s.store.EnabledConnections(ctx, userID, agentID)
 	if err != nil {
 		return "", err
 	}
-	applyConnectionPerms(&spec, enabled)
+	levels := map[string]map[string]string{}
+	for _, id := range enabled {
+		row, err := s.store.ConnectionLevels(ctx, userID, id)
+		if err != nil {
+			return "", err
+		}
+		levels[id] = row
+	}
+	applyConnectionPerms(&spec, enabled, levels)
+	shellOn, err := s.store.ConnectionSwitchedOn(ctx, userID, connect.Shell)
+	if err != nil {
+		return "", err
+	}
+	shellLevels, err := s.store.ConnectionLevels(ctx, userID, connect.Shell)
+	if err != nil {
+		return "", err
+	}
+	applyShellTools(&spec, shellOn, shellLevels)
 	if err := castcfg.SetMCPServers(&spec, enabled); err != nil {
 		return "", err
 	}

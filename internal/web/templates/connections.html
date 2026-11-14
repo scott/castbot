@@ -1,0 +1,44 @@
+{{define "connectionsMain"}}
+{{if .Connections.Back}}<header class="ph-top ph-only"><a class="ibtn" href="/settings/connections" aria-label="Back to Connections">{{template "backsvg" .}}</a><span class="t">{{.Connections.Phone}}</span><button type="button" class="ibtn sclose" data-sclose aria-label="Close settings" title="Close (Esc)">{{template "xsvg" .}}</button></header>
+<div class="page-h"><div class="grow"><h1 class="dt-only">Settings</h1><p class="sub">Your account. Other people on this castbot have their own.</p></div><span class="dt-only"><button type="button" class="ibtn sclose" data-sclose aria-label="Close settings" title="Close (Esc)">{{template "xsvg" .}}</button></span></div>
+{{template "settingsNav" .}}
+{{else}}{{template "settingsChrome" .}}{{end}}
+<div class="page-b set-wrap">
+{{if .Connections.Notice}}<div class="banner ok" role="status"><span class="grow">{{.Connections.Notice}}</span></div>{{end}}
+{{if .Connections.Error}}<div class="banner err" role="alert"><span class="grow">{{.Connections.Error}}</span></div>{{end}}
+{{if .Connections.Detail.ID}}
+<a class="back-to dt-only" href="/settings/connections">{{template "backsvg" .}}Connections</a>
+<section class="card" id="conn-detail" aria-labelledby="conn-title"><div class="card-h"><h3 id="conn-title">{{.Connections.Detail.Title}}</h3><span class="side">{{if .Connections.Detail.On}}Connected{{else}}Not connected{{end}}</span></div>
+<p>{{.Connections.Detail.Body}}</p>
+<form id="conn-form" method="post" action="/settings/connections/{{.Connections.Detail.ID}}"><input type="hidden" name="csrf" value="{{.CSRF}}">
+{{if .Connections.Detail.NeedsSecret}}<div class="field">
+{{if and .Connections.Detail.HasSecret (not .Connections.Detail.EditToken)}}
+<span class="lab">{{.Connections.Detail.TokenLabel}}</span>
+<div class="token-box">
+<input class="token-toggle vh" type="checkbox" id="conn-change" aria-label="Change token">
+<div class="token-have"><span class="mono" id="conn-token-mask">{{.Connections.Detail.TokenMask}}</span><label class="link" for="conn-change">Change</label></div>
+<div class="token-edit"><div class="inp"><input id="conn-token" class="secret-in" type="password" name="token" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="{{.Connections.Detail.TokenLabel}}"></div></div>
+</div>
+<p class="help">A new value replaces the saved token. Leave this blank to keep it.</p>
+{{else}}
+<label class="lab" for="conn-token">{{.Connections.Detail.TokenLabel}}</label>
+<div class="inp"><input id="conn-token" class="secret-in" type="password" name="token" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="{{.Connections.Detail.TokenLabel}}"></div>
+<p class="help">{{if .Connections.Detail.HasSecret}}A new value replaces the saved token. Leave this blank to keep it.{{else}}The token stays in your vault. After you save, this page shows the first characters only.{{end}}</p>
+{{end}}
+</div>{{end}}
+<div class="field"><span class="lab">Tools</span><p class="fineprint">Ask waits before the tool runs. Always allow runs it without asking. Deny keeps it listed and blocks it.</p>
+{{range .Connections.Detail.Tools}}<div class="toolrow"><div class="grow"><div class="t1">{{.Title}}</div><div class="t2 mono">{{.Name}}</div></div><div class="selwrap"><select class="sel" name="level_{{.Name}}" aria-label="{{.Title}} permission"><option value="ask"{{if eq .Level "ask"}} selected{{end}}>Ask</option><option value="always-allow"{{if eq .Level "always-allow"}} selected{{end}}>Always allow</option><option value="deny"{{if eq .Level "deny"}} selected{{end}}>Deny</option></select></div></div>{{end}}
+</div>
+</form>
+</section>
+<div class="acts conn-acts"><button class="btn pri" id="conn-save" type="submit" form="conn-form">{{if .Connections.Detail.On}}Save{{else}}Connect{{end}}</button>{{if .Connections.Detail.On}}<form id="conn-disconnect" method="post" action="/settings/connections/{{.Connections.Detail.ID}}/disconnect"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn" type="submit">Disconnect</button></form>{{end}}</div>
+{{else}}
+<section class="card" aria-labelledby="conn-h"><div class="card-h"><h3 id="conn-h">Connections</h3></div>
+<p class="muted small">A connection applies to every agent you own. A running agent reloads. No new machine.</p>
+<div class="conn-grid" id="conn-grid">
+{{range .Connections.Cards}}<article class="card conn-card"><div class="card-h"><h3>{{.Title}}</h3><span class="side">{{.Status}}</span></div><p class="muted small">{{.Blurb}}</p><a class="btn sm{{if not .On}} pri{{end}}" href="{{.Href}}">{{.Action}}</a></article>{{end}}
+</div>
+</section>
+{{end}}
+</div>
+{{end}}
