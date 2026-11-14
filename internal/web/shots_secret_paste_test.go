@@ -90,7 +90,7 @@ func shootSecretPaste(t *testing.T, browser context.Context) {
 	if err := chromedp.Run(ctx, chromedp.Click(`.cards .appr.secret button.pri`, chromedp.ByQuery)); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(ctx, shotPoll(t, "saved secret card", js(`(document.body.innerText||'').indexOf('Saved. Tools from this connection')>=0`))); err != nil {
+	if err := chromedp.Run(ctx, shotPoll(t, "saved secret card", js(`(document.body.innerText||'').indexOf('Saved. Every agent you own can use this on the next turn.')>=0`))); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := h.st.ListSecretRequests(context.Background(), user.ID, agent.ID, time.Unix(0, 0))
