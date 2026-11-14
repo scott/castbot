@@ -75,7 +75,17 @@ if [[ "${1:-}" == "bash" && "${2:-}" == "-s" ]]; then
     done
   fi
   printf '%s\n' "$script" | bash -s
-  exit "${PIPESTATUS[1]}"
+  status=${PIPESTATUS[1]}
+  if [[ "$status" -eq 0 && -f "${DEPLOY_TEST_STATE}/queue_after_backup" ]] && printf '%s\n' "$script" | grep -F -q '.backup'; then
+    rm -f "${DEPLOY_TEST_STATE}/queue_after_backup"
+    python3 - "${DEPLOY_APP_DIR}/data/castbot.db" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("INSERT INTO runs(id, status, user_id, token) VALUES ('r-late', 'queued', 'user-1', 'tok_FAKE_SHOULD_NOT_APPEAR')")
+con.commit()
+PY
+  fi
+  exit "$status"
 fi
 if [[ $# -eq 1 ]]; then
   log_remote "$1"
@@ -201,6 +211,7 @@ cat >"$WORK/stubs/go" <<'EOF'
 set -euo pipefail
 printf '%s\n' "$*" >>"${DEPLOY_TEST_STATE}/go.log"
 if [[ "${1:-}" == "list" ]]; then
+  printf 'LIST GOOS=%s GOARCH=%s\n' "${GOOS:-}" "${GOARCH:-}" >>"${DEPLOY_TEST_STATE}/go.log"
   python3 - "$@" <<'PY'
 import os, re, sys
 args = sys.argv[1:]
@@ -526,6 +537,16 @@ plant_binary() {
   chmod 0755 "$path"
 }
 
+# Add a commit that is not a runtime-image input, and point origin/main at it.
+advance_repo() {
+  local repo=$1
+  printf 'package main\n\nfunc main() {}\n' >"$repo/cmd/castbot/main.go"
+  git -C "$repo" add cmd/castbot/main.go
+  git -C "$repo" commit -m "advance" >/dev/null
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+  git -C "$repo" rev-parse HEAD
+}
+
 prepare() {
   local dir repo app
   dir=$(case_dir)
@@ -793,13 +814,41 @@ inflight() {
   assert_no_secrets "$dir"
 }
 
-rollback() {
-  local info dir app sha old
+inflight_after_backup() {
+  local info dir repo app prev
   info=$(prepare)
   dir=$(printf '%s\n' "$info" | sed -n '1p')
+  repo=$(printf '%s\n' "$info" | sed -n '2p')
   app=$(printf '%s\n' "$info" | sed -n '3p')
-  sha=$(printf '%s\n' "$info" | sed -n '4p')
-  old=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  prev=$(printf '%s\n' "$info" | sed -n '4p')
+  advance_repo "$repo" >/dev/null
+  plant_binary "$app/releases/$prev/castbot" "$prev"
+  printf '%s\n' "$prev" >"$app/RELEASE"
+  ln -sfn "$app/releases/$prev/castbot" "$app/bin/castbot"
+  touch "$dir/state/queue_after_backup"
+  if run_deploy "$dir"; then
+    printf 'in-flight after backup did not abort\n' >&2
+    return 1
+  fi
+  [[ "$(tr -d '[:space:]' <"$app/RELEASE")" == "$prev" ]]
+  [[ "$(readlink -f "$app/bin/castbot")" == "$app/releases/$prev/castbot" ]]
+  if grep -q 'systemctl restart' "$dir/state/ssh.log"; then
+    printf 'restart ran after a late in-flight abort\n' >&2
+    return 1
+  fi
+  grep -q 'abort: 1 runs are queued, streaming, or waiting for approval' "$dir/stderr"
+  [[ -n "$(find "$app/backups" -mindepth 1 -maxdepth 1 -type d)" ]]
+  assert_no_secrets "$dir"
+}
+
+rollback() {
+  local info dir repo app sha old
+  info=$(prepare)
+  dir=$(printf '%s\n' "$info" | sed -n '1p')
+  repo=$(printf '%s\n' "$info" | sed -n '2p')
+  app=$(printf '%s\n' "$info" | sed -n '3p')
+  old=$(printf '%s\n' "$info" | sed -n '4p')
+  sha=$(advance_repo "$repo")
   plant_binary "$app/releases/$old/castbot" "$old"
   printf '%s\n' "$old" >"$app/RELEASE"
   ln -sfn "$app/releases/$old/castbot" "$app/bin/castbot"
@@ -946,12 +995,13 @@ skip_pty_wrong() {
 }
 
 prune() {
-  local info dir app sha old ancient
+  local info dir repo app sha old ancient
   info=$(prepare)
   dir=$(printf '%s\n' "$info" | sed -n '1p')
+  repo=$(printf '%s\n' "$info" | sed -n '2p')
   app=$(printf '%s\n' "$info" | sed -n '3p')
-  sha=$(printf '%s\n' "$info" | sed -n '4p')
-  old=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  old=$(printf '%s\n' "$info" | sed -n '4p')
+  sha=$(advance_repo "$repo")
   ancient=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   plant_binary "$app/releases/$old/castbot" "$old"
   plant_binary "$app/releases/$ancient/castbot" "$ancient"
@@ -1127,15 +1177,36 @@ EOF
   fi
   grep -q 'refusing to deploy ahead of the runtime image' "$dir/stderr"
   grep -q 'internal/guestwrap/doc.go' "$dir/stderr"
+  grep -q 'LIST GOOS=linux GOARCH=amd64' "$dir/state/go.log"
+  assert_no_secrets "$dir"
+}
+
+image_test_only() {
+  local info dir repo
+  info=$(prepare)
+  dir=$(printf '%s\n' "$info" | sed -n '1p')
+  repo=$(printf '%s\n' "$info" | sed -n '2p')
+  printf 'package castlet\n\nimport "testing"\n\nfunc TestMarker(t *testing.T) {}\n' >"$repo/internal/castlet/doc_test.go"
+  git -C "$repo" add internal/castlet/doc_test.go
+  git -C "$repo" commit -m "test only" >/dev/null
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+  run_deploy "$dir" --dry-run
+  grep -q 'no backup, upload, or restart' "$dir/stdout"
+  if grep -q 'refusing to deploy ahead of the runtime image' "$dir/stderr"; then
+    printf 'a test file was treated as an image input\n' >&2
+    return 1
+  fi
   assert_no_secrets "$dir"
 }
 
 dry_prune() {
-  local info dir app old mid ancient
+  local info dir repo app old mid ancient
   info=$(prepare)
   dir=$(printf '%s\n' "$info" | sed -n '1p')
+  repo=$(printf '%s\n' "$info" | sed -n '2p')
   app=$(printf '%s\n' "$info" | sed -n '3p')
-  old=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  old=$(printf '%s\n' "$info" | sed -n '4p')
+  advance_repo "$repo" >/dev/null
   mid=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   ancient=cccccccccccccccccccccccccccccccccccccccc
   plant_binary "$app/releases/$old/castbot" "$old"
@@ -1148,13 +1219,43 @@ dry_prune() {
   ln -sfn "$app/releases/$old/castbot" "$app/bin/castbot"
   DEPLOY_KEEP_RELEASES=1 run_deploy "$dir" --dry-run
   grep -q "would prune ${ancient}" "$dir/stdout"
+  grep -q "would prune ${mid}" "$dir/stdout"
   grep -q "rollback ${old}" "$dir/stdout"
-  if grep -q "would prune ${old}" "$dir/stdout" || grep -q "would prune ${mid}" "$dir/stdout"; then
-    printf 'dry-run would prune a kept release\n' >&2
+  if grep -q "would prune ${old}" "$dir/stdout"; then
+    printf 'dry-run would prune the live release\n' >&2
     return 1
   fi
   [[ -d "$app/releases/$old" && -d "$app/releases/$mid" && -d "$app/releases/$ancient" ]]
   [[ ! -d "$app/backups" ]]
+  assert_no_secrets "$dir"
+}
+
+downgrade() {
+  local info dir repo app old live
+  info=$(prepare)
+  dir=$(printf '%s\n' "$info" | sed -n '1p')
+  repo=$(printf '%s\n' "$info" | sed -n '2p')
+  app=$(printf '%s\n' "$info" | sed -n '3p')
+  old=$(printf '%s\n' "$info" | sed -n '4p')
+  live=$(advance_repo "$repo")
+  plant_binary "$app/releases/$live/castbot" "$live"
+  printf '%s\n' "$live" >"$app/RELEASE"
+  ln -sfn "$app/releases/$live/castbot" "$app/bin/castbot"
+  if run_deploy "$dir" "$old"; then
+    printf 'downgrade was deployed\n' >&2
+    return 1
+  fi
+  grep -q 'refusing to deploy a downgrade of the live release' "$dir/stderr"
+  [[ "$(tr -d '[:space:]' <"$app/RELEASE")" == "$live" ]]
+  [[ "$(readlink -f "$app/bin/castbot")" == "$app/releases/$live/castbot" ]]
+  if grep -q 'systemctl restart' "$dir/state/ssh.log"; then
+    printf 'restart ran for a refused downgrade\n' >&2
+    return 1
+  fi
+  [[ ! -d "$app/backups" ]]
+  run_deploy "$dir" --allow-downgrade "$old"
+  [[ "$(tr -d '[:space:]' <"$app/RELEASE")" == "$old" ]]
+  [[ "$(readlink -f "$app/bin/castbot")" == "$app/releases/$old/castbot" ]]
   assert_no_secrets "$dir"
 }
 
@@ -1273,6 +1374,7 @@ run_case dirty-tree dirty_tree
 run_case image-change image_change
 run_case env-gain env_gain
 run_case in-flight inflight
+run_case in-flight-late inflight_after_backup
 run_case rollback rollback
 run_case skip-refused skip_noninteractive_refused
 run_case skip-flag skip_flag
@@ -1283,7 +1385,9 @@ run_case already-live already_live
 run_case short-image-tag short_image_tag
 run_case guest-dir-ignored guest_dir_ignored
 run_case image-dep image_dep_change
+run_case image-test-only image_test_only
 run_case dry-prune dry_prune
+run_case downgrade downgrade
 run_case github-403 github_403
 run_case xtrace xtrace_refused
 run_case lock-kill lock_released_on_kill

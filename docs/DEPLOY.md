@@ -28,7 +28,7 @@ The host layout the script expects:
 | `/opt/castbot/backups/<YYYY-MM-DD_HHMM>/` | A consistent backup, mode 0700 |
 | `/etc/castbot/castbot.env` | Server env file |
 
-`/opt/castbot` is the default `DEPLOY_APP_DIR`. The database path is always `<app>/data/castbot.db`. The script does not read `CASTBOT_DB` from the server env file, so the service has to be using that file. That is the default when the process working directory is the app directory.
+`/opt/castbot` is the default `DEPLOY_APP_DIR`. The database path is always `<app>/data/castbot.db`. The script does not read `CASTBOT_DB` from the server env file, so the service has to be using that file. On the reference host the unit's WorkingDirectory is `<app>/data` and the env file sets `CASTBOT_DB` to the absolute `<app>/data/castbot.db`. If your host stores the database elsewhere, the script's in-flight, backup, and schema checks will read the wrong file.
 
 The SSH user does not own the app directory. `bin/`, `releases/`, and `RELEASE` are root-owned, `data/` is mode 0700, and the env file is not readable by the SSH user. The unit hides `/proc/<pid>`, and the SSH user is not in the group that can read the journal. The user needs passwordless `sudo -n`. The script uses it for the image line, every `sqlite3` call, the backup directory and its record, the release directory, the symlink, `RELEASE`, prune, `/proc/<pid>/exe`, `journalctl`, the lock, and `systemctl restart`. A preflight runs `sudo -n true`.
 
@@ -44,7 +44,7 @@ The server env file is searched with `grep` for one line, `CASTBOT_IMAGE=`. The 
 scripts/deploy.sh --dry-run
 ```
 
-A dry run refuses a dirty tree, resolves `origin/main`, checks that Go is `go1.27.4`, checks SSH and `sudo -n`, requires the `ci` workflow on that exact commit to be green, checks the running image tag, and builds the binary. It then reads the live release, the in-flight count, the schema version, checks that the journal is readable, reads free disk space, and prints every release directory a real run would delete. It does not take a backup, upload, restart, or take the lock.
+A dry run refuses a dirty tree, resolves `origin/main`, checks that Go is `go1.27.4`, checks SSH and `sudo -n`, requires the `ci` workflow on that exact commit to be green, checks the running image tag, and builds the binary. It then reads the live release, the in-flight count, the schema version, checks that the journal is readable, reads free disk space, and prints every release directory a real run would delete. The target release is not on disk yet. The dry run still counts it as the newest kept directory, because a real run uploads it before pruning. It does not take a backup, upload, restart, or take the lock.
 
 Run a dry run before the first real deploy on a host that already has release directories. That first run can delete every release except the newest `DEPLOY_KEEP_RELEASES`, the live binary, and the rollback target. Backups are never deleted.
 
@@ -54,7 +54,7 @@ Run a dry run before the first real deploy on a host that already has release di
 scripts/deploy.sh
 ```
 
-Fetch `origin` first so `origin/main` is the commit you mean. The script takes a remote lock at `/run/lock/castbot-deploy.lock`. The lock holder reads stdin, so it exits when the SSH session ends, including when the local process is killed. It refuses the deploy when `RELEASE` is already the target commit, because the upload would replace the file a rollback would restore. It refuses when any run is `queued`, `streaming`, or `waiting_approval`, backs up the database, uploads the binary, points `bin/castbot` at the new file, writes `RELEASE`, checks those runs again, and restarts the service. After the restart it checks the running process, `castbot`, `caddy`, and `fail2ban`, both `/login` URLs, `schema_migrations`, the image line, and the journal.
+Fetch `origin` first so `origin/main` is the commit you mean. The script takes a remote lock at `/run/lock/castbot-deploy.lock`. The lock holder reads stdin, so it exits when the SSH session ends, including when the local process is killed. It refuses the deploy when `RELEASE` is already the target commit, because the upload would replace the file a rollback would restore. It refuses a target that is an ancestor of the live release unless `--allow-downgrade` is passed. It refuses when any run is `queued`, `streaming`, or `waiting_approval`, backs up the database, uploads the binary, checks those runs again, points `bin/castbot` at the new file, writes `RELEASE`, and restarts the service. After the restart it checks the running process, `castbot`, `caddy`, and `fail2ban`, both `/login` URLs, `schema_migrations`, the image line, and the journal.
 
 The schema version is `SELECT COALESCE(MAX(version),0) FROM schema_migrations`. The script does not use `PRAGMA user_version`. After restart the version must be greater than or equal to the backup.
 
@@ -75,9 +75,10 @@ The script refuses to run under `bash -x`, because trace output would include th
 | Go is not `go1.27.4` | The binary must match the `go.mod` toolchain. |
 | SSH fails, `sudo -n` fails, or the known hosts file is empty | The host key has to be pinned, and the SSH user needs passwordless sudo. |
 | The latest `ci` push run for that commit is missing, unfinished, or not successful on both `test` and `shots` | A red or flaky run is not waived. The newest run is the one that counts. |
-| `Dockerfile`, `deploy/`, `go.mod`, `go.sum`, `cmd/castlet`, `cmd/castbot-guest`, `cmd/cast-standin`, `internal/castlet`, or a repo package those commands import differs from the commit in the image tag | The control plane would move ahead of the guest image. Imports come from `go list -deps` at both commits. |
+| `Dockerfile`, `deploy/`, `go.mod`, `go.sum`, `cmd/castlet`, `cmd/castbot-guest`, `cmd/cast-standin`, `internal/castlet`, or a repo package those commands import differs from the commit in the image tag | The control plane would move ahead of the guest image. Imports come from `GOOS=linux GOARCH=amd64 go list -deps` at both commits. Files named `*_test.go` are not part of that diff. |
 | `castbot.env.example` has a variable the image commit does not | The new process may need a setting the host file does not document yet. |
 | `RELEASE` is already the target commit | The rollback copy and the running binary would be the same file. |
+| The target commit is an ancestor of the live `RELEASE` | That would roll the control plane back. Pass `--allow-downgrade` to do it on purpose. The live commit has to be in this clone. |
 | `RELEASE` and the symlink disagree, or the rollback binary is missing | The script will not guess which build is live. |
 | Any run is queued, streaming, or waiting for approval | A restart would cut off that run. There is no warn mode. |
 | `sqlite3` is missing on the host | The in-flight check and the backup cannot run. |

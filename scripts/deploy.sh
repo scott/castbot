@@ -31,6 +31,7 @@ SCHEMA_BEFORE=""
 DRY=0
 SKIP_CI=0
 UNDERSTAND=0
+ALLOW_DOWNGRADE=0
 SHA_ARG=""
 
 usage() {
@@ -49,6 +50,8 @@ Options:
                                     the short sha. A non-interactive run also
                                     needs --i-understand-ci-is-not-green.
   --i-understand-ci-is-not-green    Confirm a non-interactive CI skip.
+  --allow-downgrade                 Deploy a commit that is an ancestor of
+                                    the live release.
   -h, --help                        Show this help.
 
 Settings come from the environment, then from deploy.env in the repo root
@@ -350,7 +353,7 @@ guest_rel_paths() {
   set +e
   (
     cd "$wt"
-    go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/castlet ./cmd/castbot-guest ./cmd/cast-standin
+    GOOS=linux GOARCH=amd64 go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/castlet ./cmd/castbot-guest ./cmd/cast-standin
   ) >"$out"
   status=$?
   set -e
@@ -391,7 +394,7 @@ image_gate() {
     [[ "$p" =~ ^[A-Za-z0-9._/-]+$ ]] || die "runtime image package path is unexpected"
     path_args+=("$p")
   done <<<"$paths"
-  names=$(git -C "$ROOT" diff --name-only "$commit" "$SHA" -- "${path_args[@]}") || die "could not diff the runtime image inputs"
+  names=$(git -C "$ROOT" diff --name-only "$commit" "$SHA" -- "${path_args[@]}" ':(exclude,glob)**/*_test.go') || die "could not diff the runtime image inputs"
   if [[ -n "$names" ]]; then
     printf 'runtime image inputs differ:\n%s\n' "$names" >&2
     die "refusing to deploy ahead of the runtime image"
@@ -702,6 +705,12 @@ ensure_rollback_target() {
   PREV=$rel
   if [[ "$PREV" == "$SHA" ]]; then
     die "sha is already live"
+  fi
+  if ! git -C "$ROOT" cat-file -e "${PREV}^{commit}" 2>/dev/null; then
+    die "live release is not a commit in this clone"
+  fi
+  if [[ "$ALLOW_DOWNGRADE" != "1" ]] && git -C "$ROOT" merge-base --is-ancestor "$SHA" "$PREV"; then
+    die "refusing to deploy a downgrade of the live release; pass --allow-downgrade"
   fi
   printf 'rollback %s\n' "$PREV"
 }
@@ -1025,6 +1034,22 @@ EOF
     [[ "$name" =~ ^[0-9a-f]{40}$ ]] || die "refusing to touch an unexpected release name"
     names+=("$name")
   done < <(printf '%s\n' "$raw" | sort -nr)
+  # A real prune runs after releases/$SHA exists, so that directory takes
+  # the newest keep slot. A dry run has not uploaded it yet.
+  if [[ "$mode" == "print" && -n "$SHA" ]]; then
+    local seen=0
+    if ((${#names[@]} > 0)); then
+      for name in "${names[@]}"; do
+        if [[ "$name" == "$SHA" ]]; then
+          seen=1
+          break
+        fi
+      done
+    fi
+    if [[ "$seen" == "0" ]]; then
+      kept=$((kept + 1))
+    fi
+  fi
   if ((${#names[@]} > 0)); then
     for name in "${names[@]}"; do
       if ((kept < DEPLOY_KEEP_RELEASES)); then
@@ -1111,6 +1136,7 @@ parse_args() {
       --dry-run) DRY=1 ;;
       --skip-ci-check) SKIP_CI=1 ;;
       --i-understand-ci-is-not-green) UNDERSTAND=1 ;;
+      --allow-downgrade) ALLOW_DOWNGRADE=1 ;;
       -h | --help)
         usage
         exit 0
@@ -1165,10 +1191,10 @@ main() {
   abort_if_inflight
   take_backup
   upload_binary
+  abort_if_inflight
   if ! switch_to "$SHA"; then
     fail_switched "could not switch the release"
   fi
-  abort_if_inflight
   local since
   if ! since=$(restart_service); then
     fail_switched "restart failed"
