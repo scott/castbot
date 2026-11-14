@@ -117,19 +117,17 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		http.Error(w, "Not found\n", http.StatusNotFound)
 		return nil
 	}
-	var cliThreads bool
+	showThreads := false
 	for _, t := range threads {
-		if t.Kind == "cli" {
-			cliThreads = true
+		if t.Kind == "cli" || t.Kind == "agent_dm" || t.Kind == "agent_chat" {
+			showThreads = true
+			break
 		}
 	}
-	if cliThreads {
+	if showThreads {
 		for _, t := range threads {
 			title := t.Title
-			if title == "" {
-				title = "Chat"
-			}
-			if t.Kind != "cli" {
+			if title == "" || (t.Kind != "cli" && t.Kind != "agent_dm" && t.Kind != "agent_chat") {
 				title = "Chat"
 			}
 			p.Threads = append(p.Threads, threadView{
@@ -147,6 +145,9 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 			return nil
 		}
 		p.Messages = presentMessages(msgs, p.Agent, s.store.Now(), userLocation(user.Timezone))
+		if current.Kind == "agent_dm" || current.Kind == "agent_chat" {
+			s.labelSpeakers(r.Context(), user.ID, msgs, p.Messages)
+		}
 		s.linkMentionedFiles(r.Context(), user.ID, agent.ID, p.Messages)
 		p.Lives = s.loadLives(r, user, current.ID, p.Agent)
 		if rows, err := s.store.ListThreadApprovals(r.Context(), user.ID, current.ID); err == nil {
@@ -745,6 +746,11 @@ func presentMessages(msgs []store.Message, agent agentView, now time.Time, loc *
 		}
 		if m.Origin == "greet" {
 			v.Pre = true
+		}
+		// A relay row holds the prompt for the chief's next turn. The
+		// specialist's words stay on the agent thread the owner can open.
+		if m.Origin == "relay" {
+			v.Hide = true
 		}
 		if m.AuthorKind == "user" && !v.Prompt {
 			text, lines, names := splitUserBody(m.Body)

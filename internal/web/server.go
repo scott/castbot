@@ -148,6 +148,9 @@ func New(st *store.Store, key []byte, client runtime.Client) *Server {
 	s.runs.SetAfterRun(func(job run.Job, _ string) {
 		s.afterSecretRun(job)
 	})
+	s.runs.SetAfterRun(func(job run.Job, status string) {
+		s.settleTalk(job, status)
+	})
 	s.runs.SetOnPermission(s.denyRoutinePermission)
 	go s.expireLoop()
 	go s.schedulerLoop()
@@ -406,6 +409,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}/delete", s.deleteAgent)
 	mux.HandleFunc("GET /agents/{id}/boot", s.bootFragment)
 	mux.HandleFunc("POST /agents/{id}/boot/retry", s.retryBoot)
+	mux.HandleFunc("GET /agents/{id}/roster", s.agentRoster)
+	mux.HandleFunc("POST /agents/{id}/handoff", s.postHandoff)
 	mux.HandleFunc("POST /agents/{id}/messages", s.postMessage)
 	mux.HandleFunc("POST /agents/{id}/cli", s.exportCLI)
 	mux.HandleFunc("POST /agents/{id}/cli/{token}/revoke", s.revokeCLI)
@@ -426,6 +431,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/castlet/agents/{id}/egress/git", s.machineEgressGit)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/egress/mcp", s.machineEgressMCP)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/egress/secret-request", s.machineSecretRequest)
+	mux.HandleFunc("POST /api/castlet/agents/{id}/handoff", s.machineHandoff)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/bootstrap", s.bootstrap)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/bundle", s.machineBundle)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/secrets", s.machineSecrets)

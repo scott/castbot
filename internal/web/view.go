@@ -54,19 +54,19 @@ type fileLinkView struct {
 }
 
 type msgView struct {
-	ID, Author, Body, Text, Color, Letter, Stamp, Day, At string
-	Origin                                                string
-	ShowDay                                               bool
-	HasCard                                               bool
-	Card                                                  cardView
-	Prompt, Marker, Hide, Waiting, Sys, Pre               bool
-	Wait                                                  string
-	Href, Pill, PillClass, Sub                            string
-	Chips                                                 []chipView
-	PathLines                                             []string
-	File                                                  *fileLinkView
-	HTML                                                  template.HTML
-	Copy                                                  string
+	ID, Author, Body, Text, Color, Letter, Stamp, Day, At, Name string
+	Origin                                                      string
+	ShowDay                                                     bool
+	HasCard                                                     bool
+	Card                                                        cardView
+	Prompt, Marker, Hide, Waiting, Sys, Pre                     bool
+	Wait                                                        string
+	Href, Pill, PillClass, Sub                                  string
+	Chips                                                       []chipView
+	PathLines                                                   []string
+	File                                                        *fileLinkView
+	HTML                                                        template.HTML
+	Copy                                                        string
 }
 
 type threadView struct {

@@ -721,6 +721,11 @@ func (s *Server) presentApproval(row store.Approval, user store.User, csrf strin
 	}
 	view.At = row.CreatedAt
 	view.Extra, view.From = s.routineCardExtra(row, user)
+	if view.From == "" {
+		if name := s.specialistCardName(user, row.RunID); name != "" {
+			view.From = name
+		}
+	}
 	return view
 }
 

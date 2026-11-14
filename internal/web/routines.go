@@ -110,6 +110,9 @@ func (s *Server) promoteAgent(ctx context.Context, userID, agentID string) {
 }
 
 func (s *Server) startQueued(ctx context.Context, runRow store.Run) {
+	if s.startHandoffQueued(ctx, runRow) {
+		return
+	}
 	msg, err := s.store.UserMessageForRun(ctx, runRow.UserID, runRow.ID)
 	if err != nil {
 		return

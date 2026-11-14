@@ -44,7 +44,16 @@ func (s *Store) CreateRun(ctx context.Context, userID, threadID, agentID string)
 		return Run{}, err
 	}
 	if th.AgentID != agentID {
-		return Run{}, ErrNotFound
+		if th.Kind != "agent_dm" && th.Kind != "agent_chat" {
+			return Run{}, ErrNotFound
+		}
+		ok, err := s.IsParticipant(ctx, userID, threadID, agentID)
+		if err != nil {
+			return Run{}, err
+		}
+		if !ok {
+			return Run{}, ErrNotFound
+		}
 	}
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
 		return Run{}, err

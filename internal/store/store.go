@@ -34,6 +34,9 @@ var (
 	ErrCLICap = errors.New("cli token cap")
 	// ErrCLIRate is the short window on minting Cast CLI tokens.
 	ErrCLIRate = errors.New("cli token rate")
+	// ErrRejected is a handoff the control plane refuses.
+	// It is not a missing row. Callers map it to 409.
+	ErrRejected = errors.New("rejected")
 )
 
 const (

@@ -191,6 +191,7 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .m-agent { display: grid; grid-template-columns: 30px minmax(0,1fr); gap: 12px; align-items: start; }
 .m-agent .av { width: 30px; height: 30px; font-size: 13px; border-radius: 9px; }
 .m-agent .body { display: grid; gap: 10px; min-width: 0; }
+.m-agent .who { font-size: 12px; font-weight: 650; color: var(--tx2); }
 .m-agent .body p { line-height: 1.6; }
 .m-agent ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
 .stamp { font-size: 12px; color: var(--tx3); }
