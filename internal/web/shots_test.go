@@ -836,7 +836,6 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 		chromedp.SetValue(`form.na input[name="title"]`, "Helper", chromedp.ByQuery),
 		chromedp.SetValue(`form.na textarea[name="instructions"]`, "Be concise.", chromedp.ByQuery),
 		chromedp.SetValue(`form.na select[name="model"]`, model, chromedp.ByQuery),
-		chromedp.Click(`form.na input[value="bash"]`, chromedp.ByQuery),
 	}); err != nil {
 		t.Fatal(err)
 	}
