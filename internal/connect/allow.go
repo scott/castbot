@@ -10,7 +10,7 @@ import (
 
 // CheckURL accepts an https URL whose host is on the connection allowlist.
 // IP literals, userinfo, and other ports are refused. The caller still has
-// to resolve the name and refuse a private address.
+// to resolve the name and dial a public address.
 func CheckURL(connection, raw string) (*url.URL, error) {
 	entry, ok := Lookup(connection)
 	if !ok {
@@ -88,6 +88,59 @@ func PublicIP(ip net.IP) bool {
 		}
 	}
 	return true
+}
+
+// addressesFor is the dial order for an allowlisted host.
+// Private, loopback, link-local, multicast, and carrier-grade NAT addresses
+// are dropped. A private address does not discard a public address for the
+// same name. fallback is used only when system has no public IPv4, which
+// happens when the system resolver substitutes a private address and the
+// only public records are IPv6. IPv4 is dialed before IPv6.
+func addressesFor(system, fallback []net.IP) []net.IP {
+	v4, v6 := splitPublic(system)
+	if len(v4) == 0 {
+		fv4, fv6 := splitPublic(fallback)
+		v4 = fv4
+		v6 = append(fv6, v6...)
+	}
+	return dedupeIPs(append(v4, v6...))
+}
+
+func dedupeIPs(ips []net.IP) []net.IP {
+	seen := map[string]bool{}
+	out := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		if ip == nil {
+			continue
+		}
+		key := ip.String()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, ip)
+	}
+	return out
+}
+
+func splitPublic(ips []net.IP) (v4, v6 []net.IP) {
+	seen := map[string]bool{}
+	for _, ip := range ips {
+		if !PublicIP(ip) {
+			continue
+		}
+		key := ip.String()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if ip.To4() != nil {
+			v4 = append(v4, ip)
+			continue
+		}
+		v6 = append(v6, ip)
+	}
+	return v4, v6
 }
 
 var (

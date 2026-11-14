@@ -169,21 +169,7 @@ func clientFor(connection, token string, tr *Dial) *http.Client {
 			if tr != nil && tr.DialContext != nil {
 				return tr.DialContext(ctx, network, addr)
 			}
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if err != nil || len(ips) == 0 {
-				return nil, errPrivate
-			}
-			var chosen net.IP
-			for _, ip := range ips {
-				if !PublicIP(ip.IP) {
-					return nil, errPrivate
-				}
-				if chosen == nil {
-					chosen = ip.IP
-				}
-			}
-			d := &net.Dialer{Timeout: 10 * time.Second}
-			return d.DialContext(ctx, network, net.JoinHostPort(chosen.String(), port))
+			return dialPublic(ctx, host, port)
 		},
 	}
 	return &http.Client{
@@ -200,6 +186,110 @@ func clientFor(connection, token string, tr *Dial) *http.Client {
 			return nil
 		},
 	}
+}
+
+// publicResolvers are queried when the system answer has no public IPv4.
+// The system resolver is still first. These are numeric addresses so the
+// fallback does not depend on the same resolver.
+var publicResolvers = []string{"1.1.1.1:53", "8.8.8.8:53"}
+
+func dialPublic(ctx context.Context, host, port string) (net.Conn, error) {
+	ips, err := resolvePublic(ctx, host)
+	if err != nil || len(ips) == 0 {
+		return nil, errPrivate
+	}
+	if len(ips) > 3 {
+		ips = ips[:3]
+	}
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	var last error
+	for _, ip := range ips {
+		conn, dialErr := d.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))
+		if dialErr == nil {
+			return conn, nil
+		}
+		last = dialErr
+	}
+	if last == nil {
+		return nil, errPrivate
+	}
+	return nil, last
+}
+
+func resolvePublic(ctx context.Context, host string) ([]net.IP, error) {
+	system, _ := lookupSystem(ctx, host)
+	v4, _ := splitPublic(system)
+	var fallback []net.IP
+	if len(v4) == 0 {
+		fallback, _ = lookupPublicDNS(ctx, host)
+	}
+	chosen := addressesFor(system, fallback)
+	if len(chosen) == 0 {
+		return nil, errPrivate
+	}
+	return chosen, nil
+}
+
+func lookupSystem(ctx context.Context, host string) ([]net.IP, error) {
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	return ipAddrs(addrs), nil
+}
+
+func lookupPublicDNS(ctx context.Context, host string) ([]net.IP, error) {
+	var last error
+	qname := host
+	if !strings.HasSuffix(qname, ".") {
+		qname += "."
+	}
+	for _, server := range publicResolvers {
+		lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		ips, err := lookupAt(lookupCtx, server, qname)
+		cancel()
+		if err != nil {
+			last = err
+			continue
+		}
+		v4, _ := splitPublic(ips)
+		if len(v4) > 0 {
+			return ips, nil
+		}
+		last = errPrivate
+	}
+	if last == nil {
+		last = errPrivate
+	}
+	return nil, last
+}
+
+func lookupAt(ctx context.Context, server, host string) ([]net.IP, error) {
+	r := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			if network != "udp" && network != "tcp" {
+				network = "udp"
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, server)
+		},
+	}
+	addrs, err := r.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	return ipAddrs(addrs), nil
+}
+
+func ipAddrs(addrs []net.IPAddr) []net.IP {
+	out := make([]net.IP, 0, len(addrs))
+	for _, addr := range addrs {
+		if addr.IP != nil {
+			out = append(out, addr.IP)
+		}
+	}
+	return out
 }
 
 func applyAuth(req *http.Request, connection, token string) {
