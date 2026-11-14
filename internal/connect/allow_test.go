@@ -64,6 +64,48 @@ func TestPublicIP(t *testing.T) {
 	}
 }
 
+func TestAddressesForSkipsPrivateSystemA(t *testing.T) {
+	system := []net.IP{
+		net.ParseIP("10.120.15.254"),
+		net.ParseIP("2606:4700::6813:ad44"),
+	}
+	fallback := []net.IP{
+		net.ParseIP("104.19.173.68"),
+		net.ParseIP("104.19.174.68"),
+		net.ParseIP("10.1.1.1"),
+	}
+	got := addressesFor(system, fallback)
+	if len(got) < 2 || got[0].String() != "104.19.173.68" || got[1].String() != "104.19.174.68" {
+		t.Fatalf("order %v", got)
+	}
+	for _, ip := range got {
+		if !PublicIP(ip) {
+			t.Fatalf("dialed private %s", ip)
+		}
+	}
+}
+
+func TestAddressesForKeepsSystemPublicV4(t *testing.T) {
+	system := []net.IP{
+		net.ParseIP("104.19.173.68"),
+		net.ParseIP("10.0.0.1"),
+		net.ParseIP("2606:4700::1"),
+	}
+	fallback := []net.IP{net.ParseIP("8.8.8.8")}
+	got := addressesFor(system, fallback)
+	if len(got) != 2 || got[0].String() != "104.19.173.68" || got[1].String() != "2606:4700::1" {
+		t.Fatalf("order %v", got)
+	}
+}
+
+func TestAddressesForRefusesPrivateOnly(t *testing.T) {
+	system := []net.IP{net.ParseIP("10.120.15.254"), net.ParseIP("127.0.0.1")}
+	fallback := []net.IP{net.ParseIP("192.168.1.1"), net.ParseIP("100.64.0.1")}
+	if got := addressesFor(system, fallback); len(got) != 0 {
+		t.Fatalf("accepted %v", got)
+	}
+}
+
 func TestMutatingAndMethod(t *testing.T) {
 	reads := []string{
 		"GET https://api.github.com/user",
