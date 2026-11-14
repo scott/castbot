@@ -474,15 +474,29 @@ func (s *Store) GetAvatar(ctx context.Context, userID, agentID string) (string, 
 }
 
 // DeleteAgent marks an agent deleted. The row stays so ids are not reused.
+// Open machine-time intervals for that agent close in the same write.
 func (s *Store) DeleteAgent(ctx context.Context, userID, id string) error {
-	if _, err := s.GetAgent(ctx, userID, id); err != nil {
-		return err
-	}
-	res, err := s.db.ExecContext(ctx, `UPDATE agents SET status = 'deleted', deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.stamp(s.Now()), id, userID)
+	agent, err := s.GetAgent(ctx, userID, id)
 	if err != nil {
 		return err
 	}
-	return rowsAffected(res)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stamp := s.stamp(s.Now())
+	res, err := tx.ExecContext(ctx, `UPDATE agents SET status = 'deleted', deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, stamp, id, userID)
+	if err != nil {
+		return err
+	}
+	if err := rowsAffected(res); err != nil {
+		return err
+	}
+	if err := closeUsageAgentTx(ctx, tx, agent.WorkspaceID, userID, id, stamp); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListThreads returns the caller's threads.

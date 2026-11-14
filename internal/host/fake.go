@@ -72,6 +72,8 @@ type Fake struct {
 	HealthVersion string
 	// Disks holds memory tars and workspace files keyed by endpoint.
 	Disks map[string]*GuestDisk
+	// LogTail is the text Logs returns. Logs does not resume a paused machine.
+	LogTail string
 	// createdEndpoint is the address of the latest Create.
 	createdEndpoint string
 	healthCalls     map[string]int
@@ -537,6 +539,18 @@ func (f *Fake) ImportMemory(_ context.Context, endpoint, _ string, body io.Reade
 	d := f.diskLocked(endpoint)
 	d.Memory = raw
 	return nil
+}
+
+// Logs returns the seeded tail.
+// It does not resume a paused machine and it does not count as an edge call.
+func (f *Fake) Logs(_ context.Context, _, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, "logs")
+	if f.FailClass == "logs" {
+		return "", ErrGuest
+	}
+	return f.LogTail, nil
 }
 
 // ListWorkspace returns the seeded file names and sizes.

@@ -127,6 +127,9 @@ type AgentHost interface {
 	ListWorkspace(ctx context.Context, endpoint, agentToken string) ([]WorkspaceFile, error)
 	ReadWorkspace(ctx context.Context, endpoint, agentToken, name string) (io.ReadCloser, error)
 	WriteWorkspace(ctx context.Context, endpoint, agentToken, name string, body io.Reader) error
+	// Logs reads the guest log tail. A request to a paused guest wakes it,
+	// so callers must skip Logs unless the saved state is already running.
+	Logs(ctx context.Context, endpoint, agentToken string) (string, error)
 }
 
 // WorkspaceFile is one guest workspace path and its size. It has no contents.

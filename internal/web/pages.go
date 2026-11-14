@@ -243,6 +243,9 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	if !s.applyPanel(w, r, user, agent, &p) {
 		return nil
 	}
+	if machinePanelShown(r, p) {
+		s.fillMachineExtras(r, user, agent, &p.Machine)
+	}
 	if p.Page == "chat" {
 		s.attachBoot(r, user, agent, &p)
 	}
@@ -404,6 +407,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	if sum, err := s.vaultSummary(r.Context(), user); err == nil {
 		p.Vault = sum
 	}
+	s.fillAccountUsage(r.Context(), user, &p)
 	s.render(w, http.StatusOK, "app", finish(p))
 }
 

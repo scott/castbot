@@ -327,7 +327,7 @@ CREATE TABLE IF NOT EXISTS import_drafts (
 
 CREATE INDEX IF NOT EXISTS idx_import_drafts_user ON import_drafts(user_id, agent_id);
 
--- max_agents is the only cap. Running hours are not metered here.
+-- max_agents is the only cap stored here. Running hours are metered in vm_usage.
 CREATE TABLE IF NOT EXISTS user_quotas (
   user_id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
@@ -481,6 +481,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	}
 	// Version 23 is the account connection switch and tool levels.
 	if err := s.migrateV23(); err != nil {
+		return err
+	}
+	// Version 24 records machine time intervals in vm_usage.
+	if err := s.migrateV24(); err != nil {
 		return err
 	}
 	return nil

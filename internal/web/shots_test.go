@@ -370,6 +370,24 @@ func TestShots(t *testing.T) {
 			shootModelNoKey(t, browserCtx, dirModels, vp.w, vp.h, vp.name)
 		})
 	}
+	dir11 := filepath.Join("..", "..", "docs", "evidence", "S11")
+	if err := os.MkdirAll(dir11, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, theme := range []string{"dark", "light"} {
+		for _, vp := range []struct {
+			w, h int
+			name string
+		}{{1280, 800, "1280"}, {390, 844, "390"}} {
+			theme, vp := theme, vp
+			for _, kind := range []string{"running", "paused", "usage"} {
+				kind := kind
+				t.Run("s11-"+kind+"-"+theme+"-"+vp.name, func(t *testing.T) {
+					shootS11(t, browserCtx, dir11, vp.w, vp.h, theme, vp.name, kind)
+				})
+			}
+		}
+	}
 }
 
 // htmxApproveReady is true once HTMX has processed the approve control.
