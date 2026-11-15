@@ -499,6 +499,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV26(); err != nil {
 		return err
 	}
+	// Version 27 is an Always approve grant for one user message.
+	if err := s.migrateV27(); err != nil {
+		return err
+	}
 	return nil
 }
 

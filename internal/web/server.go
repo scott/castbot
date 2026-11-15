@@ -151,7 +151,12 @@ func New(st *store.Store, key []byte, client runtime.Client) *Server {
 	s.runs.SetAfterRun(func(job run.Job, status string) {
 		s.settleTalk(job, status)
 	})
+	// After settleTalk, so a specialist run that just started is still open.
+	s.runs.SetAfterRun(func(job run.Job, status string) {
+		s.settleGrant(job, status)
+	})
 	s.runs.SetOnPermission(s.denyRoutinePermission)
+	s.runs.SetOnPermission(s.grantPermission)
 	go s.expireLoop()
 	go s.schedulerLoop()
 	return s
@@ -425,6 +430,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}/secret-requests/{req}/decline", s.declineSecret)
 	mux.HandleFunc("POST /agents/{id}/connect-approvals/{approval}/approve", s.approveConnectCard)
 	mux.HandleFunc("POST /agents/{id}/connect-approvals/{approval}/deny", s.denyConnectCard)
+	mux.HandleFunc("POST /agents/{id}/connect-approvals/{approval}/always", s.alwaysApproveConnect)
 	mux.HandleFunc("POST /agents/{id}/connections/{connection}/revoke", s.revokeConnection)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/egress", s.machineEgressStatus)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/egress/http", s.machineEgressHTTP)
@@ -441,6 +447,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /runs/{id}/stop", s.stopRun)
 	mux.HandleFunc("POST /runs/{id}/approvals/{approval}/approve", s.approveRun)
 	mux.HandleFunc("POST /runs/{id}/approvals/{approval}/deny", s.denyRun)
+	mux.HandleFunc("POST /runs/{id}/approvals/{approval}/always", s.alwaysApproveRun)
 	mux.HandleFunc("GET /approvals/{id}", s.getApproval)
 	mux.HandleFunc("GET /agents", s.listAgents)
 

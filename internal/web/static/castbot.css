@@ -556,6 +556,8 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
   .tool .ta { display: none; }
   .appr { padding: 14px; }
   .appr-f .btn { flex: 1; min-width: 0; }
+  .appr-f form.always { flex: 1 0 100%; }
+  .appr-f form.always .btn { width: 100%; }
   .appr-f .check { width: 100%; min-height: 44px; }
   .kv { grid-template-columns: 1fr; gap: 0; }
   .kv dd { margin-bottom: 6px; }

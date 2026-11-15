@@ -612,8 +612,18 @@ func (s *Server) gateApproval(ctx context.Context, userID, agentID string, call 
 	if action == "" {
 		action = method + " " + path
 	}
-	if _, err := s.store.CreateConnectApproval(ctx, userID, agentID, threadID, runID, call.Connection, action, method, path, call.Hash, s.store.Now().Add(connectApprovalFor)); err != nil {
+	row, err := s.store.CreateConnectApproval(ctx, userID, agentID, threadID, runID, call.Connection, action, method, path, call.Hash, s.store.Now().Add(connectApprovalFor))
+	if err != nil {
 		return err
+	}
+	// A grant for this prompt approves the card before the page is told,
+	// so it does not sit on the pending bar. The guest retries and consumes it.
+	if row.RunID != "" {
+		if msgID, merr := s.store.PromptMessageID(ctx, userID, row.RunID); merr == nil && msgID != "" {
+			if active, aerr := s.store.PromptGrantActive(ctx, userID, msgID); aerr == nil && active {
+				_, _, _ = s.store.GrantConnectApproval(ctx, userID, row.ID)
+			}
+		}
 	}
 	s.notifyAgent(ctx, userID, agentID)
 	return connect.ErrApproval
@@ -890,6 +900,7 @@ func (s *Server) presentConnect(user store.User, row store.ConnectApproval, csrf
 		},
 		ApproveURL: "/agents/" + url.PathEscape(row.AgentID) + "/connect-approvals/" + url.PathEscape(row.ID) + "/approve",
 		DenyURL:    "/agents/" + url.PathEscape(row.AgentID) + "/connect-approvals/" + url.PathEscape(row.ID) + "/deny",
+		AlwaysURL:  "/agents/" + url.PathEscape(row.AgentID) + "/connect-approvals/" + url.PathEscape(row.ID) + "/always",
 	}
 	if entry, ok := connect.Lookup(row.Connection); ok {
 		view.From = entry.Title
@@ -901,7 +912,11 @@ func (s *Server) presentConnect(user store.User, row store.ConnectApproval, csrf
 	case "approved":
 		view.Approved = true
 		view.Fold = "Approved"
+		view.AlwaysURL = ""
 		view.Line = "Approved by you"
+		if row.Via == store.GrantVia {
+			view.Line = store.GrantLine
+		}
 	case "denied":
 		view.Fold = "Denied"
 		view.Line = "Denied"

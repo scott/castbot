@@ -434,6 +434,14 @@ func (s *Server) fillApprovalsCtx(ctx context.Context, user store.User, agent st
 			Tool: card.Tool, Line: card.Line, When: card.When, OK: row.Status == "approved",
 		})
 	}
+	if connects, err := s.store.ListConnectApprovals(ctx, user.ID, agent.ID, time.Unix(0, 0)); err == nil {
+		for _, row := range connects {
+			if row.Status != "pending" {
+				continue
+			}
+			p.ApprovalsWaiting = append(p.ApprovalsWaiting, s.presentConnect(user, row, csrf))
+		}
+	}
 	if len(earlier) > 20 {
 		earlier = earlier[len(earlier)-20:]
 	}

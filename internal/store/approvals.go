@@ -30,6 +30,8 @@ type Approval struct {
 	ExpiresAt   string
 	CreatedAt   string
 	Sent        bool
+	// Via is "prompt" when Always approve for this prompt decided the card.
+	Via string
 	// RecoverSeq is the journal max sequence seen before the first recovery
 	// post. RecoverSet is false until that snapshot is stored.
 	RecoverSeq int
@@ -539,7 +541,7 @@ func (s *Store) ListAudit(ctx context.Context, userID string) ([]Audit, error) {
 	return out, rows.Err()
 }
 
-const approvalSelect = `SELECT a.id, a.workspace_id, a.user_id, a.run_id, r.agent_id, a.request_id, a.tool, a.arguments_json, a.redacted_json, a.status, a.origin, a.decided_by, COALESCE(a.decided_at, ''), a.expires_at, a.created_at, a.sent, a.recover_seq FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id`
+const approvalSelect = `SELECT a.id, a.workspace_id, a.user_id, a.run_id, r.agent_id, a.request_id, a.tool, a.arguments_json, a.redacted_json, a.status, a.origin, a.decided_by, COALESCE(a.decided_at, ''), a.expires_at, a.created_at, a.sent, a.recover_seq, COALESCE(a.via, '') FROM approvals a JOIN runs r ON r.id = a.run_id AND r.user_id = a.user_id`
 
 func (s *Store) listApprovals(ctx context.Context, query string, args ...any) ([]Approval, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -566,7 +568,7 @@ func scanApproval(row scanRow) (Approval, error) {
 	var a Approval
 	var sent int
 	var seq sql.NullInt64
-	err := row.Scan(&a.ID, &a.WorkspaceID, &a.UserID, &a.RunID, &a.AgentID, &a.RequestID, &a.Tool, &a.Arguments, &a.Redacted, &a.Status, &a.Origin, &a.DecidedBy, &a.DecidedAt, &a.ExpiresAt, &a.CreatedAt, &sent, &seq)
+	err := row.Scan(&a.ID, &a.WorkspaceID, &a.UserID, &a.RunID, &a.AgentID, &a.RequestID, &a.Tool, &a.Arguments, &a.Redacted, &a.Status, &a.Origin, &a.DecidedBy, &a.DecidedAt, &a.ExpiresAt, &a.CreatedAt, &sent, &seq, &a.Via)
 	if err != nil {
 		return Approval{}, scanErr(err)
 	}
