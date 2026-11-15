@@ -32,6 +32,12 @@ jobs:
           curl -sSfL -o /tmp/gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           /tmp/gitleaks detect --redact --no-banner
+      - name: deploy script
+        run: |
+          curl -sSfL -o /tmp/shellcheck.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          /tmp/shellcheck-v0.10.0/shellcheck scripts/deploy.sh scripts/check-deploy-secrets.sh scripts/deploy_test.sh
+          bash scripts/deploy_test.sh
 
   shots:
     runs-on: ubuntu-latest

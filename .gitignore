@@ -32,3 +32,8 @@ castbot.env
 .idea/
 .vscode/
 .DS_Store
+
+# Local deploy config, host keys, logs, and backups.
+/deploy.env
+/.deploy/
+/backups/
