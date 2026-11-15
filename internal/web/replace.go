@@ -38,6 +38,9 @@ type replaceView struct {
 	TryAgain                                    bool
 	CanReplace, ShowButton                      bool
 	Confirm, PausedNote                         bool
+	CanRollback, RollbackConfirm                bool
+	RollbackTag                                 string
+	RollbackDays                                int
 	NowTag, NextTag                             string
 	ChatBold, ChatRest                          string
 	History                                     []histItem
@@ -149,6 +152,16 @@ func (s *Server) replaceView(ctx context.Context, user store.User, agent store.A
 		out.Confirm = true
 		out.PausedNote = has && live.State == "paused"
 	}
+	if !out.Lock && out.HasImage {
+		if rb, err := s.store.ActiveRollback(ctx, user.ID, agent.ID); err == nil {
+			tag := replace.ImageTag(rb.Image)
+			if tag != "" && tag != out.NowTag {
+				out.RollbackTag = tag
+				out.RollbackDays = int(store.RollbackWindow / (24 * time.Hour))
+				out.CanRollback = out.CanReplace
+			}
+		}
+	}
 	out.History = s.replaceHistory(ctx, user, agent.ID, loc)
 	if out.Banner == "ok" {
 		out.LogNote = "Machine logs from the new machine. Logs from the old machine were not kept."
@@ -210,10 +223,16 @@ func (s *Server) resultView(ctx context.Context, out replaceView, row store.Repl
 		}
 		out.NowTag = replace.ImageTag(row.NewImage)
 		out.ImageTag = out.NowTag
-		out.ImageLine = out.NowTag
-		out.Update = false
-		out.Same = true
-		if out.NextTag != "" {
+		if out.NextTag != "" && out.NowTag != out.NextTag {
+			out.Update = true
+			out.Same = false
+			out.ImageLine = out.NowTag + " · Update available"
+			out.HintBold = "A newer runtime is available (" + out.NextTag + ")."
+			out.HintRest = "Replace machine moves " + agent.Name + " onto it and keeps the agent, its chats and its memory."
+		} else if out.NextTag != "" {
+			out.Update = false
+			out.Same = true
+			out.ImageLine = out.NowTag
 			out.HintBold = agent.Name + " is on the current runtime (" + out.NextTag + ")."
 			out.HintRest = "You can still replace the machine if it misbehaves; the agent is kept."
 		}

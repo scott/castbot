@@ -200,7 +200,7 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 		}
 	}
 	panelAsk := requestedPanel(r)
-	if wantsConfirm(r) {
+	if wantsConfirm(r) || wantsRollback(r) {
 		panelAsk = "machine"
 	}
 	if tab == "machine" || tab == "" || panelAsk == "machine" || strings.HasSuffix(r.URL.Path, "/machine/card") {
@@ -258,6 +258,12 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	s.attachReplace(r.Context(), user, agent, machine, &p)
 	if wantsConfirm(r) && p.Replace.CanReplace {
 		p.Replace.Confirm = true
+		if vm, err := s.store.LiveVM(r.Context(), user.ID, agent.ID); err == nil && vm.State == "paused" {
+			p.Replace.PausedNote = true
+		}
+	}
+	if wantsRollback(r) && p.Replace.CanRollback {
+		p.Replace.RollbackConfirm = true
 		if vm, err := s.store.LiveVM(r.Context(), user.ID, agent.ID); err == nil && vm.State == "paused" {
 			p.Replace.PausedNote = true
 		}

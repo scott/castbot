@@ -392,6 +392,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}/machine/refresh", s.refreshMachinePanel)
 	mux.HandleFunc("GET /agents/{id}/machine/replace", s.confirmReplace)
 	mux.HandleFunc("POST /agents/{id}/machine/replace", s.postReplace)
+	mux.HandleFunc("GET /agents/{id}/machine/rollback", s.confirmRollback)
+	mux.HandleFunc("POST /agents/{id}/machine/rollback", s.postRollback)
 	mux.HandleFunc("GET /agents/{id}/routines", s.redirectAgentPanel)
 	mux.HandleFunc("GET /agents/{id}/routines/preview", s.routinePreview)
 	mux.HandleFunc("POST /agents/{id}/routines", s.saveRoutine)

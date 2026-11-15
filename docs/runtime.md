@@ -140,3 +140,5 @@ Time from `docker run` until `python -c 'import cast.runtime'` prints, image alr
 The process start is about the same. The larger image is the part that would slow a first pull.
 
 The S04 create-to-running figure of 16.0 s is a MicroVM with the image already cached. It was not remeasured. A first pull of this larger image adds time on top of that and was not measured here.
+
+S12 does not build a golden checkpoint. The measured create-plus-boot times are under the 30 second line: 8.32 s to the first HTTP 200 for the tiny image in S00, and 16.0 s to running for this image when it was already cached. A later measurement of a cold pull can revisit that choice. This tree has no checkpoint call.

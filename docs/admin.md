@@ -2,7 +2,7 @@
 
 `castbot admin` runs on the host as the castbot user. It reads `/etc/castbot/castbot.env` the same way the server does. It uses the server's SQLite file. It does not print tokens, machine URLs, or file contents.
 
-The server must be up before a command that can change a machine. `castbot admin` checks `CASTBOT_PUBLIC_URL/login` and continues only when that returns 200. `machines` and `replace-machine --dry-run` only read the database, so they do not check the server and they do not call the machine API.
+The server must be up before a command that can change a machine. `castbot admin` checks `CASTBOT_PUBLIC_URL/login` and continues only when that returns 200. `machines`, `replace-machine --dry-run`, `rollback-runtime --dry-run`, `backup`, and `backups` do not call the machine API. `backup` can run while the server is up. `restore` refuses while that login URL answers, and it refuses when the public URL is unset.
 
 ## machines
 
@@ -27,3 +27,41 @@ Without `--yes`, the command prints the plan and waits until the agent name is t
 `--no-copy` skips the memory and file copy. It is not in the web UI. The command writes a `replace_no_copy` machine event. The history list does not show that event.
 
 Exit 0 means the agent is on the new machine. Exit 1 means the old machine was kept. Exit 2 means the switch succeeded and the old machine still needs to be deleted. castbot retries that delete on its own. A paused agent stays paused. SIGINT or SIGTERM stops the command and rolls the replace back when the switch has not committed.
+
+A move that copies memory saves the runtime it left. The Machine page offers that runtime for 7 days. A move onto the same image does not change the offer. `--no-copy` retires the offer and does not save a new one, because the memory was not copied.
+
+## rollback-runtime
+
+```
+castbot admin rollback-runtime <agent id or Cast CLI slug> [--dry-run] [--yes]
+```
+
+This is the same replace, aimed at the runtime saved by the last memory-copying move. It copies memory and workspace files again. `--dry-run` prints the agent, the current image, the rollback image, and any reason the move would be refused. It does not call the machine API.
+
+Without `--yes`, the command waits until the agent name is typed. Exit codes match `replace-machine`. When no runtime is saved, the command prints `rollback: none` and exits 1.
+
+## backup
+
+```
+castbot admin backup
+```
+
+Writes `<database directory>/backups/<YYYY-MM-DD_HHMM>/` in America/Denver. The directory is mode 0700. It holds a consistent `castbot.db`, the upload blobs from `<database directory>/files` whose names are their sha256, and a `RECORD` file with the database sha256, the schema version, `integrity ok`, the file count, and `files_sha256`. `files_sha256` is the sha256 of the sorted lines `<name> <size>`. A second backup in the same minute fails and leaves the first one in place. Backups are not deleted. The env file and the secrets key are not copied. Machine memory and workspace files that live only on a machine are not in this backup. A move copies those.
+
+## backups
+
+```
+castbot admin backups
+```
+
+Prints each backup id, its schema version, and its file count. A directory whose name is not a backup id is skipped.
+
+## restore
+
+```
+castbot admin restore <backup id> [--yes]
+```
+
+Stop castbot first. The command checks the backup hash, `PRAGMA integrity_check`, the schema version, and the file manifest. It moves the live database, its WAL, and its SHM aside under `backups/pre-restore-<id>-<unix>/`, then copies the snapshot into place. Blobs from the backup replace a local blob whose bytes differ. Extra blobs stay. Without `--yes`, the command waits until the backup id is typed.
+
+The secrets key is not in the backup. Restore needs the same key the snapshot was written with. The previous database file is left in the aside directory.

@@ -662,6 +662,10 @@ happy() {
   app=$(printf '%s\n' "$info" | sed -n '3p')
   sha=$(printf '%s\n' "$info" | sed -n '4p')
   printf 'castbot listening on 127.0.0.1:8080\nCASTBOT_SESSION_KEY=ses_FAKE_SHOULD_NOT_APPEAR\n' >"$dir/state/journal"
+  blob=$(printf 'hello' | sha256sum | awk '{print $1}')
+  mkdir -p "$app/data/files"
+  printf 'hello' >"$app/data/files/$blob"
+  printf 'skip-me' >"$app/data/files/.part-upload"
   run_deploy "$dir"
   [[ "$(tr -d '[:space:]' <"$app/RELEASE")" == "$sha" ]]
   [[ "$(readlink -f "$app/bin/castbot")" == "$app/releases/$sha/castbot" ]]
@@ -673,6 +677,12 @@ happy() {
   printf '%s\n' "$record" | grep -q '^sha256 [0-9a-f]\{64\}$'
   printf '%s\n' "$record" | grep -q '^schema_version 4$'
   printf '%s\n' "$record" | grep -q '^integrity ok$'
+  printf '%s\n' "$record" | grep -q '^files 1$'
+  blob=$(printf 'hello' | sha256sum | awk '{print $1}')
+  [[ -f "$backup/files/$blob" ]]
+  [[ "$(cat "$backup/files/$blob")" == "hello" ]]
+  want=$(printf '%s 5\n' "$blob" | sha256sum | awk '{print $1}')
+  printf '%s\n' "$record" | grep -q "^files_sha256 ${want}$"
   [[ "$(stat -c '%a' "$backup")" == "700" ]]
   grep -q "sha=${sha} backup=" "$dir/deploy.log"
   grep -q 'result=ok$' "$dir/deploy.log"

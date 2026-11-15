@@ -51,6 +51,31 @@ func TestAdminMachinesAndDryRunMakeNoAPICall(t *testing.T) {
 	}
 }
 
+func TestRollbackPlanAndRestoreBlock(t *testing.T) {
+	st, agent := adminAgent(t, "running")
+	ctx := context.Background()
+	if err := st.NoteRuntimeRollback(ctx, agent.UserID, agent.ID, "offer", "example.invalid/castbot-runtime:ff6d7ea"); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if printRollback(ctx, st, agent, "example.invalid/castbot-runtime:ff6d7ea", &out) != 0 {
+		t.Fatal(out.String())
+	}
+	if !strings.Contains(out.String(), "agent: Atlas") || !strings.Contains(out.String(), "image: 7b5e414") || !strings.Contains(out.String(), "rollback: ff6d7ea") {
+		t.Fatal(out.String())
+	}
+	if restoreBlock("", false) == "" || restoreBlock("https://castbot.example", true) == "" || restoreBlock("https://castbot.example", false) != "" {
+		t.Fatal("restore gate")
+	}
+	var prompted bytes.Buffer
+	if !confirmTyped(strings.NewReader("2026-11-15_1305\n"), &prompted, "Type 2026-11-15_1305 to restore this backup: ", "2026-11-15_1305") {
+		t.Fatal("backup id")
+	}
+	if confirmTyped(strings.NewReader("nope\n"), &prompted, "Type 2026-11-15_1305 to restore this backup: ", "2026-11-15_1305") {
+		t.Fatal("mismatch accepted")
+	}
+}
+
 func TestAdminMachinesShowsCleanupPending(t *testing.T) {
 	st, agent := adminAgent(t, "running")
 	ctx := context.Background()
