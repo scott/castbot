@@ -59,7 +59,7 @@ func shootModelEdit(t *testing.T, browser context.Context, dir string, width, he
 		agent := seedAgent(t, h.st, user.ID, "Scout")
 		model := firstModel(t)
 		if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{
-			SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Model: model,
+			SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Description: agent.Description, CanDelegate: agent.CanDelegate, Model: model,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -103,7 +103,7 @@ func shootModelDelisted(t *testing.T, browser context.Context, dir string, width
 	ctx := openModelShot(t, browser, "models-old-"+name+"@example.com", "", width, height, key, "digitalocean", func(t *testing.T, h *harness, user store.User) string {
 		agent := seedAgent(t, h.st, user.ID, "Scout")
 		if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{
-			SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Model: kept,
+			SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Description: agent.Description, CanDelegate: agent.CanDelegate, Model: kept,
 		}); err != nil {
 			t.Fatal(err)
 		}

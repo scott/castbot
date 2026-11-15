@@ -260,7 +260,7 @@ func TestCLISlugIsSafeAndUnique(t *testing.T) {
 			t.Fatalf("slug %s", slug)
 		}
 	}
-	if err := s.SaveAgentFields(ctx, owner.ID, tim.ID, AgentInput{SectionID: sec.ID, Name: "Renamed bot", Title: "Helper"}); err != nil {
+	if err := s.SaveAgentFields(ctx, owner.ID, tim.ID, AgentInput{SectionID: sec.ID, Name: "Renamed bot", Title: "Helper", Description: tim.Description, CanDelegate: tim.CanDelegate}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteAgent(ctx, owner.ID, reviewer.ID); err != nil {

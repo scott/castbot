@@ -183,6 +183,7 @@ type page struct {
 	CLITokens        []cliTokView
 	Threads          []threadView
 	ThreadID         string
+	RosterNote       string
 	Cards            []cardView
 	SecretCards      []cardView
 	Text             string

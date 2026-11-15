@@ -902,7 +902,7 @@ func shootAgentForm(t *testing.T, browser context.Context, dir string, width, he
 	h.login("s05-"+theme+"-"+name+"@example.com", "correct-horse-1", secret, ip, false)
 	agent := seedAgent(t, h.st, user.ID, "Quill")
 	if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{
-		SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Model: model,
+		SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Description: agent.Description, CanDelegate: agent.CanDelegate, Model: model,
 	}); err != nil {
 		t.Fatal(err)
 	}

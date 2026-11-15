@@ -24,6 +24,12 @@ func TestAgentsDelegate(t *testing.T) {
 	ip := "203.0.113.87:4000"
 	user, chief, _, thread := talkCrew(t, h, ip)
 	ctx := context.Background()
+	if err := h.st.SaveAgentFields(ctx, user.ID, chief.ID, store.AgentInput{
+		SectionID: chief.SectionID, Name: chief.Name, Title: chief.Title, Description: chief.Description,
+		Model: chief.Model, Color: chief.Color, CanDelegate: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.st.PutBundle(ctx, user.ID, chief.ID, "1", "name: Chief\n", "You coordinate the other agents.\n"); err != nil {
 		t.Fatal(err)
 	}

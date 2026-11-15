@@ -26,7 +26,7 @@ func shootT2Connections(t *testing.T, browser context.Context, dir string, width
 	agent := seedAgent(t, h.st, user.ID, "Atlas")
 	model := firstModel(t)
 	if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{
-		SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Model: model,
+		SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Description: agent.Description, CanDelegate: agent.CanDelegate, Model: model,
 	}); err != nil {
 		t.Fatal(err)
 	}

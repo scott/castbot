@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS agents (
   name TEXT NOT NULL,
   title TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
+  can_delegate INTEGER NOT NULL DEFAULT 0,
   avatar_color TEXT NOT NULL DEFAULT 'c0',
   avatar_path TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
@@ -492,6 +493,12 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV25(); err != nil {
 		return err
 	}
+	// Version 26 is the per-agent delegate switch. It stays off until
+	// the owner turns it on. Agents whose latest instructions already
+	// say "coordinate" keep the old behavior.
+	if err := s.migrateV26(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -794,6 +801,52 @@ SELECT id, workspace_id, user_id, kind, agent_id, title, cast_session_id, create
 		return err
 	}
 	return tx.Commit()
+}
+
+// backfillCanDelegate turns the switch on for agents whose latest
+// instructions contain "coordinate". Older bundles do not count.
+// The match is the same substring the roster preface used before.
+const backfillCanDelegate = `
+UPDATE agents SET can_delegate = 1
+WHERE id IN (
+  SELECT b.agent_id
+  FROM agent_bundles b
+  WHERE instr(lower(b.instructions_md), 'coordinate') > 0
+    AND NOT EXISTS (
+      SELECT 1 FROM agent_bundles newer
+      WHERE newer.user_id = b.user_id
+        AND newer.agent_id = b.agent_id
+        AND (
+          newer.created_at > b.created_at
+          OR (newer.created_at = b.created_at AND newer.version > b.version)
+        )
+    )
+)`
+
+// migrateV26 adds can_delegate. The backfill runs once, before version
+// 26 is recorded, so a later edit of the switch is left alone.
+func (s *Store) migrateV26() error {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 26`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return s.ensureColumn("agents", "can_delegate", `ALTER TABLE agents ADD COLUMN can_delegate INTEGER NOT NULL DEFAULT 0`)
+	}
+	missing, err := s.columnMissing("agents", "can_delegate")
+	if err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agents", "can_delegate", `ALTER TABLE agents ADD COLUMN can_delegate INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if missing {
+		if _, err := s.db.Exec(backfillCanDelegate); err != nil {
+			return err
+		}
+	}
+	_, err = s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (26) ON CONFLICT(version) DO NOTHING`)
+	return err
 }
 
 func (s *Store) indexColumns(name string) ([]string, error) {
