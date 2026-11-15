@@ -38,7 +38,9 @@ type agentForm struct {
 	Pick                          modelPick
 	AgentID                       string
 	Back, Job, KeyLine, Size      string
+	JobErr                        string
 	Color, ColorErr, Letter       string
+	CanDelegate                   bool
 	Colors                        []colorSwatch
 	Idle                          int
 	Advanced, Prefill             bool
@@ -119,6 +121,8 @@ func (s *Server) formFromAgent(ctx context.Context, user store.User, agent store
 	f.Submit = "Save"
 	f.Name = agent.Name
 	f.Title = agent.Title
+	f.Job = agent.Description
+	f.CanDelegate = agent.CanDelegate
 	f.SectionID = agent.SectionID
 	f.Model = agent.Model
 	f.HasAvatar = agent.AvatarPath != ""
@@ -251,7 +255,6 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 		}
 	}
 	f, spec, avatar, mime, good := s.readForm(r, base)
-	f.Job, _ = redactSecrets(strings.TrimSpace(r.FormValue("job")))
 	switch strings.TrimSpace(r.FormValue("size")) {
 	case "2:4096", "8:16384":
 		f.Size = strings.TrimSpace(r.FormValue("size"))
@@ -286,7 +289,8 @@ func (s *Server) saveNewAgent(w http.ResponseWriter, r *http.Request, user store
 		}
 	}
 	agent, _, err := s.store.CreateAgent(r.Context(), user.ID, store.AgentInput{
-		SectionID: f.SectionID, Name: f.Name, Title: f.Title, Description: f.Job, Model: f.Model, Status: "draft", Color: f.Color,
+		SectionID: f.SectionID, Name: f.Name, Title: f.Title, Description: f.Job, CanDelegate: f.CanDelegate,
+		Model: f.Model, Status: "draft", Color: f.Color,
 		IdleTimeout: f.Idle, Size: f.Size, PendingGreet: hosted,
 	})
 	if err != nil {
@@ -372,7 +376,8 @@ func (s *Server) saveAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.SaveAgentFields(r.Context(), user.ID, agent.ID, store.AgentInput{
-		SectionID: f.SectionID, Name: f.Name, Title: f.Title, Model: f.Model, Color: f.Color,
+		SectionID: f.SectionID, Name: f.Name, Title: f.Title, Description: f.Job,
+		CanDelegate: f.CanDelegate, Model: f.Model, Color: f.Color,
 	}); err != nil {
 		if errors.Is(err, store.ErrInvalid) {
 			f.ColorErr = colorRejectedCopy
@@ -656,6 +661,8 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 		f.Model = previous
 	}
 	f.Instructions = r.FormValue("instructions")
+	f.Job, _ = redactSecrets(strings.TrimSpace(r.FormValue("job")))
+	f.CanDelegate = r.FormValue("can_delegate") == "1"
 	f.Version = r.FormValue("version")
 	f.GitHub = strings.TrimSpace(r.FormValue("github"))
 	f.Notice = ""
@@ -698,6 +705,11 @@ func (s *Server) readForm(r *http.Request, f agentForm) (agentForm, castcfg.Spec
 		good = false
 	} else if len(f.Instructions) > 200000 {
 		f.InstructionsErr = "Instructions are too long."
+		good = false
+	}
+	f.JobErr = ""
+	if len(f.Job) > 160 {
+		f.JobErr = "Use a job up to 160 characters."
 		good = false
 	}
 	if !applyPostedColor(r, &f) {

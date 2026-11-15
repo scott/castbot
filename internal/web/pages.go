@@ -11,6 +11,20 @@ import (
 	"github.com/scott/castbot/internal/store"
 )
 
+// rosterNote lists the other agents a delegating agent can ask.
+func rosterNote(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return "Can ask " + names[0] + "."
+	case 2:
+		return "Can ask " + names[0] + " and " + names[1] + "."
+	default:
+		return "Can ask " + strings.Join(names[:len(names)-1], ", ") + ", and " + names[len(names)-1] + "."
+	}
+}
+
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.requireUser(w, r)
 	if !ok {
@@ -104,6 +118,18 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	}
 	p.HasAgent = true
 	p.Machine = machine
+	if agent.CanDelegate {
+		var names []string
+		for _, sec := range p.Sections {
+			for _, ag := range sec.Agents {
+				if ag.ID == agent.ID || strings.TrimSpace(ag.Name) == "" {
+					continue
+				}
+				names = append(names, ag.Name)
+			}
+		}
+		p.RosterNote = rosterNote(names)
+	}
 	p.FormError = formError
 	p.Pane = pane
 	p.markOn(agent.ID)

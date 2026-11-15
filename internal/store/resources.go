@@ -27,6 +27,7 @@ type Agent struct {
 	Name        string
 	Title       string
 	Description string
+	CanDelegate bool
 	Color       string
 	Model       string
 	AvatarPath  string
@@ -72,6 +73,7 @@ type AgentInput struct {
 	Name        string
 	Title       string
 	Description string
+	CanDelegate bool
 	Color       string
 	Model       string
 	Status      string
@@ -246,10 +248,10 @@ func (s *Store) GetAgent(ctx context.Context, userID, id string) (Agent, error) 
 	return a, nil
 }
 
-const agentSelect = `SELECT a.id, a.workspace_id, a.user_id, a.section_id, a.name, a.title, a.description, a.avatar_color, a.model, a.avatar_path, a.status, a.activity, a.unread, a.approvals, a.idle_timeout, a.size, a.position, a.created_at FROM agents a JOIN sections s ON s.id = a.section_id AND s.user_id = a.user_id`
+const agentSelect = `SELECT a.id, a.workspace_id, a.user_id, a.section_id, a.name, a.title, a.description, a.can_delegate, a.avatar_color, a.model, a.avatar_path, a.status, a.activity, a.unread, a.approvals, a.idle_timeout, a.size, a.position, a.created_at FROM agents a JOIN sections s ON s.id = a.section_id AND s.user_id = a.user_id`
 
 func agentScan(a *Agent) []any {
-	return []any{&a.ID, &a.WorkspaceID, &a.UserID, &a.SectionID, &a.Name, &a.Title, &a.Description, &a.Color, &a.Model, &a.AvatarPath, &a.Status, &a.Activity, &a.Unread, &a.Approvals, &a.IdleTimeout, &a.Size, &a.Position, &a.CreatedAt}
+	return []any{&a.ID, &a.WorkspaceID, &a.UserID, &a.SectionID, &a.Name, &a.Title, &a.Description, &a.CanDelegate, &a.Color, &a.Model, &a.AvatarPath, &a.Status, &a.Activity, &a.Unread, &a.Approvals, &a.IdleTimeout, &a.Size, &a.Position, &a.CreatedAt}
 }
 
 func scanAgents(rows *sql.Rows) ([]Agent, error) {
@@ -333,8 +335,12 @@ func (s *Store) CreateAgent(ctx context.Context, userID string, in AgentInput) (
 	if !in.PendingGreet {
 		greeted = stamp
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO agents(id, workspace_id, user_id, section_id, name, title, description, avatar_color, model, status, activity, unread, approvals, idle_timeout, size, position, created_at, greeted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		aid, sec.WorkspaceID, userID, sec.ID, name, strings.TrimSpace(in.Title), strings.TrimSpace(in.Description), color, strings.TrimSpace(in.Model), status, strings.TrimSpace(in.Activity), in.Unread, in.Approvals, idle, size, pos, stamp, greeted)
+	delegate := 0
+	if in.CanDelegate {
+		delegate = 1
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO agents(id, workspace_id, user_id, section_id, name, title, description, can_delegate, avatar_color, model, status, activity, unread, approvals, idle_timeout, size, position, created_at, greeted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		aid, sec.WorkspaceID, userID, sec.ID, name, strings.TrimSpace(in.Title), strings.TrimSpace(in.Description), delegate, color, strings.TrimSpace(in.Model), status, strings.TrimSpace(in.Activity), in.Unread, in.Approvals, idle, size, pos, stamp, greeted)
 	if err != nil {
 		return Agent{}, Thread{}, err
 	}
@@ -411,11 +417,19 @@ func (s *Store) SaveAgentFields(ctx context.Context, userID, id string, in Agent
 	if n > 0 {
 		return ErrConflict
 	}
-	query := `UPDATE agents SET section_id = ?, name = ?, title = ?, model = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`
-	args := []any{in.SectionID, name, title, model, id, userID}
+	desc := strings.TrimSpace(in.Description)
+	if len(desc) > 160 {
+		return ErrInvalid
+	}
+	delegate := 0
+	if in.CanDelegate {
+		delegate = 1
+	}
+	query := `UPDATE agents SET section_id = ?, name = ?, title = ?, model = ?, description = ?, can_delegate = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`
+	args := []any{in.SectionID, name, title, model, desc, delegate, id, userID}
 	if color != "" {
-		query = `UPDATE agents SET section_id = ?, name = ?, title = ?, model = ?, avatar_color = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`
-		args = []any{in.SectionID, name, title, model, color, id, userID}
+		query = `UPDATE agents SET section_id = ?, name = ?, title = ?, model = ?, description = ?, can_delegate = ?, avatar_color = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`
+		args = []any{in.SectionID, name, title, model, desc, delegate, color, id, userID}
 	}
 	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {

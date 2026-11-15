@@ -158,7 +158,7 @@ func TestConnectProxyAllowlistApprovalAndRevoke(t *testing.T) {
 	h.login("connect-proxy@example.com", "correct-horse-1", secret, ip, false)
 	agent := vaultAgent(t, h.st, user.ID, "Atlas")
 	model := firstModel(t)
-	if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Model: model}); err != nil {
+	if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Description: agent.Description, CanDelegate: agent.CanDelegate, Model: model}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.st.SaveConnectionSecret(context.Background(), user.ID, connect.GitHub, connectCanary); err != nil {
@@ -316,7 +316,7 @@ func TestSecretRequestCard(t *testing.T) {
 	h.st.SetNow(func() time.Time { return base })
 	agent := vaultAgent(t, h.st, user.ID, "Atlas")
 	model := firstModel(t)
-	if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Model: model}); err != nil {
+	if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Description: agent.Description, CanDelegate: agent.CanDelegate, Model: model}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.st.PutBundle(context.Background(), user.ID, agent.ID, "1", "name: Atlas\nbrain:\n  model: "+model+"\n  instructions_file: instructions.md\ntools:\n  builtin: []\n", "Be concise."); err != nil {
@@ -470,7 +470,7 @@ func TestApprovalBindsTheExactRequest(t *testing.T) {
 	h.login("connect-bind@example.com", "correct-horse-1", secret, ip, false)
 	agent := vaultAgent(t, h.st, user.ID, "Atlas")
 	model := firstModel(t)
-	if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Model: model}); err != nil {
+	if err := h.st.SaveAgentFields(context.Background(), user.ID, agent.ID, store.AgentInput{SectionID: agent.SectionID, Name: agent.Name, Title: agent.Title, Description: agent.Description, CanDelegate: agent.CanDelegate, Model: model}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.st.SaveConnectionSecret(context.Background(), user.ID, connect.GitHub, connectCanary); err != nil {

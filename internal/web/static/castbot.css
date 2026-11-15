@@ -870,6 +870,10 @@ textarea.ph::placeholder { color: var(--tx3); }
 .tok .meta { color: var(--tx3); font-size: 12.5px; }
 .m-note { margin: 8px 0; padding: 10px 12px; border-radius: 10px; background: var(--raise); color: var(--tx2); font-size: 13.5px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .thread-switch { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 16px 0; min-width: 0; }
+.roster-note { margin: 0; padding: 8px 16px 0; font-size: 12.5px; color: var(--tx3); min-width: 0; overflow-wrap: anywhere; }
+.field .tog { max-width: 100%; flex-wrap: wrap; }
+.field .tog .lbl { min-width: 0; }
+.field > .help { display: block; min-width: 0; overflow-wrap: anywhere; }
 .thread-switch a { font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--tx2); text-decoration: none; }
 .thread-switch a.on { color: var(--tx); border-color: var(--acc); }
 .machine h2 { margin: 0; font: 650 22px/1.2 var(--hd); }

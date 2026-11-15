@@ -570,12 +570,20 @@ func (s *Server) withRoster(ctx context.Context, job run.Job, req runtime.Send) 
 			return req
 		}
 	}
-	bundle, err := s.store.LatestBundle(ctx, job.UserID, job.AgentID)
-	if err != nil || !strings.Contains(strings.ToLower(bundle.Instructions), "coordinate") {
-		return req
-	}
 	agents, err := s.store.ListAgents(ctx, job.UserID)
 	if err != nil || len(agents) < 2 {
+		return req
+	}
+	var self store.Agent
+	found := false
+	for _, ag := range agents {
+		if ag.ID == job.AgentID {
+			self = ag
+			found = true
+			break
+		}
+	}
+	if !found || !self.CanDelegate {
 		return req
 	}
 	roster := make([]handoff.Agent, 0, len(agents))
