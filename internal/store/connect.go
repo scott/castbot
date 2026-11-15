@@ -59,6 +59,8 @@ type ConnectApproval struct {
 	ExpiresAt   string
 	CreatedAt   string
 	DecidedAt   string
+	// Via is "prompt" when Always approve for this prompt decided the card.
+	Via string
 }
 
 func (s *Store) migrateV22() error {
@@ -743,11 +745,11 @@ func scanSecretRequest(row rowScanner) (SecretRequest, error) {
 	return out, nil
 }
 
-const connectApprSelect = `SELECT id, workspace_id, user_id, agent_id, thread_id, run_id, connection, action, method, path, request_hash, status, expires_at, created_at, COALESCE(decided_at, '') FROM connect_approvals`
+const connectApprSelect = `SELECT id, workspace_id, user_id, agent_id, thread_id, run_id, connection, action, method, path, request_hash, status, expires_at, created_at, COALESCE(decided_at, ''), COALESCE(via, '') FROM connect_approvals`
 
 func scanConnectApproval(row rowScanner) (ConnectApproval, error) {
 	var out ConnectApproval
-	err := row.Scan(&out.ID, &out.WorkspaceID, &out.UserID, &out.AgentID, &out.ThreadID, &out.RunID, &out.Connection, &out.Action, &out.Method, &out.Path, &out.RequestHash, &out.Status, &out.ExpiresAt, &out.CreatedAt, &out.DecidedAt)
+	err := row.Scan(&out.ID, &out.WorkspaceID, &out.UserID, &out.AgentID, &out.ThreadID, &out.RunID, &out.Connection, &out.Action, &out.Method, &out.Path, &out.RequestHash, &out.Status, &out.ExpiresAt, &out.CreatedAt, &out.DecidedAt, &out.Via)
 	if err != nil {
 		return ConnectApproval{}, scanErr(err)
 	}

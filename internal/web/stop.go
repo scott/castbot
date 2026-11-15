@@ -79,8 +79,8 @@ func (s *Server) stopRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if changed {
-		// Status stopped is the hook a later always-approve grant ends on.
-		// This slice has no grant row to close.
+		// Status stopped reaches the after-run hook, which ends an
+		// always-approve grant once no covered run is still open.
 		s.finishStop(r.Context(), user, row)
 		s.answerStop(w, r, user, stopped, text, true, false)
 		return

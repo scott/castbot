@@ -93,13 +93,13 @@ type liveView struct {
 }
 
 type cardView struct {
-	ID, RunID, Tool, Line, CSRF, When, At      string
-	Extra, From, Reason                        string
-	SubmitURL, DeclineURL, ApproveURL, DenyURL string
-	FieldLabel, SubmitLabel, Fold              string
-	Args                                       []argView
-	Pending, ReadOnly, Approved, Secret, OOB   bool
-	NeedsValue                                 bool
+	ID, RunID, Tool, Line, CSRF, When, At                 string
+	Extra, From, Reason                                   string
+	SubmitURL, DeclineURL, ApproveURL, DenyURL, AlwaysURL string
+	FieldLabel, SubmitLabel, Fold                         string
+	Args                                                  []argView
+	Pending, ReadOnly, Approved, Secret, OOB              bool
+	NeedsValue                                            bool
 }
 
 type chromeView struct {

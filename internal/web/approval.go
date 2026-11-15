@@ -675,6 +675,7 @@ func (s *Server) presentApproval(row store.Approval, user store.User, csrf strin
 		When:       clockLabel(row.CreatedAt, loc),
 		ApproveURL: "/runs/" + url.PathEscape(row.RunID) + "/approvals/" + url.PathEscape(row.ID) + "/approve",
 		DenyURL:    "/runs/" + url.PathEscape(row.RunID) + "/approvals/" + url.PathEscape(row.ID) + "/deny",
+		AlwaysURL:  "/runs/" + url.PathEscape(row.RunID) + "/approvals/" + url.PathEscape(row.ID) + "/always",
 	}
 	if view.Tool == "" {
 		view.Tool = "Approval"
@@ -685,13 +686,20 @@ func (s *Server) presentApproval(row store.Approval, user store.User, csrf strin
 			view.Pending = true
 		} else {
 			view.ReadOnly = true
+			view.AlwaysURL = ""
 			view.Line = "Answer it in the Cast CLI."
 		}
 	case "approved":
 		view.Approved = true
 		view.Fold = "Approved"
+		view.AlwaysURL = ""
 		when := clockLabel(row.DecidedAt, loc)
-		if when == "" {
+		if row.Via == store.GrantVia {
+			view.Line = store.GrantLine
+			if when != "" {
+				view.When = when
+			}
+		} else if when == "" {
 			view.Line = "Approved by you"
 		} else {
 			view.Line = "Approved by you at " + when
