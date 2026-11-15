@@ -144,14 +144,31 @@ func actCopyHTML(out activityOut, elapsed string) string {
 	return b.String()
 }
 
-func actRowHTML(out activityOut, elapsed string) template.HTML {
+// actHidden keeps the row up when Stop is offered.
+// Working hides the row only when there is no stop control.
+func actHidden(out activityOut, stopID string) bool {
+	return out.HideThread && stopID == ""
+}
+
+func actRowHTML(out activityOut, elapsed, runID, csrf string) template.HTML {
 	var b strings.Builder
 	b.WriteString(`<div class="act" role="status" aria-live="polite">`)
 	b.WriteString(actIcons("", false))
 	b.WriteString(`<span class="actxt" sse-swap="actxt" hx-swap="innerHTML">`)
 	b.WriteString(actCopyHTML(out, elapsed))
-	b.WriteString(`</span></div>`)
+	b.WriteString(`</span>`)
+	b.WriteString(stopFormHTML(runID, csrf))
+	b.WriteString(`</div>`)
 	return template.HTML(b.String())
+}
+
+func stopFormHTML(runID, csrf string) string {
+	if runID == "" || csrf == "" {
+		return ""
+	}
+	id := html.EscapeString(runID)
+	tok := html.EscapeString(csrf)
+	return `<form class="stop" method="post" action="/runs/` + id + `/stop" hx-post="/runs/` + id + `/stop" hx-target="closest .m-agent" hx-swap="outerHTML"><input type="hidden" name="csrf" value="` + tok + `"><button class="btn sm stop" type="submit">Stop</button></form>`
 }
 
 func actSlotHTML(runID string, inner template.HTML, hidden bool) string {

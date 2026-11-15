@@ -607,12 +607,12 @@ func (s *Server) gateApproval(ctx context.Context, userID, agentID string, call 
 			}
 		}
 	}
-	_, threadID, _ := s.store.OpenRun(ctx, userID, agentID)
+	runID, threadID, _ := s.store.OpenRun(ctx, userID, agentID)
 	action := call.Summary
 	if action == "" {
 		action = method + " " + path
 	}
-	if _, err := s.store.CreateConnectApproval(ctx, userID, agentID, threadID, call.Connection, action, method, path, call.Hash, s.store.Now().Add(connectApprovalFor)); err != nil {
+	if _, err := s.store.CreateConnectApproval(ctx, userID, agentID, threadID, runID, call.Connection, action, method, path, call.Hash, s.store.Now().Add(connectApprovalFor)); err != nil {
 		return err
 	}
 	s.notifyAgent(ctx, userID, agentID)

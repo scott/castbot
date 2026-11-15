@@ -192,7 +192,7 @@ func TestApprovedConnectCardExpiresUnused(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := strings.Repeat("ab", 32)
-	row, err := s.CreateConnectApproval(ctx, owner.ID, agent.ID, "", connect.GitHub, "POST /repos/octo/demo/issues", "POST", "/repos/octo/demo/issues", hash, s.Now().Add(time.Minute))
+	row, err := s.CreateConnectApproval(ctx, owner.ID, agent.ID, "", "", connect.GitHub, "POST /repos/octo/demo/issues", "POST", "/repos/octo/demo/issues", hash, s.Now().Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}

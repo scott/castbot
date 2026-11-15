@@ -67,7 +67,7 @@ func TestElapsedAndDwell(t *testing.T) {
 func TestRedStampGone(t *testing.T) {
 	body, err := execTemplate("pending", liveView{
 		RunID: "run1", Color: "c1", Letter: "A",
-		Act:  template.HTML(actSlotHTML("run1", actRowHTML(activityOut{Label: "Thinking"}, ""), false)),
+		Act:  template.HTML(actSlotHTML("run1", actRowHTML(activityOut{Label: "Thinking"}, "", "", ""), false)),
 		Tail: template.HTML(tailWrap("run1", "")),
 	})
 	if err != nil {

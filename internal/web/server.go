@@ -438,6 +438,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /runs/{id}/events", s.runEvents)
 	mux.HandleFunc("GET /runs/{id}", s.getRun)
 	mux.HandleFunc("POST /runs/{id}/retry", s.retryRun)
+	mux.HandleFunc("POST /runs/{id}/stop", s.stopRun)
 	mux.HandleFunc("POST /runs/{id}/approvals/{approval}/approve", s.approveRun)
 	mux.HandleFunc("POST /runs/{id}/approvals/{approval}/deny", s.denyRun)
 	mux.HandleFunc("GET /approvals/{id}", s.getApproval)

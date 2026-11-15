@@ -89,6 +89,7 @@ type liveView struct {
 	HTML, Blocks, Tail, Act, Tools, Side            template.HTML
 	CalmTitle, CalmLine, CalmRetry, CalmSecond      string
 	CalmWake                                        bool
+	Note                                            string
 }
 
 type cardView struct {

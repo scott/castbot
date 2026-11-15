@@ -134,6 +134,10 @@ func (s *Server) settleRoutine(job run.Job, status string) {
 	if err != nil || rr.FinishedAt != "" {
 		return
 	}
+	if status == "stopped" {
+		_ = s.store.FinishRoutineRun(ctx, job.UserID, job.RunID, store.RoutineFailed, store.StoppedLine)
+		return
+	}
 	if status == "failed" {
 		_ = s.store.FinishRoutineRun(ctx, job.UserID, job.RunID, store.RoutineFailed, "The machine did not wake")
 		return

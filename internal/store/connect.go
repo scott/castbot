@@ -49,6 +49,7 @@ type ConnectApproval struct {
 	UserID      string
 	AgentID     string
 	ThreadID    string
+	RunID       string
 	Connection  string
 	Action      string
 	Method      string
@@ -114,6 +115,7 @@ func (s *Store) migrateV22() error {
   user_id TEXT NOT NULL,
   agent_id TEXT NOT NULL,
   thread_id TEXT NOT NULL DEFAULT '',
+  run_id TEXT NOT NULL DEFAULT '',
   connection TEXT NOT NULL,
   action TEXT NOT NULL,
   method TEXT NOT NULL,
@@ -130,7 +132,13 @@ func (s *Store) migrateV22() error {
 	if err := s.ensureColumn("connect_approvals", "request_hash", `ALTER TABLE connect_approvals ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("connect_approvals", "run_id", `ALTER TABLE connect_approvals ADD COLUMN run_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_connect_appr_user ON connect_approvals(user_id, agent_id, status)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_connect_appr_run ON connect_approvals(user_id, run_id)`); err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS approval_uses (
@@ -503,7 +511,7 @@ func (s *Store) finishSecret(ctx context.Context, userID, id, status string) (Se
 }
 
 // CreateConnectApproval opens a host approval card for a mutating call.
-func (s *Store) CreateConnectApproval(ctx context.Context, userID, agentID, threadID, connection, action, method, path, requestHash string, expires time.Time) (ConnectApproval, error) {
+func (s *Store) CreateConnectApproval(ctx context.Context, userID, agentID, threadID, runID, connection, action, method, path, requestHash string, expires time.Time) (ConnectApproval, error) {
 	if _, ok := connect.Lookup(connection); !ok || action == "" || method == "" || !hashOK(requestHash) {
 		return ConnectApproval{}, ErrInvalid
 	}
@@ -518,12 +526,12 @@ func (s *Store) CreateConnectApproval(ctx context.Context, userID, agentID, thre
 	stamp := s.stamp(s.Now())
 	path = clipPath(path)
 	row := ConnectApproval{
-		ID: id, WorkspaceID: agent.WorkspaceID, UserID: userID, AgentID: agentID, ThreadID: threadID,
+		ID: id, WorkspaceID: agent.WorkspaceID, UserID: userID, AgentID: agentID, ThreadID: threadID, RunID: runID,
 		Connection: connection, Action: clipPath(action), Method: method, Path: path, RequestHash: requestHash,
 		Status: "pending", ExpiresAt: s.stamp(expires.UTC()), CreatedAt: stamp,
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO connect_approvals(id, workspace_id, user_id, agent_id, thread_id, connection, action, method, path, request_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
-		row.ID, row.WorkspaceID, userID, agentID, threadID, connection, row.Action, method, path, requestHash, row.ExpiresAt, stamp)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO connect_approvals(id, workspace_id, user_id, agent_id, thread_id, run_id, connection, action, method, path, request_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+		row.ID, row.WorkspaceID, userID, agentID, threadID, runID, connection, row.Action, method, path, requestHash, row.ExpiresAt, stamp)
 	if err != nil {
 		return ConnectApproval{}, err
 	}
@@ -735,11 +743,11 @@ func scanSecretRequest(row rowScanner) (SecretRequest, error) {
 	return out, nil
 }
 
-const connectApprSelect = `SELECT id, workspace_id, user_id, agent_id, thread_id, connection, action, method, path, request_hash, status, expires_at, created_at, COALESCE(decided_at, '') FROM connect_approvals`
+const connectApprSelect = `SELECT id, workspace_id, user_id, agent_id, thread_id, run_id, connection, action, method, path, request_hash, status, expires_at, created_at, COALESCE(decided_at, '') FROM connect_approvals`
 
 func scanConnectApproval(row rowScanner) (ConnectApproval, error) {
 	var out ConnectApproval
-	err := row.Scan(&out.ID, &out.WorkspaceID, &out.UserID, &out.AgentID, &out.ThreadID, &out.Connection, &out.Action, &out.Method, &out.Path, &out.RequestHash, &out.Status, &out.ExpiresAt, &out.CreatedAt, &out.DecidedAt)
+	err := row.Scan(&out.ID, &out.WorkspaceID, &out.UserID, &out.AgentID, &out.ThreadID, &out.RunID, &out.Connection, &out.Action, &out.Method, &out.Path, &out.RequestHash, &out.Status, &out.ExpiresAt, &out.CreatedAt, &out.DecidedAt)
 	if err != nil {
 		return ConnectApproval{}, scanErr(err)
 	}
