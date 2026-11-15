@@ -588,7 +588,7 @@ func (s *Server) writeCard(w http.ResponseWriter, user store.User, row store.App
 	if extra, err := execTemplate("approvalCard", view); err == nil {
 		body += extra
 	}
-	if chrome, cerr := s.approvalChrome(context.Background(), user, row.AgentID, row.RunID); cerr == nil {
+	if chrome, cerr := s.approvalChrome(context.Background(), user, row.AgentID, row.RunID, csrf); cerr == nil {
 		body += chrome
 	}
 	if sync, serr := s.approvalsSyncHTML(context.Background(), user, row.AgentID, csrf); serr == nil {
@@ -816,17 +816,17 @@ func (s *Server) cardsHTML(ctx context.Context, user store.User, runID, csrf str
 	return execTemplate("liveCards", page{Cards: cards, SecretCards: secrets})
 }
 
-func (s *Server) approvalChrome(ctx context.Context, user store.User, agentID, runID string) (string, error) {
-	return s.chromeHTML(ctx, user, agentID, runID, true)
+func (s *Server) approvalChrome(ctx context.Context, user store.User, agentID, runID, csrf string) (string, error) {
+	return s.chromeHTML(ctx, user, agentID, runID, true, csrf)
 }
 
 // badgeChrome is the pending bar and the nav badges, without the activity clock.
 // The clock moves on its own event. Putting it in the card payload remounts the token field.
 func (s *Server) badgeChrome(ctx context.Context, user store.User, agentID, runID string) (string, error) {
-	return s.chromeHTML(ctx, user, agentID, runID, false)
+	return s.chromeHTML(ctx, user, agentID, runID, false, "")
 }
 
-func (s *Server) chromeHTML(ctx context.Context, user store.User, agentID, runID string, withAct bool) (string, error) {
+func (s *Server) chromeHTML(ctx context.Context, user store.User, agentID, runID string, withAct bool, csrf string) (string, error) {
 	if agentID == "" && runID != "" {
 		runRow, err := s.store.GetRun(ctx, user.ID, runID)
 		if err != nil {
@@ -861,7 +861,8 @@ func (s *Server) chromeHTML(ctx context.Context, user store.User, agentID, runID
 			if started, perr := time.Parse(time.RFC3339, runRow.StartedAt); perr == nil {
 				elapsed, _ = formatElapsed(s.store.Now().Sub(started))
 			}
-			slot := actSlotHTML(runID, actRowHTML(out, elapsed), out.HideThread)
+			stopID := s.stopTarget(ctx, user.ID, runRow)
+			slot := actSlotHTML(runID, actRowHTML(out, elapsed, stopID, csrf), actHidden(out, stopID))
 			act = strings.Replace(slot, `class="act-hold"`, `class="act-hold" hx-swap-oob="outerHTML"`, 1)
 		}
 	}

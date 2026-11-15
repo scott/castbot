@@ -1315,8 +1315,10 @@ button.sclose, a.sclose { font: inherit; cursor: pointer; text-decoration: none;
 .actico.held i { animation: none; opacity: var(--act-held); }
 .actico.sm { grid-template-columns: repeat(2, var(--act-dot-sm)); grid-auto-rows: var(--act-dot-sm); gap: var(--act-gap-sm); width: var(--act-box-sm); height: var(--act-box-sm); }
 .actico.sm i { width: var(--act-dot-sm); height: var(--act-dot-sm); }
-.act { display: inline-flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--act-label-size); font-weight: 600; color: var(--act-label); animation: act-in var(--act-fade) ease-out var(--act-show-delay) both; }
+.act { display: inline-flex; align-items: center; gap: 8px; min-height: 28px; max-width: 100%; flex-wrap: wrap; font-size: var(--act-label-size); font-weight: 600; color: var(--act-label); animation: act-in var(--act-fade) ease-out var(--act-show-delay) both; }
 .act .actxt { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.act form.stop { margin-left: auto; }
+.stop-note { margin: 0; color: var(--tx2); font-size: 13.5px; }
 .act:has(.actmode[data-mode="held"]) .actico i { animation: none; opacity: var(--act-held); }
 .act:has(.actmode[data-mode="slow"]) .actico i { animation-duration: var(--act-cycle-slow); }
 .act:has(.actmode[data-mode="slow"]) .actico i:nth-child(2) { animation-delay: calc(var(--act-cycle-slow) * -5 / 6); }
@@ -1392,6 +1394,7 @@ button.sclose, a.sclose { font: inherit; cursor: pointer; text-decoration: none;
   .md-code-h .copy { height: 44px; min-width: 44px; }
   .msg-acts .ibtn { width: 44px; height: 44px; }
   .m-agent .calm .acts .btn { min-height: 44px; }
+  .act form.stop .btn { min-height: 44px; min-width: 44px; }
   .netbar .btn { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {

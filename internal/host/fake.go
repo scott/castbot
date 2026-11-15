@@ -77,6 +77,10 @@ type Fake struct {
 	// createdEndpoint is the address of the latest Create.
 	createdEndpoint string
 	healthCalls     map[string]int
+	// CancelOK makes Cancel succeed. The default still returns ErrCancel.
+	CancelOK bool
+	// CancelIDs records the stream id of each Cancel. Cancel does not touch the edge.
+	CancelIDs []string
 }
 
 // GuestDisk is one fake guest's memory tar and workspace files.
@@ -404,9 +408,17 @@ func (f *Fake) Approve(_ context.Context, endpoint, _, requestID string, allow b
 	return err
 }
 
-// Cancel does not touch the edge.
-func (f *Fake) Cancel(context.Context, string, string, string) error {
-	f.note("cancel")
+// Cancel records the stream id and does not touch the edge.
+// CancelOK reports success. Otherwise the runtime still cannot cancel a turn.
+func (f *Fake) Cancel(_ context.Context, _, _, streamID string) error {
+	f.mu.Lock()
+	f.Calls = append(f.Calls, "cancel")
+	f.CancelIDs = append(f.CancelIDs, streamID)
+	ok := f.CancelOK
+	f.mu.Unlock()
+	if ok {
+		return nil
+	}
 	return ErrCancel
 }
 

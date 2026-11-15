@@ -119,7 +119,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	// frame, and a badge-only change does not count as a new pane.
 	lastCards, _ := s.cardsHTML(r.Context(), user, runRow.ID, from(r).CSRF)
 	lastPane, _ := s.approvalsSyncHTML(r.Context(), user, runRow.AgentID, from(r).CSRF)
-	st := &liveSend{run: runRow}
+	st := &liveSend{run: runRow, csrf: from(r).CSRF, stopID: s.stopTarget(r.Context(), user.ID, runRow)}
 	if err := s.primeLive(r.Context(), user, st, cur); err != nil {
 		return
 	}
@@ -458,7 +458,7 @@ func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User
 	if err != nil {
 		return err
 	}
-	if chrome, cerr := s.approvalChrome(ctx, user, runRow.AgentID, runRow.ID); cerr == nil {
+	if chrome, cerr := s.approvalChrome(ctx, user, runRow.AgentID, runRow.ID, csrf); cerr == nil {
 		body += chrome
 	}
 	body += s.sideOOB(ctx, user, runRow.AgentID)

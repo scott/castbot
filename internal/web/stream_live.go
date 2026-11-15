@@ -26,6 +26,8 @@ type liveSend struct {
 	lastTail   string
 	lastTailAt time.Time
 	heldTail   string
+	csrf       string
+	stopID     string
 }
 
 // tailGap caps live markdown tail swaps at about 13 frames a second.
@@ -145,7 +147,7 @@ func (s *Server) activityNow(st *liveSend) (activityOut, string) {
 // The stream does not send that HTML again.
 func (st *liveSend) noteAct(out activityOut, elapsed string) {
 	st.actReady = true
-	st.actHidden = out.HideThread
+	st.actHidden = actHidden(out, st.stopID)
 	st.actCopy = actCopyHTML(out, elapsed)
 }
 
@@ -153,7 +155,8 @@ func (st *liveSend) noteAct(out activityOut, elapsed string) {
 // A label or clock change swaps the inner text and leaves the row mounted.
 func (st *liveSend) putAct(fw *frameWriter, w io.Writer, out activityOut, elapsed string) error {
 	copy := actCopyHTML(out, elapsed)
-	if st.actReady && st.actHidden == out.HideThread && st.actCopy == copy {
+	hidden := actHidden(out, st.stopID)
+	if st.actReady && st.actHidden == hidden && st.actCopy == copy {
 		return nil
 	}
 	write := func(event, data string) error {
@@ -162,18 +165,18 @@ func (st *liveSend) putAct(fw *frameWriter, w io.Writer, out activityOut, elapse
 		}
 		return writeSSE(w, "", event, data)
 	}
-	if st.actReady && st.actHidden == out.HideThread {
+	if st.actReady && st.actHidden == hidden {
 		if err := write("actxt", copy); err != nil {
 			return err
 		}
 	} else {
-		slot := actSlotHTML(st.run.ID, actRowHTML(out, elapsed), out.HideThread)
+		slot := actSlotHTML(st.run.ID, actRowHTML(out, elapsed, st.stopID, st.csrf), hidden)
 		if err := write("act", slot); err != nil {
 			return err
 		}
 	}
 	st.actReady = true
-	st.actHidden = out.HideThread
+	st.actHidden = hidden
 	st.actCopy = copy
 	return nil
 }

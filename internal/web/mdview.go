@@ -177,6 +177,7 @@ func (s *Server) paintLive(ctx context.Context, user store.User, row store.Run, 
 		inner = strings.ReplaceAll(inner, `<span class="caret" aria-hidden="true"></span>`, "")
 	}
 	calm := calmFor(agent.Name, errText, strings.TrimSpace(text) != "")
+	stopID := s.stopTarget(ctx, user.ID, row)
 	return liveView{
 		RunID: row.ID, Color: agent.Color, Letter: agent.Letter, CSRF: csrf,
 		AgentID: agent.ID, AgentName: agent.Name, After: last,
@@ -184,7 +185,7 @@ func (s *Server) paintLive(ctx context.Context, user store.User, row store.Run, 
 		HTML:      template.HTML(md.Render(text)),
 		Blocks:    template.HTML(blocks.String()),
 		Tail:      template.HTML(tailWrap(row.ID, inner)),
-		Act:       template.HTML(actSlotHTML(row.ID, actRowHTML(out, elapsed), out.HideThread)),
+		Act:       template.HTML(actSlotHTML(row.ID, actRowHTML(out, elapsed, stopID, csrf), actHidden(out, stopID))),
 		Tools:     template.HTML(tools),
 		CalmTitle: calm.Title, CalmLine: calm.Line, CalmRetry: calm.Retry, CalmSecond: calm.Second,
 		CalmWake: calm.Wake,

@@ -59,7 +59,11 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.renderChat(w, r, user, r.PathValue("id"), r.URL.Query().Get("pane") == "1", "chat", http.StatusOK, "")
+	formError := ""
+	if r.URL.Query().Get("notice") == "running" {
+		formError = stillRunning
+	}
+	s.renderChat(w, r, user, r.PathValue("id"), r.URL.Query().Get("pane") == "1", "chat", http.StatusOK, formError)
 }
 
 func (s *Server) agentTab(w http.ResponseWriter, r *http.Request) {

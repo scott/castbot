@@ -316,6 +316,20 @@ func (r *Runner) untrack(id string) {
 	r.mu.Unlock()
 }
 
+// Release drops the watch and runs the after-run hooks.
+// The run is already stored. Stop uses this once Cancel has landed,
+// or when a queued run never reached the guest.
+func (r *Runner) Release(job Job, status string) {
+	r.notifyAfter(job, status)
+}
+
+func (r *Runner) alreadyStopped(job Job) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	row, err := r.store.GetRun(ctx, job.UserID, job.RunID)
+	return err == nil && row.Status == "stopped"
+}
+
 func (r *Runner) execute(job Job) {
 	defer r.untrack(job.RunID)
 	defer func() {
@@ -334,6 +348,9 @@ func (r *Runner) execute(job Job) {
 		return
 	}
 	if err := r.store.MarkStreaming(r.ctx, job.UserID, job.RunID); err != nil {
+		if r.alreadyStopped(job) {
+			return
+		}
 		if r.ctx.Err() != nil {
 			r.fail(job, Interrupted, 0)
 			return
@@ -351,6 +368,9 @@ func (r *Runner) execute(job Job) {
 	attempt := 0
 	started := time.Now()
 	for {
+		if r.alreadyStopped(job) {
+			return
+		}
 		if r.ctx.Err() != nil || time.Since(started) >= r.runLimit() {
 			r.fail(job, Interrupted, offset)
 			return
@@ -578,6 +598,9 @@ func (r *Runner) Finish(job Job, text string, offset int) error {
 }
 
 func (r *Runner) finish(job Job, text string, offset int) error {
+	if r.alreadyStopped(job) {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if _, _, err := r.store.FinishRun(ctx, job.UserID, job.RunID, text, offset); err != nil {
@@ -589,6 +612,9 @@ func (r *Runner) finish(job Job, text string, offset int) error {
 }
 
 func (r *Runner) fail(job Job, message string, offset int) {
+	if r.alreadyStopped(job) {
+		return
+	}
 	message = clip(message, 400)
 	if message == "" {
 		message = Stopped

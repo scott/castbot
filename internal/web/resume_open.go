@@ -182,7 +182,7 @@ func (s *Server) writeResume(w http.ResponseWriter, r *http.Request, user store.
 		markWaking(&p.Agent)
 		p.ResumePoll = true
 		if r.FormValue("act") != "1" {
-			p.ResumeAct = actRowHTML(activityOut{Label: "Waking up"}, "")
+			p.ResumeAct = actRowHTML(activityOut{Label: "Waking up"}, "", "", "")
 		}
 	} else {
 		p.ResumeClearAct = true
@@ -206,7 +206,7 @@ func (s *Server) armChatResume(p *page, agentID string, machine machineView) {
 			}
 		}
 	}
-	p.ResumeAct = actRowHTML(activityOut{Label: "Waking up"}, "")
+	p.ResumeAct = actRowHTML(activityOut{Label: "Waking up"}, "", "", "")
 }
 
 func markWaking(v *agentView) {

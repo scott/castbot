@@ -186,6 +186,7 @@
 <div class="tools" sse-swap="tools" hx-swap="innerHTML">{{.Tools}}</div>
 <div class="md" id="md-{{.RunID}}" aria-busy="true" sse-swap="block" hx-swap="beforeend">{{.Blocks}}</div>
 {{.Tail}}
+{{if .Note}}<p class="stop-note" role="status">{{.Note}}</p>{{end}}
 <div class="act-slot" sse-swap="act" hx-swap="innerHTML">{{.Act}}</div>
 <div class="fail-slot" sse-swap="fail" hx-swap="innerHTML"></div>
 </div>
