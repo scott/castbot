@@ -35,14 +35,12 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	if p.Empty {
-		p.Page = "first"
-		p.Title = "Welcome"
-		s.render(w, http.StatusOK, "app", finish(p))
+	agents, err := s.store.ListAgents(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	agents, err := s.store.ListAgents(r.Context(), user.ID)
-	if err != nil || len(agents) == 0 {
+	if len(agents) == 0 && len(p.Groups) == 0 {
 		p.Page = "first"
 		p.Title = "Welcome"
 		s.render(w, http.StatusOK, "app", finish(p))
@@ -424,27 +422,15 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p, err := s.shell(r, user)
+	p, err := s.settingsView(r, user, sess)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	sv, err := s.sessionSummary(r, user, sess.ID)
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	p.Sessions = sv
-	p.Page = "settings"
-	p.Title = "Settings"
 	p.EditName = r.URL.Query().Get("edit") == "name"
 	if n, ok := notices[r.URL.Query().Get("notice")]; ok {
 		p.Notice = n
 	}
-	if sum, err := s.vaultSummary(r.Context(), user); err == nil {
-		p.Vault = sum
-	}
-	s.fillAccountUsage(r.Context(), user, &p)
 	s.render(w, http.StatusOK, "app", finish(p))
 }
 
@@ -657,6 +643,14 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 		return page{}, err
 	}
 	loc := userLocation(user.Timezone)
+	groups, err := s.store.ListGroups(r.Context(), user.ID)
+	if err != nil {
+		return page{}, err
+	}
+	var groupLinks []groupLink
+	for _, row := range groups {
+		groupLinks = append(groupLinks, groupLink{ID: row.ID, Title: row.Title, Href: "/groups/" + url.PathEscape(row.ID), Letter: letter(row.Title)})
+	}
 	open := map[string]store.OpenRun{}
 	if rows, err := s.store.ListOpenRuns(r.Context(), user.ID); err == nil {
 		for _, row := range rows {
@@ -687,6 +681,7 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 		AgentCount: len(agents),
 		Empty:      len(agents) == 0,
 		RoleLine:   roleLine(user.Role, user.WorkspaceName),
+		Groups:     groupLinks,
 		PasswordOn: func() string {
 			d := monthDay(user.PasswordChangedAt, loc)
 			if d == "" {
@@ -785,7 +780,7 @@ func presentMessages(msgs []store.Message, agent agentView, now time.Time, loc *
 		}
 		// A relay row holds the prompt for the chief's next turn. The
 		// specialist's words stay on the agent thread the owner can open.
-		if m.Origin == "relay" {
+		if m.Origin == "relay" || m.Origin == "mention" {
 			v.Hide = true
 		}
 		if m.AuthorKind == "user" && !v.Prompt {

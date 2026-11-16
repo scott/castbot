@@ -37,6 +37,20 @@ func TestRequestLogFieldsOmitSecrets(t *testing.T) {
 	}
 }
 
+func TestRequestLogHidesInviteToken(t *testing.T) {
+	h := newHarness(t)
+	var buf bytes.Buffer
+	h.srv.SetLogger(slog.New(slog.NewTextHandler(&buf, nil)))
+	const token = "cbi_sekrit-invite-token"
+	req := httptest.NewRequest(http.MethodGet, "/invite/"+token, nil)
+	h.srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	line := buf.String()
+	assertRequestLine(t, line, "GET", "/invite/redacted", 404)
+	if strings.Contains(line, token) || strings.Contains(line, "sekrit") || strings.Contains(line, "cbi_") {
+		t.Fatalf("invite token was logged: %s", line)
+	}
+}
+
 func TestRequestLogStatusAndBody(t *testing.T) {
 	var buf bytes.Buffer
 	s := &Server{}

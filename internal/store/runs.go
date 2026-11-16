@@ -44,7 +44,7 @@ func (s *Store) CreateRun(ctx context.Context, userID, threadID, agentID string)
 		return Run{}, err
 	}
 	if th.AgentID != agentID {
-		if th.Kind != "agent_dm" && th.Kind != "agent_chat" {
+		if th.Kind != "agent_dm" && th.Kind != "agent_chat" && th.Kind != "group" {
 			return Run{}, ErrNotFound
 		}
 		ok, err := s.IsParticipant(ctx, userID, threadID, agentID)

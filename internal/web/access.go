@@ -32,6 +32,7 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 }
 
 // requestLogPath is the URL path only. Query strings stay off the log line.
+// An invite link's token is the path itself, so that segment is not logged.
 func requestLogPath(p string) string {
 	if p == "" {
 		return "/"
@@ -39,7 +40,11 @@ func requestLogPath(p string) string {
 	if !strings.HasPrefix(p, "/") {
 		p = "/" + p
 	}
-	return path.Clean(p)
+	p = path.Clean(p)
+	if p == "/invite" || strings.HasPrefix(p, "/invite/") {
+		return "/invite/redacted"
+	}
+	return p
 }
 
 type statusWriter struct {

@@ -28,9 +28,25 @@ func (s *Server) priorTurns(ctx context.Context, userID, threadID, skip string) 
 	if err != nil {
 		return nil
 	}
-	var out []runtime.Turn
+	skipBody := ""
+	skipOrigin := ""
 	for _, msg := range msgs {
-		if msg.ID == skip || (msg.AuthorKind != "user" && msg.AuthorKind != "agent") {
+		if msg.ID == skip {
+			skipBody = msg.Body
+			skipOrigin = msg.Origin
+			break
+		}
+	}
+	var out []runtime.Turn
+	skippedVisible := false
+	for _, msg := range msgs {
+		if msg.ID == skip || msg.Origin == "mention" || (msg.AuthorKind != "user" && msg.AuthorKind != "agent") {
+			continue
+		}
+		// A queued group reply is linked to a hidden copy of the post.
+		// Leave that post out of history so the runtime sees it once, as the prompt.
+		if skipOrigin == "mention" && !skippedVisible && msg.AuthorKind == "user" && msg.Body == skipBody {
+			skippedVisible = true
 			continue
 		}
 		out = append(out, runtime.Turn{Role: msg.AuthorKind, Text: msg.Body})
