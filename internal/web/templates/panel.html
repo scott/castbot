@@ -1,6 +1,6 @@
 {{define "chatHeader"}}
 <header class="ch-h s19h{{if .Pane}} pane-open{{end}}">
-<a class="ibtn back" href="/" aria-label="Back to agents">{{template "backsvg" .}}{{if gt .OtherApprovals 0}}<span class="bbadge">{{.OtherApprovals}}</span>{{end}}</a>
+<a class="ibtn back" href="/?list=1" aria-label="Back to agents">{{template "backsvg" .}}{{if gt .OtherApprovals 0}}<span class="bbadge">{{.OtherApprovals}}</span>{{end}}</a>
 <a class="who-btn" href="/agents/{{.Agent.ID}}?panel=agent" data-open-panel data-panel-tab hx-get="/agents/{{.Agent.ID}}?panel=agent" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" aria-label="Open {{.Agent.Name}}"><span class="av {{.Agent.Color}}" aria-hidden="true">{{.Agent.Letter}}<span class="dot {{.Agent.Dot}}" id="hd-dot"></span></span><span class="grow"><span class="nm">{{.Agent.Name}}</span><span class="sub">{{.Agent.Title}}{{if .Agent.Model}} · {{.Agent.Model}}{{end}}</span></span></a>
 <a class="vmchip" id="vmchip" href="/agents/{{.Agent.ID}}?panel=machine" data-open-panel data-panel-tab hx-get="/agents/{{.Agent.ID}}?panel=machine" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" aria-label="Open machine"><span class="chip {{.Agent.ChipClass}}"><span class="pip"></span>{{.Agent.ChipLabel}}{{if .Agent.ChipMeta}} <span class="meta">{{.Agent.ChipMeta}}</span>{{end}}</span></a>
 <span class="hsp"></span>
@@ -70,10 +70,6 @@
 {{template "approvalsBody" .}}
 <span id="approvals-count" class="tbadge" hx-swap-oob="outerHTML"{{if eq .Agent.Approvals 0}} hidden{{end}}>{{if gt .Agent.Approvals 0}}{{.Agent.Approvals}}{{end}}</span>
 <span id="approval-pill" hx-swap-oob="outerHTML">{{template "approvalPill" .}}</span>
-{{end}}
-
-{{define "homePick"}}
-<div class="pick"><div><h1>Pick an agent</h1><p>Agents that need you show a shield with a count. Open one to answer in its chat.</p></div></div>
 {{end}}
 
 {{define "toastList"}}

@@ -208,7 +208,7 @@ func s19Shot(t *testing.T, theme, name, kind string) (*harness, string, string, 
 		needle = `(function(){var t=document.body.innerText||'';return t.indexOf('Atlas needs your approval')>=0&&t.indexOf('git_push')>=0&&t.indexOf('ls demo')<0&&document.title.indexOf('(1)')===0;})()`
 	case "13h":
 		page = "/"
-		needle = `(function(){var t=document.body.innerText||'';var pick=document.querySelector('.pick');var box=pick?pick.getBoundingClientRect():{width:0};if(window.innerWidth<760){return t.indexOf('Atlas')>=0&&t.indexOf('Pip')>=0&&box.width<1;}return t.indexOf('Pick an agent')>=0&&t.indexOf('Agents that need you show a shield with a count.')>=0;})()`
+		needle = `(function(){var t=document.body.innerText||'';return location.pathname.indexOf('/agents/')===0&&t.indexOf('Pick an agent')<0&&!!document.querySelector('#composer');})()`
 	}
 	return h, user.ID, page, needle
 }

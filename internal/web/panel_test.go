@@ -13,21 +13,31 @@ import (
 func TestWorkspaceNavGone(t *testing.T) {
 	h, user, ip := panelSession(t, "nav-s19@example.com", "Alex Rivera")
 	h.st.SetNow(func() time.Time { return time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC) })
-	makeAgent(t, h.st, user.ID, "Atlas")
-	code, body, _ := h.do(http.MethodGet, "/", "", ip, nil)
+	agent := makeAgent(t, h.st, user.ID, "Atlas")
+	code, _, hdr := h.do(http.MethodGet, "/", "", ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/agents/"+agent.ID {
+		t.Fatalf("home %d %s", code, hdr.Get("Location"))
+	}
+	code, chat, _ := h.do(http.MethodGet, "/agents/"+agent.ID, "", ip, nil)
 	if code != http.StatusOK {
 		t.Fatal(code)
 	}
-	for _, gone := range []string{`class="nav"`, `class="bnav"`, `href="/approvals"`, `href="/routines"`, `href="/files"`, `href="/usage"`} {
-		if strings.Contains(body, gone) {
-			t.Fatalf("home still has %s", gone)
+	code, body, _ := h.do(http.MethodGet, "/?list=1", "", ip, nil)
+	if code != http.StatusOK {
+		t.Fatal(code)
+	}
+	for _, page := range []string{chat, body} {
+		for _, gone := range []string{`class="nav"`, `class="bnav"`, `href="/approvals"`, `href="/routines"`, `href="/files"`, `href="/usage"`, "Pick an agent", "Agents that need you show a shield with a count."} {
+			if strings.Contains(page, gone) {
+				t.Fatalf("page still has %s", gone)
+			}
 		}
 	}
-	if !strings.Contains(body, "Pick an agent") || !strings.Contains(body, "Agents that need you show a shield with a count.") {
-		t.Fatalf("missing pick state: %s", body)
+	if !strings.Contains(body, "Alex Rivera") || !strings.Contains(body, "Atlas") {
+		t.Fatal("agent list dropped the account or the agent")
 	}
-	if !strings.Contains(body, "Alex Rivera") {
-		t.Fatal("home dropped the account name")
+	if !strings.Contains(chat, `href="/?list=1"`) || !strings.Contains(chat, `aria-label="Back to agents"`) {
+		t.Fatal("chat back does not open the agent list")
 	}
 }
 

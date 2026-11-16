@@ -505,7 +505,7 @@
 {{template "sidebar" .}}
 <main class="main">
 {{if eq .Page "create"}}{{template "createMain" .}}
-{{else if eq .Page "home"}}{{template "homePick" .}}
+{{else if eq .Page "home"}}
 {{else if eq .Page "chat" "machine" "agent-routines" "agent-files"}}{{template "chatMain" .}}
 {{else if eq .Page "settings"}}{{template "settingsMain" .}}
 {{else if eq .Page "group"}}{{template "groupMain" .}}

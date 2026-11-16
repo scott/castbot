@@ -511,6 +511,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV29(); err != nil {
 		return err
 	}
+	// Version 30 records which of this account's agents was opened or messaged last.
+	if err := s.migrateV30(); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -59,7 +59,7 @@ func shootS27(t *testing.T, browser context.Context, dir string, width, height i
 	page := "/agents/" + scout.ID
 	switch kind {
 	case "list":
-		page = "/"
+		page = "/?list=1"
 	case "advanced":
 		page = "/new-agent?advanced=1"
 	case "edit":

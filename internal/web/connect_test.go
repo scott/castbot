@@ -596,7 +596,7 @@ func useSession(t *testing.T, h *harness, userID, ip string) {
 	}
 	h.csrf = ""
 	h.mu.Unlock()
-	if code, _, _ := h.do(http.MethodGet, "/", "", ip, nil); code != http.StatusOK {
+	if code, _, _ := h.do(http.MethodGet, "/?list=1", "", ip, nil); code != http.StatusOK {
 		t.Fatalf("session %d", code)
 	}
 }
