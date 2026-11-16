@@ -100,6 +100,8 @@ type Server struct {
 	gates       map[string]*sync.Mutex
 	wakeMu      sync.Mutex
 	wakeGates   map[string]*sync.Mutex
+	groupMu     sync.Mutex
+	groupGates  map[string]*sync.Mutex
 
 	// File uploads. Hooks are append-only so another slice can register too.
 	fileMu     sync.Mutex
@@ -154,6 +156,9 @@ func New(st *store.Store, key []byte, client runtime.Client) *Server {
 	// After settleTalk, so a specialist run that just started is still open.
 	s.runs.SetAfterRun(func(job run.Job, status string) {
 		s.settleGrant(job, status)
+	})
+	s.runs.SetAfterRun(func(job run.Job, status string) {
+		s.settleGroupLook(job, status)
 	})
 	s.runs.SetOnPermission(s.denyRoutinePermission)
 	s.runs.SetOnPermission(s.grantPermission)
@@ -342,8 +347,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /groups/new", s.groupNew)
 	mux.HandleFunc("POST /groups", s.groupCreate)
 	mux.HandleFunc("GET /groups/{id}", s.groupShow)
+	mux.HandleFunc("GET /groups/{id}/edit", s.groupEdit)
+	mux.HandleFunc("POST /groups/{id}/edit", s.groupEditSave)
+	mux.HandleFunc("GET /groups/{id}/delete", s.groupDelete)
+	mux.HandleFunc("POST /groups/{id}/delete", s.groupDeleteSave)
+	mux.HandleFunc("POST /groups/{id}/pin", s.groupPin)
+	mux.HandleFunc("POST /groups/{id}/section", s.groupSection)
 	mux.HandleFunc("GET /groups/{id}/feed", s.groupFeed)
 	mux.HandleFunc("POST /groups/{id}/messages", s.groupPost)
+	mux.HandleFunc("POST /sections/{id}/fold", s.sectionFold)
 	mux.HandleFunc("POST /settings/appearance", s.saveTheme)
 	mux.HandleFunc("GET /settings/password", s.passwordForm)
 	mux.HandleFunc("POST /settings/password", s.savePassword)

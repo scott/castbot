@@ -278,8 +278,16 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runs) != 1 || runs[0].ID != queued.ID {
+	if len(runs) != 3 {
 		t.Fatalf("mentionless post started %d runs", len(runs))
+	}
+	for _, row := range runs {
+		if row.ID == queued.ID {
+			continue
+		}
+		if row.UserID != owner.ID || (row.AgentID != atlas.ID && row.AgentID != pip.ID) {
+			t.Fatalf("look run %#v", row)
+		}
 	}
 
 	mention := "@Atlas and @Pip please look"

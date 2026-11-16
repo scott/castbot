@@ -254,6 +254,12 @@ func (s *Server) groupCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	section := strings.TrimSpace(r.FormValue("section"))
+	if section != "" && section != "groups" {
+		if _, err := s.store.GetSection(r.Context(), user.ID, section); s.missing(w, err) {
+			return
+		}
+	}
 	th, err := s.store.CreateGroup(r.Context(), user.ID, r.FormValue("title"), r.Form["agent"], r.Form["member"])
 	if errors.Is(err, store.ErrInvalid) {
 		p, perr := s.groupForm(r, user)
@@ -267,6 +273,11 @@ func (s *Server) groupCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.missing(w, err) {
 		return
+	}
+	if section != "" && section != "groups" {
+		if err := s.store.PlaceGroup(r.Context(), user.ID, th.ID, section); s.missing(w, err) {
+			return
+		}
 	}
 	http.Redirect(w, r, "/groups/"+url.PathEscape(th.ID), http.StatusSeeOther)
 }
@@ -336,6 +347,22 @@ func (s *Server) groupPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
+	if ask, isAsk := store.ParseGroupAsk(msg.Body); isAsk && len(store.MentionedAgents(agents, msg.Body)) == 0 {
+		note, path := s.applyGroupAsk(r, user, th, ask)
+		if path == "" {
+			path = "/groups/" + url.PathEscape(threadID)
+			if note != "" {
+				path += "?ask=" + url.QueryEscape(note)
+			}
+		}
+		if r.Header.Get("HX-Request") == "true" {
+			w.Header().Set("HX-Redirect", path)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.Redirect(w, r, path, http.StatusSeeOther)
+		return
+	}
 	s.startGroupReplies(r.Context(), th, msg, agents)
 	if r.Header.Get("HX-Request") == "true" {
 		p, err := s.groupPage(r, user, threadID)
@@ -358,8 +385,17 @@ func (s *Server) groupPage(r *http.Request, user store.User, threadID string) (p
 	if err != nil {
 		return page{}, err
 	}
-	for i := range p.Groups {
-		p.Groups[i].On = p.Groups[i].ID == th.ID
+	markGroup(&p, th.ID)
+	cards, err := s.store.ListGroupCards(r.Context(), user.ID)
+	if err != nil {
+		return page{}, err
+	}
+	var card store.GroupCard
+	for _, row := range cards {
+		if row.ID == th.ID {
+			card = row
+			break
+		}
 	}
 	agents, err := s.store.GroupAgents(r.Context(), user.ID, th.ID)
 	if err != nil {
@@ -381,33 +417,39 @@ func (s *Server) groupPage(r *http.Request, user store.User, threadID string) (p
 	p.Page = "group"
 	p.Title = th.Title
 	p.Messages = presentGroup(msgs, agents, humans, s.store.Now(), loc)
-	p.Group = groupPage{ID: th.ID, Title: th.Title, Who: groupWho(agents, humans), Poll: open}
+	p.Group = groupPage{
+		ID: th.ID, Title: th.Title, Who: groupWho(agents, humans), Poll: open,
+		Owner: th.UserID == user.ID, Pinned: card.Pinned, SectionID: card.SectionID,
+		Note: askSentence(r.URL.Query().Get("ask"), sectionName(p, card.SectionID)),
+	}
 	return p, nil
 }
 
-func (s *Server) startGroupReplies(ctx context.Context, th store.Thread, visible store.Message, agents []store.Agent) {
-	mentioned := store.MentionedAgents(agents, visible.Body)
-	for _, agent := range mentioned {
-		agent := agent
-		s.withAgent(agent.ID, func() {
-			link, err := s.store.CreateOriginMessage(ctx, th.UserID, th.ID, "user", visible.AuthorID, visible.Body, "mention")
-			if err != nil {
-				return
-			}
-			busy, _ := s.store.AgentBusy(ctx, th.UserID, agent.ID)
-			created, err := s.store.CreateRun(ctx, th.UserID, th.ID, agent.ID)
-			if err != nil {
-				return
-			}
-			if err := s.store.SetMessageRun(ctx, th.UserID, link.ID, created.ID); err != nil {
-				return
-			}
-			if busy {
-				return
-			}
-			s.runs.Start(runJob(th.UserID, th.ID, agent.ID, created.ID, visible.ID, visible.Body, th.CastSessionID, s.priorTurns(ctx, th.UserID, th.ID, visible.ID)))
-		})
+func markGroup(p *page, id string) {
+	for i := range p.Groups {
+		p.Groups[i].On = p.Groups[i].ID == id
 	}
+	for i := range p.Sections {
+		for j := range p.Sections[i].Groups {
+			p.Sections[i].Groups[j].On = p.Sections[i].Groups[j].ID == id
+		}
+	}
+}
+
+func sectionName(p page, id string) string {
+	if id == "" {
+		return ""
+	}
+	for _, sec := range p.Sections {
+		if sec.ID == id {
+			return sec.Name
+		}
+	}
+	return ""
+}
+
+func (s *Server) startGroupReplies(ctx context.Context, th store.Thread, visible store.Message, agents []store.Agent) {
+	s.fanGroup(ctx, th, visible, agents, true, "")
 }
 
 func groupWho(agents []store.Agent, humans []store.User) string {
@@ -455,7 +497,7 @@ func presentGroup(msgs []store.Message, agents []store.Agent, humans []store.Use
 	var out []msgView
 	prev := ""
 	for _, m := range msgs {
-		if m.Origin == "mention" || m.Origin == "setup" || m.Origin == "relay" {
+		if m.Origin == "mention" || m.Origin == "look" || m.Origin == "pass" || m.Origin == "setup" || m.Origin == "relay" {
 			continue
 		}
 		day := dayLabel(m.CreatedAt, now, loc)

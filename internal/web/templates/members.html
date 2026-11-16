@@ -34,7 +34,12 @@
 
 {{define "groupMain"}}
 <header class="ph-top ph-only"><a class="ibtn" href="/" aria-label="Back">{{template "backsvg" .}}</a><span class="t">{{.Group.Title}}</span></header>
-<div class="page-h"><div class="grow"><h1 class="dt-only">{{.Group.Title}}</h1><p class="sub">{{.Group.Who}} Mention an agent with @Name and that agent replies here.</p></div></div>
+<div class="page-h"><div class="grow"><h1 class="dt-only">{{.Group.Title}}</h1><p class="sub">{{.Group.Who}} Agents here can reply. Mention one with @Name when you want that agent to reply.</p>{{if .Group.Note}}<p class="ask" role="status">{{.Group.Note}}</p>{{end}}</div>
+<div class="right group-acts">
+<form method="post" action="/groups/{{.Group.ID}}/pin"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">{{if .Group.Pinned}}Unpin{{else}}Pin{{end}}</button></form>
+<form class="place" method="post" action="/groups/{{.Group.ID}}/section"><input type="hidden" name="csrf" value="{{.CSRF}}"><select class="sel" name="section" aria-label="Section"><option value="groups"{{if not .Group.SectionID}} selected{{end}}>Groups</option>{{range .Sections}}<option value="{{.ID}}"{{if eq .ID $.Group.SectionID}} selected{{end}}>{{.Name}}</option>{{end}}</select><button class="btn sm" type="submit">Move</button></form>
+{{if .Group.Owner}}<a class="btn sm" href="/groups/{{.Group.ID}}/edit">Edit</a><a class="btn sm danger-ghost" href="/groups/{{.Group.ID}}/delete">Delete</a>{{end}}
+</div></div>
 <div class="ch-body">{{template "groupFeed" .}}</div>
 <div class="comp-wrap"><form class="comp" id="composer" method="post" action="/groups/{{.Group.ID}}/messages" hx-post="/groups/{{.Group.ID}}/messages" hx-target="#group-feed" hx-swap="outerHTML">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -45,15 +50,50 @@
 
 {{define "groupNew"}}
 <header class="ph-top ph-only"><a class="ibtn" href="/" aria-label="Back">{{template "backsvg" .}}</a><span class="t">New group</span></header>
-<div class="page-h"><div><h1 class="dt-only">New group</h1><p class="sub">A group holds several of your agents. Mention one with @Name and that agent replies.</p></div></div>
-<div class="page-b"><form method="post" action="/groups">
+<div class="page-h"><div><h1 class="dt-only">New group</h1><p class="sub">A group holds several of your agents. They can reply on their own. Mention one with @Name when you want that agent to reply.</p></div></div>
+<div class="page-b">
+{{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
+{{if lt (len .Group.Agents) 2}}<p class="muted">A group needs at least two of your agents.</p><a class="btn" href="/">Cancel</a>{{else}}
+<form method="post" action="/groups">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<div class="field"><span class="lab">Title</span><div class="inp"><input name="title" maxlength="80" aria-label="Title" required></div></div>
+<div class="field"><span class="lab">Section</span><p class="help">This places the group in your sidebar only.</p><select class="sel" name="section" aria-label="Section"><option value="groups" selected>Groups</option>{{range .Sections}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></div>
+<div class="field"><span class="lab">Agents</span>{{range .Group.Agents}}<label class="check"><input class="vh" type="checkbox" name="agent" value="{{.ID}}"{{if .Checked}} checked{{end}}><span class="box">{{template "checksvg" .}}</span>{{.Name}}</label>{{end}}</div>
+{{if .Members}}<div class="field"><span class="lab">People</span><p class="help">Checked people can read this chat and post in it.</p>{{range .Members}}<label class="check"><input class="vh" type="checkbox" name="member" value="{{.ID}}"{{if .Checked}} checked{{end}}><span class="box">{{template "checksvg" .}}</span>{{.Name}}</label>{{end}}</div>{{end}}
+<div class="acts"><button class="btn pri" type="submit">Create group</button> <a class="btn" href="/">Cancel</a></div>
+</form>
+{{end}}
+</div>
+{{end}}
+
+{{define "groupEdit"}}
+<header class="ph-top ph-only"><a class="ibtn" href="/groups/{{.Group.ID}}" aria-label="Back">{{template "backsvg" .}}</a><span class="t">Edit group</span></header>
+<div class="page-h"><div><h1 class="dt-only">Edit group</h1><p class="sub">You stay in this group.</p></div></div>
+<div class="page-b"><form method="post" action="/groups/{{.Group.ID}}/edit">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 {{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
-{{if lt (len .Group.Agents) 2}}<p class="muted">A group needs at least two of your agents.</p>{{else}}
-<div class="field"><span class="lab">Title</span><div class="inp"><input name="title" maxlength="80" aria-label="Title" required></div></div>
-<div class="field"><span class="lab">Agents</span>{{range .Group.Agents}}<label class="check"><input class="vh" type="checkbox" name="agent" value="{{.ID}}"><span class="box">{{template "checksvg" .}}</span>{{.Name}}</label>{{end}}</div>
-{{if .Members}}<div class="field"><span class="lab">People</span><p class="help">Checked people can read this chat and post in it.</p>{{range .Members}}<label class="check"><input class="vh" type="checkbox" name="member" value="{{.ID}}"><span class="box">{{template "checksvg" .}}</span>{{.Name}}</label>{{end}}</div>{{end}}
-<button class="btn pri" type="submit">Create group</button>
-{{end}}
+{{if .Group.Note}}<div class="banner" role="status"><span class="grow">{{.Group.Note}}</span></div>{{end}}
+<div class="field"><span class="lab">Title</span><div class="inp"><input name="title" maxlength="80" aria-label="Title" value="{{.Group.Title}}" required></div></div>
+<div class="field"><span class="lab">Agents</span>{{range .Group.Agents}}<label class="check"><input class="vh" type="checkbox" name="agent" value="{{.ID}}"{{if .Checked}} checked{{end}}><span class="box">{{template "checksvg" .}}</span>{{.Name}}</label>{{end}}</div>
+{{if .Members}}<div class="field"><span class="lab">People</span><p class="help">Checked people can read this chat and post in it.</p>{{range .Members}}<label class="check"><input class="vh" type="checkbox" name="member" value="{{.ID}}"{{if .Checked}} checked{{end}}><span class="box">{{template "checksvg" .}}</span>{{.Name}}</label>{{end}}</div>{{end}}
+<div class="acts"><button class="btn pri" type="submit">Save</button> <a class="btn" href="/groups/{{.Group.ID}}">Cancel</a></div>
 </form></div>
+{{end}}
+
+{{define "groupDelete"}}
+<header class="ph-top ph-only"><a class="ibtn" href="/groups/{{.Group.ID}}" aria-label="Back">{{template "backsvg" .}}</a><span class="t">Delete group</span></header>
+<div class="page-h"><div><h1 class="dt-only">Delete {{.Group.Title}}</h1></div></div>
+<div class="page-b">
+{{if .Group.Busy}}
+<p>Wait until the reply finishes.</p>
+<a class="btn" href="/groups/{{.Group.ID}}">Back</a>
+{{else}}
+<p>Delete {{.Group.Title}}? The chat is removed for everyone. The agents are kept.</p>
+<form method="post" action="/groups/{{.Group.ID}}/delete">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<input type="hidden" name="confirm" value="{{.Group.ConfirmID}}">
+<div class="acts"><button class="btn danger" type="submit">Delete group</button> <a class="btn" href="/groups/{{.Group.ID}}">Cancel</a></div>
+</form>
+{{end}}
+</div>
 {{end}}

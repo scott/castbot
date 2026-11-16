@@ -127,8 +127,21 @@ func (e *Echo) Starts() int {
 	return e.starts
 }
 
+// GroupLookMark is the prefix on a group look. A look replies only when
+// the agent has something to add. GroupLookPass is the silent reply.
+const (
+	GroupLookMark = "[[group-look]]"
+	GroupLookPass = "PASS"
+)
+
 // EchoText is the Cast echo-mode reply for a user message.
 func EchoText(name, message string) string {
+	if strings.Contains(message, GroupLookMark) {
+		if strings.Contains(strings.ToLower(message), "quiet") {
+			return GroupLookPass
+		}
+		return name + " has something to add."
+	}
 	lower := strings.ToLower(message)
 	switch lower {
 	case "hi", "hello", "hey":

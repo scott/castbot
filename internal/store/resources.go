@@ -195,6 +195,12 @@ func (s *Store) DeleteSection(ctx context.Context, userID, id string) error {
 	if n > 0 {
 		return ErrConflict
 	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM group_places WHERE user_id = ? AND section_id = ?`, userID, id); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM section_folds WHERE user_id = ? AND section_key = ?`, userID, id); err != nil {
+		return err
+	}
 	res, err := s.db.ExecContext(ctx, `DELETE FROM sections WHERE id = ? AND user_id = ?`, id, userID)
 	if err != nil {
 		return err
