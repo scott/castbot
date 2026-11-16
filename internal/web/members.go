@@ -295,6 +295,19 @@ func (s *Server) groupShow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
+	if r.URL.Query().Get("panel") == "group" || panelPartial(r) {
+		if err := s.attachGroupPanel(r, user, &p); err != nil {
+			if s.missing(w, err) {
+				return
+			}
+			http.Error(w, "Error", http.StatusInternalServerError)
+			return
+		}
+	}
+	if panelPartial(r) {
+		s.render(w, http.StatusOK, "groupPane", p)
+		return
+	}
 	s.render(w, http.StatusOK, "app", finish(p))
 }
 
@@ -420,7 +433,8 @@ func (s *Server) groupPage(r *http.Request, user store.User, threadID string) (p
 	p.Group = groupPage{
 		ID: th.ID, Title: th.Title, Who: groupWho(agents, humans), Poll: open,
 		Owner: th.UserID == user.ID, Pinned: card.Pinned, SectionID: card.SectionID,
-		Note: askSentence(r.URL.Query().Get("ask"), sectionName(p, card.SectionID)),
+		Letter: letter(th.Title),
+		Note:   askSentence(r.URL.Query().Get("ask"), sectionName(p, card.SectionID)),
 	}
 	return p, nil
 }

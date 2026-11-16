@@ -143,7 +143,7 @@ func TestGroupControlsAsksAndReplies(t *testing.T) {
 	}
 	advance(time.Second)
 	code, _, hdr = h.do(http.MethodPost, "/groups/"+planID+"/pin", h.form(nil), ip, nil)
-	if code != http.StatusSeeOther || hdr.Get("Location") != "/groups/"+planID {
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/groups/"+planID+"?panel=group" {
 		t.Fatalf("pin %d %s", code, hdr.Get("Location"))
 	}
 	advance(time.Second)
@@ -158,8 +158,16 @@ func TestGroupControlsAsksAndReplies(t *testing.T) {
 		t.Fatalf("unpin %d", code)
 	}
 	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID, "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, ">Unpin<") || !strings.Contains(body, ">Edit<") || !strings.Contains(body, ">Delete<") || !strings.Contains(body, "Agents here can reply.") || strings.Contains(body, "Mention an agent with @Name and that agent replies here.") {
+	if code != http.StatusOK || !strings.Contains(body, `aria-label="Group panel"`) || !strings.Contains(body, `id="agent-panel"`) || !strings.Contains(body, "Agents here can reply.") || strings.Contains(body, "Mention an agent with @Name and that agent replies here.") || strings.Contains(body, `name="section"`) || strings.Contains(body, ">Unpin<") {
 		t.Fatalf("group actions %d", code)
+	}
+	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID+"?panel=group", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, ">Unpin<") || !strings.Contains(body, `name="section"`) || !strings.Contains(body, `name="agent"`) || !strings.Contains(body, `value="`+atlas.ID+`" checked`) || !strings.Contains(body, `href="/groups/`+groupID+`/delete"`) || strings.Contains(body, ">Edit<") {
+		t.Fatalf("group panel %d", code)
+	}
+	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID+"?panel=group", "", ip, map[string]string{"HX-Request": "true", "HX-Target": "agent-panel"})
+	if code != http.StatusOK || strings.Contains(body, `id="composer"`) || !strings.Contains(body, `id="agent-panel"`) || !strings.Contains(body, `name="agent"`) || !strings.Contains(body, ">Unpin<") {
+		t.Fatalf("group panel partial %d", code)
 	}
 
 	h.logout(ip)
@@ -167,6 +175,10 @@ func TestGroupControlsAsksAndReplies(t *testing.T) {
 	code, body, _ = h.do(http.MethodGet, "/?list=1", "", ip, nil)
 	if code != http.StatusOK || strings.Count(body, `/groups/`+groupID) != 1 || strings.Contains(body, ">Pinned</span>") || strings.Contains(body, "/groups/"+planID) {
 		t.Fatal("member sidebar followed the owner")
+	}
+	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID+"?panel=group", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, ">Pin<") || !strings.Contains(body, `name="section"`) || !strings.Contains(body, "In this group") || strings.Contains(body, `name="agent"`) || strings.Contains(body, `href="/groups/`+groupID+`/delete"`) || strings.Contains(body, ">Save<") {
+		t.Fatalf("member panel %d", code)
 	}
 	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID+"/edit", "", ip, nil)
 	if code != http.StatusNotFound {
@@ -266,7 +278,7 @@ func TestGroupControlsAsksAndReplies(t *testing.T) {
 		t.Fatal("busy save changed the title")
 	}
 	code, _, hdr = h.do(http.MethodPost, "/groups/"+groupID+"/edit", h.form(url.Values{"title": {"Forum"}, "agent": {atlas.ID, moss.ID}, "member": {member.ID}}), ip, nil)
-	if code != http.StatusSeeOther || hdr.Get("Location") != "/groups/"+groupID {
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/groups/"+groupID+"?panel=group" {
 		t.Fatalf("save %d %s", code, hdr.Get("Location"))
 	}
 	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID, "", ip, nil)

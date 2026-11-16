@@ -122,9 +122,11 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .sec h4 button.fold:hover { background: var(--hover); color: var(--tx); }
 .sec h4 button.fold .i { transform: rotate(90deg); }
 .sec h4 button.fold.shut .i { transform: none; }
-.group-acts { flex-wrap: wrap; align-items: center; }
-.group-acts form { display: flex; gap: 8px; align-items: center; min-width: 0; }
-.group-acts select.sel { width: auto; min-width: 7.5rem; max-width: 12rem; height: 34px; }
+.group-intro { padding: 12px 20px 0; }
+.group-intro .sub { margin: 0; color: var(--tx2); font-size: 14px; }
+.group-pane form { display: grid; gap: 10px; }
+.group-pane h3 { margin: 0; font: 650 16px var(--hd); }
+.group-pane .selwrap { width: 100%; }
 .ask { margin: 8px 0 0; color: var(--tx2); font-size: 14px; }
 .ag { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 10px; min-height: 48px; }
 .ag:hover { background: var(--hover); }
@@ -596,8 +598,7 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
   .page-h h1 { font-size: 22px; }
   .page-h .right { margin-left: 0; width: 100%; }
   .page-h .right .btn { flex: 1; }
-  .group-acts form.place { flex: 1 1 100%; }
-  .group-acts select.sel { max-width: none; height: 44px; flex: 1; min-width: 0; }
+  .group-intro { padding: 10px 14px 0; }
   .sec h4 button.fold { width: 44px; height: 44px; }
   .page-b { padding: 0 12px 20px; }
   .ph-top { display: flex; align-items: center; gap: 6px; padding: 6px 8px; min-height: 56px; position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }

@@ -515,8 +515,6 @@
 {{else if eq .Page "settings"}}{{template "settingsMain" .}}
 {{else if eq .Page "group"}}{{template "groupMain" .}}
 {{else if eq .Page "group-new"}}{{template "groupNew" .}}
-{{else if eq .Page "group-edit"}}{{template "groupEdit" .}}
-{{else if eq .Page "group-delete"}}{{template "groupDelete" .}}
 {{else if eq .Page "secrets"}}{{template "vaultMain" .}}
 {{else if eq .Page "connections"}}{{template "connectionsMain" .}}
 {{else if eq .Page "first"}}{{template "firstMain" .}}
@@ -524,8 +522,8 @@
 {{else if eq .Page "new" "edit"}}{{template "agentForm" .}}
 {{else}}{{template "stubMain" .}}{{end}}
 </main>
-{{if .Pane}}<a class="peek ph-only" href="/agents/{{.Agent.ID}}" data-close-panel aria-label="Close panel and return to chat"></a>{{end}}
-{{if eq .Panel "files"}}{{template "filesPane" .}}{{else if eq .Panel "routines"}}{{template "routinesPane" .}}{{else if or (eq .Panel "secrets") .Vault.Panel}}{{template "secretPanel" .}}{{else if eq .Panel "machine"}}{{template "machinePane" .}}{{else if eq .Panel "approvals"}}{{template "approvalsPane" .}}{{else if eq .Panel "agent"}}{{template "agentPane" .}}{{else if .HasAgent}}<aside id="agent-panel" hidden></aside>{{end}}
+{{if .Pane}}<a class="peek ph-only" href="{{if eq .Page "group"}}/groups/{{.Group.ID}}{{else}}/agents/{{.Agent.ID}}{{end}}" data-close-panel aria-label="Close panel and return to chat"></a>{{end}}
+{{if eq .Panel "group"}}{{template "groupPane" .}}{{else if eq .Panel "files"}}{{template "filesPane" .}}{{else if eq .Panel "routines"}}{{template "routinesPane" .}}{{else if or (eq .Panel "secrets") .Vault.Panel}}{{template "secretPanel" .}}{{else if eq .Panel "machine"}}{{template "machinePane" .}}{{else if eq .Panel "approvals"}}{{template "approvalsPane" .}}{{else if eq .Panel "agent"}}{{template "agentPane" .}}{{else if or .HasAgent (eq .Page "group")}}<aside id="agent-panel" hidden></aside>{{end}}
 </div>
 <div id="toasts">{{template "toastList" .}}</div>
 {{if .Vault.Drawer}}{{template "vaultDrawer" .}}{{end}}

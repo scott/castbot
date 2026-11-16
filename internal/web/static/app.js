@@ -388,12 +388,29 @@ function restoreScroll() {
   }
 }
 
+function onGroupChat() {
+  return /^\/groups\/[^/]+$/.test(location.pathname);
+}
+
+function agentPanelTab() {
+  var tab = storeGet("castbot.panelTab") || "agent";
+  if (!tab || tab === "closed" || tab === "group") {
+    return "agent";
+  }
+  return tab;
+}
+
 function panelOpen() {
   var panel = document.getElementById("agent-panel");
   return !!(panel && !panel.hidden && panel.classList.contains("s19pane"));
 }
 
 function chatURL() {
+  var path = location.pathname;
+  var groupForm = path.match(/^\/groups\/([^/]+)\/(?:edit|delete)$/);
+  if (groupForm) {
+    path = "/groups/" + groupForm[1];
+  }
   var q = new URLSearchParams(location.search);
   q.delete("panel");
   q.delete("routine");
@@ -402,7 +419,8 @@ function chatURL() {
   q.delete("view");
   q.delete("give");
   q.delete("revoke");
-  var next = location.pathname;
+  q.delete("confirm");
+  var next = path;
   if (q.toString()) {
     next += "?" + q.toString();
   }
@@ -432,21 +450,20 @@ function bootPanel() {
     return;
   }
   var onAgent = /^\/agents\/[^/]+$/.test(location.pathname);
+  var onGroup = onGroupChat();
   var panel = q.get("panel");
-  if (onAgent && !panel) {
+  if ((onAgent || onGroup) && !panel) {
     var wide = window.matchMedia && window.matchMedia("(min-width: 1280px)").matches;
     var pref = storeGet("castbot.panel");
     if (wide && pref !== "closed") {
-      var tab = storeGet("castbot.panelTab") || "agent";
-      if (!tab || tab === "closed") {
-        tab = "agent";
-      }
-      window.__castbotOpen = tab;
+      window.__castbotOpen = onGroup ? "group" : agentPanelTab();
     }
   }
   if (panel) {
     storeSet("castbot.panel", "open");
-    storeSet("castbot.panelTab", panel);
+    if (panel !== "group") {
+      storeSet("castbot.panelTab", panel);
+    }
     armPanelHistory();
   }
 }
@@ -520,7 +537,9 @@ function openDefaultPanel() {
   window.htmx.ajax("GET", url, { target: "#agent-panel", swap: "outerHTML" });
   history.pushState({ castbotPanel: true }, "", url);
   storeSet("castbot.panel", "open");
-  storeSet("castbot.panelTab", tab);
+  if (tab !== "group") {
+    storeSet("castbot.panelTab", tab);
+  }
 }
 
 function rememberView() {
@@ -632,6 +651,14 @@ function focusPanelTab(panel) {
   var tab = panel.querySelector(".ptabs a.on") || panel.querySelector(".ptabs a");
   if (tab) {
     tab.focus();
+    return;
+  }
+  var items = panel.querySelectorAll("a, button, input, select, textarea");
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].offsetParent !== null) {
+      items[i].focus();
+      return;
+    }
   }
 }
 
@@ -647,7 +674,10 @@ function armPanelLinks(root) {
       continue;
     }
     var href = a.getAttribute("href") || "";
-    if (href.charAt(0) === "#" || href.indexOf("/agents/") !== 0 || href.indexOf("panel=") < 0) {
+    if (href.charAt(0) === "#" || href.indexOf("panel=") < 0) {
+      continue;
+    }
+    if (href.indexOf("/agents/") !== 0 && href.indexOf("/groups/") !== 0) {
       continue;
     }
     a.setAttribute("hx-get", href);
@@ -811,10 +841,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
   var tog = document.querySelector("[data-panel-toggle]");
   if (tog && !panelOpen()) {
-    var tab = storeGet("castbot.panelTab") || "agent";
-    if (!tab || tab === "closed") {
-      tab = "agent";
-    }
+    var tab = onGroupChat() ? "group" : agentPanelTab();
     var url = new URL(tog.getAttribute("href"), location.origin);
     url.searchParams.set("panel", tab);
     var next = url.pathname + url.search;
@@ -895,7 +922,9 @@ document.addEventListener("DOMContentLoaded", function () {
     var panelName = new URL(href || location.href, location.origin).searchParams.get("panel");
     if (panelName) {
       storeSet("castbot.panel", "open");
-      storeSet("castbot.panelTab", panelName);
+      if (panelName !== "group") {
+        storeSet("castbot.panelTab", panelName);
+      }
     }
     focusPanelTab(panel);
   });

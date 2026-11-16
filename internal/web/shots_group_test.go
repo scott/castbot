@@ -101,7 +101,7 @@ func shootGroup(t *testing.T, browser context.Context, dir, base, session, group
 	switch kind {
 	case "group":
 		page = base + "/groups/" + groupID
-		needle = `(function(){var t=document.body.innerText||'';var sel=document.querySelector('select[name="section"]');return t.indexOf('Unpin')>=0&&t.indexOf('Edit')>=0&&t.indexOf('Delete')>=0&&t.indexOf('Move')>=0&&t.indexOf('Agents here can reply.')>=0&&t.indexOf('Mention one with @Name when you want that agent to reply.')>=0&&t.indexOf('What should we cover today?')>=0&&t.indexOf('I can take the first pass.')>=0&&t.indexOf('Mention an agent with @Name and that agent replies here.')<0&&!!sel&&sel.value!=='groups'&&t.indexOf('\u2014')<0;})()`
+		needle = `(function(){var t=document.body.innerText||'';var sel=document.querySelector('#agent-panel select[name="section"]');var tog=document.querySelector('[aria-label="Group panel"]');var boxes=document.querySelectorAll('#agent-panel input[name="agent"]');return !!tog&&t.indexOf('Unpin')>=0&&t.indexOf('Delete group')>=0&&t.indexOf('Move')>=0&&t.indexOf('Section')>=0&&t.indexOf('Agents here can reply.')>=0&&t.indexOf('Mention one with @Name when you want that agent to reply.')>=0&&t.indexOf('What should we cover today?')>=0&&t.indexOf('I can take the first pass.')>=0&&t.indexOf('Mention an agent with @Name and that agent replies here.')<0&&!!sel&&sel.value!=='groups'&&boxes.length>=2&&t.indexOf('\u2014')<0;})()`
 	case "edit":
 		page = base + "/groups/" + groupID + "/edit"
 		needle = `(function(){var t=document.body.innerText||'';var title=document.querySelector('input[name="title"]');var boxes=document.querySelectorAll('input[name="agent"]:checked');return t.indexOf('Edit group')>=0&&t.indexOf('You stay in this group.')>=0&&t.indexOf('Cancel')>=0&&t.indexOf('Save')>=0&&!!title&&title.value==='Standup'&&boxes.length>=2&&t.indexOf('\u2014')<0;})()`
@@ -115,6 +115,11 @@ func shootGroup(t *testing.T, browser context.Context, dir, base, session, group
 	ctx := tab(t, browser)
 	if err := chromedp.Run(ctx, cliOpen(t, base, session, page, width, height)...); err != nil {
 		t.Fatalf("open %s: %v", kind, err)
+	}
+	if kind == "group" && width < 800 {
+		if err := chromedp.Run(ctx, chromedp.Click(`[aria-label="Group panel"]`, chromedp.ByQuery)); err != nil {
+			t.Fatalf("open group panel: %v", err)
+		}
 	}
 	if err := chromedp.Run(ctx, shotPoll(t, "105 "+kind, js(needle))); err != nil {
 		var text string

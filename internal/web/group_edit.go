@@ -202,7 +202,7 @@ func (s *Server) groupEditSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/groups/"+url.PathEscape(id), http.StatusSeeOther)
+	http.Redirect(w, r, groupPanelPath(id), http.StatusSeeOther)
 }
 
 func (s *Server) groupEditor(r *http.Request, user store.User, threadID string) (page, error) {
@@ -213,38 +213,105 @@ func (s *Server) groupEditor(r *http.Request, user store.User, threadID string) 
 	if th.UserID != user.ID {
 		return page{}, store.ErrNotFound
 	}
-	p, err := s.groupForm(r, user)
+	p, err := s.groupPage(r, user, threadID)
 	if err != nil {
 		return page{}, err
 	}
-	agents, err := s.store.GroupAgents(r.Context(), user.ID, th.ID)
-	if err != nil {
+	if err := s.fillOwnerGroup(r, user, &p); err != nil {
 		return page{}, err
 	}
-	humans, err := s.store.GroupHumans(r.Context(), user.ID, th.ID)
+	p.Panel = "group"
+	p.Pane = true
+	return p, nil
+}
+
+func (s *Server) attachGroupPanel(r *http.Request, user store.User, p *page) error {
+	p.Panel = "group"
+	p.Pane = true
+	p.Group.Letter = letter(p.Group.Title)
+	if p.Group.Owner {
+		return s.fillOwnerGroup(r, user, p)
+	}
+	return s.fillGroupRoster(r, user, p)
+}
+
+func (s *Server) fillOwnerGroup(r *http.Request, user store.User, p *page) error {
+	ctx := r.Context()
+	inGroup, err := s.store.GroupAgents(ctx, user.ID, p.Group.ID)
 	if err != nil {
-		return page{}, err
+		return err
 	}
 	inAgent := map[string]bool{}
-	for _, agent := range agents {
+	for _, agent := range inGroup {
 		inAgent[agent.ID] = true
+	}
+	agents, err := s.store.ListAgents(ctx, user.ID)
+	if err != nil {
+		return err
+	}
+	loc := userLocation(user.Timezone)
+	var views []agentView
+	for _, agent := range agents {
+		if agent.Status == "deleted" {
+			continue
+		}
+		view := presentAgent(agent, false, loc)
+		view.Checked = inAgent[agent.ID]
+		views = append(views, view)
+	}
+	p.Group.Agents = views
+	humans, err := s.store.GroupHumans(ctx, user.ID, p.Group.ID)
+	if err != nil {
+		return err
 	}
 	inHuman := map[string]bool{}
 	for _, person := range humans {
 		inHuman[person.ID] = true
 	}
-	for i := range p.Group.Agents {
-		p.Group.Agents[i].Checked = inAgent[p.Group.Agents[i].ID]
+	people, err := s.store.ListMembers(ctx, user.ID)
+	if err != nil {
+		return err
 	}
-	for i := range p.Members {
-		p.Members[i].Checked = inHuman[p.Members[i].ID]
+	var members []memberView
+	for _, person := range people {
+		if person.ID == user.ID {
+			continue
+		}
+		members = append(members, memberView{
+			ID: person.ID, Name: person.DisplayName, Email: person.Email,
+			Role: memberRole(person.Role), Checked: inHuman[person.ID],
+		})
 	}
-	p.Page = "group-edit"
-	p.Title = "Edit group"
-	p.Group.ID = th.ID
-	p.Group.Title = th.Title
-	p.Group.Owner = true
-	return p, nil
+	p.Members = members
+	return nil
+}
+
+func (s *Server) fillGroupRoster(r *http.Request, user store.User, p *page) error {
+	ctx := r.Context()
+	agents, err := s.store.GroupAgents(ctx, user.ID, p.Group.ID)
+	if err != nil {
+		return err
+	}
+	loc := userLocation(user.Timezone)
+	var views []agentView
+	for _, agent := range agents {
+		views = append(views, presentAgent(agent, false, loc))
+	}
+	p.Group.Agents = views
+	humans, err := s.store.GroupHumans(ctx, user.ID, p.Group.ID)
+	if err != nil {
+		return err
+	}
+	var members []memberView
+	for _, person := range humans {
+		members = append(members, memberView{ID: person.ID, Name: person.DisplayName})
+	}
+	p.Members = members
+	return nil
+}
+
+func groupPanelPath(id string) string {
+	return "/groups/" + url.PathEscape(id) + "?panel=group"
 }
 
 func (s *Server) groupDelete(w http.ResponseWriter, r *http.Request) {
@@ -343,8 +410,9 @@ func (s *Server) groupDeletePage(r *http.Request, user store.User, threadID stri
 	if err != nil {
 		return page{}, err
 	}
-	p.Page = "group-delete"
-	p.Title = "Delete " + th.Title
+	p.Panel = "group"
+	p.Pane = true
+	p.Group.Confirming = true
 	p.Group.Busy = open
 	p.Group.Owner = true
 	if open {
@@ -415,7 +483,7 @@ func (s *Server) sectionFold(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) backGroup(w http.ResponseWriter, r *http.Request, id string) {
-	target := "/groups/" + url.PathEscape(id)
+	target := groupPanelPath(id)
 	if r.Header.Get("HX-Request") == "true" {
 		w.Header().Set("HX-Redirect", target)
 		w.WriteHeader(http.StatusNoContent)

@@ -91,9 +91,9 @@ type groupLink struct {
 }
 
 type groupPage struct {
-	ID, Title, Who, Note, ConfirmID, SectionID string
-	Poll, Owner, Pinned, Busy                  bool
-	Agents                                     []agentView
+	ID, Title, Who, Note, ConfirmID, SectionID, Letter string
+	Poll, Owner, Pinned, Busy, Confirming              bool
+	Agents                                             []agentView
 }
 
 type cliTokView struct {
@@ -300,10 +300,13 @@ func finish(p page) page {
 		if p.Replace.Confirm || p.Replace.RollbackConfirm {
 			p.BodyClass += " p-confirm"
 		}
-	case "settings", "password", "stub", "new", "edit", "connections", "group-new", "group-edit", "group-delete":
+	case "settings", "password", "stub", "new", "edit", "connections", "group-new":
 		p.BodyClass = "p-main no-bnav"
 	case "group":
 		p.BodyClass = "p-chat"
+		if p.Pane || p.Panel != "" {
+			p.BodyClass += " p-slide"
+		}
 	case "approvals", "routines", "files", "usage":
 		p.BodyClass = "p-main"
 		p.ShowNav = true
