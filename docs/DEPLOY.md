@@ -60,7 +60,7 @@ The schema version is `SELECT COALESCE(MAX(version),0) FROM schema_migrations`. 
 
 A line is appended to the local deploy log in America/Denver time with the commit, the backup id, and the result. The log is gitignored.
 
-The backup directory holds `castbot.db` plus a `RECORD` file with the sha256, `schema_version`, and the integrity result. Backups are never deleted. The env file is never copied.
+The backup directory holds `castbot.db`, a `files/` directory when `<app>/data/files` exists, and a `RECORD` file. `RECORD` has the sha256, `schema_version`, the integrity result, `files`, and `files_sha256`. `files_sha256` is the sha256 of the sorted lines `<name> <size>`. Only regular files whose names are the sha256 of their bytes are copied. A partial upload and a file whose name does not match its bytes are skipped. Backups are never deleted. The env file is never copied. Machine memory that lives only on a machine is not in this backup.
 
 Journal output is a count only. Matching lines are not printed.
 

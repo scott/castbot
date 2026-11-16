@@ -503,6 +503,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV27(); err != nil {
 		return err
 	}
+	// Version 28 is the previous runtime kept after a memory-copying move.
+	if err := s.migrateV28(); err != nil {
+		return err
+	}
 	return nil
 }
 

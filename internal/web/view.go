@@ -248,7 +248,7 @@ func finish(p page) page {
 		if p.Vault.ModalOpen {
 			p.BodyClass += " p-modal"
 		}
-		if p.Replace.Confirm {
+		if p.Replace.Confirm || p.Replace.RollbackConfirm {
 			p.BodyClass += " p-confirm"
 		}
 		p.Tab = "chat"
@@ -262,7 +262,7 @@ func finish(p page) page {
 		}
 	case "machine", "agent-routines", "agent-files":
 		p.BodyClass = "p-chat"
-		if p.Replace.Confirm {
+		if p.Replace.Confirm || p.Replace.RollbackConfirm {
 			p.BodyClass += " p-confirm"
 		}
 	case "settings", "password", "stub", "new", "edit", "connections":

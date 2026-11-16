@@ -709,8 +709,9 @@ func (s *Store) FinishReplacement(ctx context.Context, userID, id string, delete
 		return err
 	}
 	defer tx.Rollback()
-	var agentID string
-	if err := tx.QueryRowContext(ctx, `SELECT agent_id FROM vm_replacements WHERE id = ? AND user_id = ? AND state = 'running'`, id, userID).Scan(&agentID); err != nil {
+	var agentID, workspace, oldImage, newImage string
+	var noCopy int
+	if err := tx.QueryRowContext(ctx, `SELECT agent_id, workspace_id, old_image, new_image, no_copy FROM vm_replacements WHERE id = ? AND user_id = ? AND state = 'running'`, id, userID).Scan(&agentID, &workspace, &oldImage, &newImage, &noCopy); err != nil {
 		return scanErr(err)
 	}
 	stamp := s.stamp(s.Now())
@@ -721,6 +722,9 @@ WHERE id = ? AND user_id = ? AND state = 'running'`,
 		return err
 	}
 	if err := rowsAffected(res); err != nil {
+		return err
+	}
+	if err := s.settleRollbackTx(ctx, tx, workspace, userID, agentID, id, oldImage, newImage, noCopy == 1); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

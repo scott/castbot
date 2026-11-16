@@ -55,7 +55,7 @@ func panelPartial(r *http.Request) bool {
 // outsidePanelChrome is true when this response also paints a drawer or modal
 // that lives outside #agent-panel. A panel swap cannot show that chrome.
 func outsidePanelChrome(p page) bool {
-	return p.Vault.Drawer || p.Vault.ModalOpen || p.Routines.Delete.On || p.Replace.Confirm
+	return p.Vault.Drawer || p.Vault.ModalOpen || p.Routines.Delete.On || p.Replace.Confirm || p.Replace.RollbackConfirm
 }
 
 func panelRedirect(r *http.Request) string {
@@ -147,7 +147,7 @@ func mostRecentAgent(agents []store.Agent) store.Agent {
 
 func (s *Server) applyPanel(w http.ResponseWriter, r *http.Request, user store.User, agent store.Agent, p *page) bool {
 	panel := requestedPanel(r)
-	if wantsConfirm(r) {
+	if wantsConfirm(r) || wantsRollback(r) {
 		panel = "machine"
 	}
 	if p.Panel == "files" {
@@ -189,7 +189,7 @@ func (s *Server) applyPanel(w http.ResponseWriter, r *http.Request, user store.U
 			p.OtherApprovals = 0
 		}
 	}
-	if op := r.URL.Query().Get("opener"); op == "replace-open" || op == "replace-hint" {
+	if op := r.URL.Query().Get("opener"); op == "replace-open" || op == "replace-hint" || op == "rollback-open" {
 		p.Replace.Opener = op
 	}
 	restoreNeeds(p)

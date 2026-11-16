@@ -404,7 +404,9 @@
 {{if .Machine.CanWake}}<form method="post" action="/agents/{{.Agent.ID}}/machine/wake"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Wake</button></form>{{end}}
 {{if .Machine.CanDelete}}<form method="post" action="/agents/{{.Agent.ID}}/machine/refresh" hx-post="/agents/{{.Agent.ID}}/machine/refresh" hx-target="#machine-root" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Refresh</button></form>{{end}}
 {{if .Replace.CanReplace}}<a class="btn sm" id="replace-open" href="/agents/{{.Agent.ID}}/machine/replace?opener=replace-open">Replace machine</a>{{else if .Replace.ShowButton}}<button class="btn sm" type="button" disabled>Replace machine</button>{{end}}
+{{if .Replace.CanRollback}}<a class="btn sm" id="rollback-open" href="/agents/{{.Agent.ID}}/machine/rollback?opener=rollback-open">Roll back runtime</a>{{end}}
 </div>
+{{if .Replace.RollbackTag}}<p class="fineprint" id="rollback-note">Previous runtime {{.Replace.RollbackTag}} can be restored for {{.Replace.RollbackDays}} days. Memory and workspace files are copied again.</p>{{end}}
 {{if .Replace.LockLine}}<p class="lockline">This machine is being replaced. Pause, Wake, Delete and Add to Cast CLI are off until it is done.</p>{{end}}
 {{template "machineLogs" .}}
 <section class="mfiles" id="machine-files">
@@ -447,6 +449,16 @@
 <div class="rlists"><section class="rlist kept"><h3>Kept</h3><ul><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>The agent, its settings, instructions, model and keys</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>All chats, including Cast CLI threads</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>Approvals and the audit log</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>Memory (copied)</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>Workspace files (copied)</span></li></ul></section><section class="rlist lost"><h3>Lost</h3><ul><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span>Files outside the workspace folder, such as installed packages</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span>Tool results inside past chats. The agent gets your recent chat back as plain text.</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span>The Cast CLI connection. Run Add to Cast CLI again afterwards.</span></li><li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span>Machine logs</span></li></ul></section></div>
 <p class="promise"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span><b>Safe if something goes wrong.</b> If the old machine cannot be read, castbot stops and keeps it exactly as it is.{{if .Replace.PausedNote}} {{.Agent.Name}} is paused now, so castbot wakes it once to read it.{{end}}</span></p>
 <form class="rm-f" method="post" action="/agents/{{.Agent.ID}}/machine/replace"><input type="hidden" name="csrf" value="{{.CSRF}}"><a class="btn" href="/agents/{{.Agent.ID}}?panel=machine#{{if .Replace.Opener}}{{.Replace.Opener}}{{else}}replace-open{{end}}" data-close autofocus>Cancel</a><button class="btn pri" type="submit">Replace machine</button></form>
+</div>
+{{end}}
+
+{{define "rollbackModal"}}
+<div class="scrim"></div>
+<div class="rmodal" role="dialog" aria-labelledby="rollback-title">
+<div class="grabber" aria-hidden="true"></div>
+<div class="rm-h"><span class="ico" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><path d="M7 7h11v11M16 8l-9 9"/></svg></span><div class="grow"><h2 id="rollback-title">Roll back this runtime?</h2><p>castbot starts a machine on the previous runtime ({{.Replace.RollbackTag}}), copies this agent's memory and workspace files, then removes the machine it is on now. Chat is paused until it is done.</p></div><a class="ibtn" href="/agents/{{.Agent.ID}}?panel=machine#{{if .Replace.Opener}}{{.Replace.Opener}}{{else}}rollback-open{{end}}" data-close aria-label="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></a></div>
+<p class="promise"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg><span><b>Safe if something goes wrong.</b> If the current machine cannot be read, castbot stops and keeps it exactly as it is.{{if .Replace.PausedNote}} {{.Agent.Name}} is paused now, so castbot wakes it once to read it.{{end}}</span></p>
+<form class="rm-f" method="post" action="/agents/{{.Agent.ID}}/machine/rollback"><input type="hidden" name="csrf" value="{{.CSRF}}"><a class="btn" href="/agents/{{.Agent.ID}}?panel=machine#{{if .Replace.Opener}}{{.Replace.Opener}}{{else}}rollback-open{{end}}" data-close autofocus>Cancel</a><button class="btn pri" type="submit">Roll back runtime</button></form>
 </div>
 {{end}}
 
@@ -500,6 +512,7 @@
 {{if .Vault.Drawer}}{{template "vaultDrawer" .}}{{end}}
 {{if .Vault.ModalOpen}}{{template "vaultModal" .}}{{end}}
 {{if .Replace.Confirm}}{{template "replaceModal" .}}{{end}}
+{{if .Replace.RollbackConfirm}}{{template "rollbackModal" .}}{{end}}
 {{if .Routines.Delete.On}}{{template "routineDelete" .}}{{end}}
 <div id="copy-status" class="visually-hidden" role="status" aria-live="polite"></div>
 <template id="act-reconnect"><div class="act" role="status" aria-live="polite"><span class="actico slow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="lbl">Reconnecting</span></div></template>

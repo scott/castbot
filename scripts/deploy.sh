@@ -715,6 +715,59 @@ ensure_rollback_target() {
   printf 'rollback %s\n' "$PREV"
 }
 
+# backup_files copies content-addressed blobs into the backup.
+# FILES_N and FILES_SHA are the count and the sha256 of sorted "<name> <size>" lines.
+# A name that is not the sha256 of its bytes is skipped. The env file is not copied.
+backup_files() {
+  local src dest out n sha
+  src="$DEPLOY_APP_DIR/data/files"
+  dest="$1/files"
+  FILES_N=0
+  FILES_SHA=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  # shellcheck disable=SC2016
+  out=$(remote_root "$(cat <<EOF
+src=$(q "$src")
+dest=$(q "$dest")
+if [[ ! -d \$src ]]; then
+  printf '0\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n'
+  exit 0
+fi
+mkdir -p -- "\$dest"
+chmod 0700 "\$dest"
+manifest=\$(mktemp)
+trap 'rm -f "\$manifest"' EXIT
+while IFS= read -r path; do
+  [[ -n "\$path" ]] || continue
+  base=\$(basename "\$path")
+  [[ "\$base" =~ ^[0-9a-f]{64}\$ ]] || continue
+  got=\$(sha256sum -- "\$path")
+  got=\${got%% *}
+  [[ "\$got" == "\$base" ]] || continue
+  cp -a -- "\$path" "\$dest/\$base"
+  size=\$(stat -c %s -- "\$dest/\$base")
+  printf '%s %s\n' "\$base" "\$size" >> "\$manifest"
+done < <(find "\$src" -mindepth 1 -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9a-f]{64}\$' | LC_ALL=C sort)
+if [[ ! -s "\$manifest" ]]; then
+  n=0
+  sha=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+else
+  n=\$(grep -c . "\$manifest")
+  sha=\$(sha256sum -- "\$manifest")
+  sha=\${sha%% *}
+fi
+printf '%s\n%s\n' "\$n" "\$sha"
+EOF
+)") || die "could not copy files"
+  n=$(printf '%s\n' "$out" | sed -n '1p')
+  sha=$(printf '%s\n' "$out" | sed -n '2p')
+  n=$(trim_spaces "$n")
+  sha=$(trim_spaces "$sha")
+  [[ "$n" =~ ^[0-9]+$ ]] || die "could not copy files"
+  [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || die "could not copy files"
+  FILES_N=$n
+  FILES_SHA=$sha
+}
+
 take_backup() {
   local db dest sum ver check
   db=$(db_path)
@@ -731,8 +784,9 @@ take_backup() {
   sum=$(remote_root "sha256sum -- $(q "$dest/castbot.db")") || die "could not hash the backup"
   sum=${sum%% *}
   [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || die "could not hash the backup"
-  remote_root "printf '%s\n' $(q "sha256 ${sum}") $(q "schema_version ${ver}") $(q "integrity ok") > $(q "$dest/RECORD")" || die "could not record the backup"
-  printf 'backup %s sha256=%s schema_version=%s\n' "$BACKUP_ID" "$sum" "$ver"
+  backup_files "$dest"
+  remote_root "printf '%s\n' $(q "sha256 ${sum}") $(q "schema_version ${ver}") $(q "integrity ok") $(q "files ${FILES_N}") $(q "files_sha256 ${FILES_SHA}") > $(q "$dest/RECORD")" || die "could not record the backup"
+  printf 'backup %s sha256=%s schema_version=%s files=%s\n' "$BACKUP_ID" "$sum" "$ver" "$FILES_N"
 }
 
 valid_temp() {
@@ -1121,6 +1175,7 @@ public ${DEPLOY_PUBLIC_URL%/}/login
 local ${DEPLOY_LOCAL_HEALTH_URL}
 binary ${BIN_SHA}
 would backup ${DEPLOY_APP_DIR}/backups/${when}
+would copy data/files into that backup when the directory exists
 would install ${DEPLOY_APP_DIR}/releases/${SHA}/castbot
 would link ${DEPLOY_APP_DIR}/bin/castbot
 would write ${DEPLOY_APP_DIR}/RELEASE
