@@ -74,6 +74,26 @@ type threadView struct {
 	On          bool
 }
 
+type memberView struct {
+	ID, Name, Email, Role string
+	You                   bool
+}
+
+type inviteView struct {
+	ID, Email, Name, When string
+}
+
+type groupLink struct {
+	ID, Title, Href, Letter string
+	On                      bool
+}
+
+type groupPage struct {
+	ID, Title, Who string
+	Poll           bool
+	Agents         []agentView
+}
+
 type cliTokView struct {
 	ID, Prefix, Created, LastUsed, Status string
 	Revoked, Unseen                       bool
@@ -190,6 +210,18 @@ type page struct {
 	Text             string
 	RoleLine         string
 	PasswordOn       string
+	Members          []memberView
+	Invites          []inviteView
+	CanInvite        bool
+	InviteLink       string
+	InviteEmail      string
+	InviteSecret     string
+	InviteURL        string
+	PathToken        string
+	QuotaMachines    string
+	QuotaUploads     string
+	Groups           []groupLink
+	Group            groupPage
 	Routines         routinePanel
 	Run              runBar
 	PendingTool      string
@@ -265,8 +297,10 @@ func finish(p page) page {
 		if p.Replace.Confirm || p.Replace.RollbackConfirm {
 			p.BodyClass += " p-confirm"
 		}
-	case "settings", "password", "stub", "new", "edit", "connections":
+	case "settings", "password", "stub", "new", "edit", "connections", "group-new":
 		p.BodyClass = "p-main no-bnav"
+	case "group":
+		p.BodyClass = "p-chat"
 	case "approvals", "routines", "files", "usage":
 		p.BodyClass = "p-main"
 		p.ShowNav = true
