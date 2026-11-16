@@ -45,7 +45,7 @@ func shootPausedOpen(t *testing.T, browser context.Context, dir string, width, h
 	fake.WakeWait = wake
 	t.Cleanup(func() { close(wake) })
 	ctx := tab(t, browser)
-	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), ts.URL+"/", width, height)...); err != nil {
+	if err := chromedp.Run(ctx, cliOpen(t, ts.URL, sessionToken(t, h, user.ID), ts.URL+"/?list=1", width, height)...); err != nil {
 		t.Fatal(err)
 	}
 	if err := chromedp.Run(ctx, shotPoll(t, "paused sidebar", js(`!!document.querySelector('a.ag[data-name="Atlas"]') && (document.body.innerText||'').indexOf('Wren')>=0`))); err != nil {

@@ -89,9 +89,13 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 	if strings.Count(body, secret) < 2 {
 		t.Fatal("secret was not shown on the accept page")
 	}
-	code, home, _ := h.do(http.MethodGet, "/", "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(home, "Create your first agent") || !strings.Contains(home, "Pip Lane") || strings.Contains(home, secret) || strings.Contains(home, token2) {
-		t.Fatal("accepted session did not open the home page")
+	code, home, hdr := h.do(http.MethodGet, "/", "", ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/new-agent" {
+		t.Fatalf("accepted home %d %s", code, hdr.Get("Location"))
+	}
+	code, home, _ = h.do(http.MethodGet, "/new-agent", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(home, "Pip Lane") || strings.Contains(home, "Create your first agent") || strings.Contains(home, "Pick an agent") || strings.Contains(home, secret) || strings.Contains(home, token2) {
+		t.Fatal("accepted session did not open the new-agent screen")
 	}
 	code, spent, _ := h.do(http.MethodGet, "/invite/"+token2, "", ip, nil)
 	if code != http.StatusNotFound || strings.Contains(spent, secret) {
@@ -154,6 +158,10 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, "owner private note 13") || dmShowsAuthor(body, "owner private note 13") {
 		t.Fatal("dm user bubble changed")
 	}
+	code, _, hdr = h.do(http.MethodGet, "/", "", ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/agents/"+atlas.ID {
+		t.Fatalf("owner home %d %s", code, hdr.Get("Location"))
+	}
 	code, body, _ = h.do(http.MethodGet, "/settings", "", ip, nil)
 	if code != http.StatusOK || !strings.Contains(body, "1 of 4") || !strings.Contains(body, `href="/groups/new"`) {
 		t.Fatalf("owner machines %d bytes", len(body))
@@ -166,7 +174,7 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, `name="agent" value="`+atlas.ID) || !strings.Contains(body, `name="agent" value="`+pip.ID) || !strings.Contains(body, `name="member" value="`+member.ID) || !strings.Contains(body, "Checked people can read this chat") || strings.Contains(body, "A group needs at least two of your agents.") {
 		t.Fatalf("new group %d (%d bytes)", code, len(body))
 	}
-	code, _, hdr := h.do(http.MethodPost, "/groups", h.form(url.Values{"title": {"Standup"}, "agent": {atlas.ID, pip.ID}, "member": {member.ID}}), ip, nil)
+	code, _, hdr = h.do(http.MethodPost, "/groups", h.form(url.Values{"title": {"Standup"}, "agent": {atlas.ID, pip.ID}, "member": {member.ID}}), ip, nil)
 	if code != http.StatusSeeOther || !strings.HasPrefix(hdr.Get("Location"), "/groups/") {
 		t.Fatalf("create group %d %s", code, hdr.Get("Location"))
 	}
@@ -196,9 +204,17 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 	if code != http.StatusNotFound {
 		t.Fatalf("blair revoke %d", code)
 	}
-	code, body, _ = h.do(http.MethodGet, "/", "", ip, nil)
-	if strings.Contains(body, "Standup") || strings.Contains(body, "owner private note 13") || strings.Contains(body, groupID) {
-		t.Fatal("blair saw the shared group")
+	code, body, hdr = h.do(http.MethodGet, "/", "", ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/new-agent" || strings.Contains(body, "Standup") || strings.Contains(body, "owner private note 13") || strings.Contains(body, groupID) {
+		t.Fatalf("blair home %d %s", code, hdr.Get("Location"))
+	}
+	code, body, _ = h.do(http.MethodGet, "/new-agent", "", ip, nil)
+	if strings.Contains(body, "Standup") || strings.Contains(body, "owner private note 13") || strings.Contains(body, groupID) || strings.Contains(body, "/agents/"+atlas.ID) {
+		t.Fatal("blair new-agent saw the shared group")
+	}
+	code, body, _ = h.do(http.MethodGet, "/?list=1", "", ip, nil)
+	if code != http.StatusOK || strings.Contains(body, "Standup") || strings.Contains(body, "owner private note 13") || strings.Contains(body, groupID) || strings.Contains(body, "Pick an agent") {
+		t.Fatal("blair list saw the shared group")
 	}
 
 	h.logout(ip)
@@ -214,9 +230,17 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 
 	h.logout(ip)
 	signIn("pip-s13@example.com", secret)
-	code, body, _ = h.do(http.MethodGet, "/", "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, "Pick an agent") || !strings.Contains(body, "Standup") || strings.Contains(body, "Create your first agent") || strings.Contains(body, `href="/groups/new"`) || strings.Contains(body, "/agents/"+atlas.ID) || strings.Contains(body, "owner private note 13") {
-		t.Fatal("member home did not show the shared group")
+	code, body, hdr = h.do(http.MethodGet, "/", "", ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/new-agent" || strings.Contains(body, "Standup") || strings.Contains(body, "owner private note 13") {
+		t.Fatalf("member home %d %s", code, hdr.Get("Location"))
+	}
+	code, body, _ = h.do(http.MethodGet, "/?list=1", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, "Standup") || strings.Contains(body, "Pick an agent") || strings.Contains(body, "Create your first agent") || strings.Contains(body, `href="/groups/new"`) || strings.Contains(body, "/agents/"+atlas.ID) || strings.Contains(body, "owner private note 13") {
+		t.Fatal("member list did not show the shared group")
+	}
+	code, body, _ = h.do(http.MethodGet, "/new-agent", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, "Standup") || strings.Contains(body, "/agents/"+atlas.ID) || strings.Contains(body, "owner private note 13") {
+		t.Fatal("member new-agent dropped the group or showed the owner's agent")
 	}
 	code, _, _ = h.do(http.MethodGet, "/agents/"+atlas.ID, "", ip, nil)
 	if code != http.StatusNotFound {

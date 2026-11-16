@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -30,31 +31,45 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The phone list and a sidebar search stay on this shell.
+	// Opening either one does not count as using a chat.
+	if r.URL.Query().Get("list") == "1" || strings.TrimSpace(r.URL.Query().Get("q")) != "" {
+		s.renderAgentList(w, r, user)
+		return
+	}
+	agent, err := s.store.PreferredAgent(r.Context(), user.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		http.Redirect(w, r, "/new-agent", http.StatusSeeOther)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/agents/"+url.PathEscape(agent.ID), http.StatusSeeOther)
+}
+
+// renderAgentList is the phone agent list and the sidebar search page.
+// It is the sidebar, with no pick heading.
+// Opening it does not count as using a chat, so Back does not bounce into that chat.
+func (s *Server) renderAgentList(w http.ResponseWriter, r *http.Request, user store.User) {
 	p, err := s.shell(r, user)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	agents, err := s.store.ListAgents(r.Context(), user.ID)
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	if len(agents) == 0 && len(p.Groups) == 0 {
-		p.Page = "first"
-		p.Title = "Welcome"
-		s.render(w, http.StatusOK, "app", finish(p))
-		return
-	}
 	p.Page = "home"
 	p.Title = "Agents"
-	p.AgentCount = len(agents)
 	s.render(w, http.StatusOK, "app", finish(p))
 }
 
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.requireUser(w, r)
 	if !ok {
+		return
+	}
+	if err := s.store.TouchAgentUse(r.Context(), user.ID, r.PathValue("id")); err != nil && !errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
 	formError := ""
@@ -348,6 +363,10 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		if s.bad(w, err) {
 			return
 		}
+		if err := s.store.TouchAgentUse(r.Context(), user.ID, agent.ID); err != nil {
+			http.Error(w, "Error", http.StatusInternalServerError)
+			return
+		}
 		if len(announced) > 0 {
 			_ = s.store.MarkAnnounced(r.Context(), user.ID, announced)
 		}
@@ -366,6 +385,10 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	msg, err := s.store.CreateMessage(r.Context(), user.ID, thread.ID, "user", user.ID, body)
 	if s.bad(w, err) {
+		return
+	}
+	if err := s.store.TouchAgentUse(r.Context(), user.ID, agent.ID); err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
 	if len(announced) > 0 {

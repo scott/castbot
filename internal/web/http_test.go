@@ -196,7 +196,11 @@ func (h *harness) login(email, password, secret, ip string, trust bool) {
 	if code != http.StatusSeeOther || hdr.Get("Location") != "/" {
 		h.t.Fatalf("code step %d %s %s", code, hdr.Get("Location"), body)
 	}
-	h.do(http.MethodGet, "/", "", ip, nil)
+	// Home redirects. The list shell carries the form token and does not open a chat.
+	code, _, _ = h.do(http.MethodGet, "/?list=1", "", ip, nil)
+	if code != http.StatusOK {
+		h.t.Fatalf("agent list %d", code)
+	}
 }
 
 func cookieLine(hdr http.Header, name string) string {
@@ -251,9 +255,13 @@ func TestLoginAndSessionCookie(t *testing.T) {
 			t.Fatalf("session cookie %q missing %s", line, bit)
 		}
 	}
-	code, body, _ = h.do(http.MethodGet, "/", "", ip, nil)
+	code, _, hdr = h.do(http.MethodGet, "/", "", ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/new-agent" {
+		t.Fatalf("home %d %s", code, hdr.Get("Location"))
+	}
+	code, body, _ = h.do(http.MethodGet, "/new-agent", "", ip, nil)
 	if code != 200 || !strings.Contains(body, "Alex Rivera") {
-		t.Fatalf("home %d", code)
+		t.Fatalf("new agent %d", code)
 	}
 	code, _, hdr = h.do(http.MethodPost, "/logout", h.form(url.Values{}), ip, nil)
 	if code != http.StatusSeeOther || hdr.Get("Location") != "/login" {
@@ -406,9 +414,14 @@ func TestCSRFThemeEchoAndSessions(t *testing.T) {
 	if code != http.StatusSeeOther || hdr.Get("Location") != "/" {
 		t.Fatalf("trusted device still asked for a code: %d %s", code, hdr.Get("Location"))
 	}
-	code, body, _ = h.do(http.MethodGet, "/", "", ip, nil)
-	if code != 200 {
-		t.Fatal(code)
+	code, _, hdr = h.do(http.MethodGet, "/", "", ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/new-agent" {
+		t.Fatalf("home %d %s", code, hdr.Get("Location"))
+	}
+	// Home is a redirect, so the session token comes from the page it opens.
+	code, _, _ = h.do(http.MethodGet, "/new-agent", "", ip, nil)
+	if code != http.StatusOK {
+		t.Fatalf("new agent %d", code)
 	}
 	code, _, _ = h.do(http.MethodPost, "/settings/appearance", h.form(url.Values{"theme": {"light"}}), ip, nil)
 	if code != http.StatusSeeOther {
@@ -490,7 +503,8 @@ func TestAuthzMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := h.st.CreateAgent(ctx, b.ID, store.AgentInput{SectionID: bSec.ID, Name: "B-Only-Agent", Title: "Other", Status: "ready"}); err != nil {
+	bAgent, _, err := h.st.CreateAgent(ctx, b.ID, store.AgentInput{SectionID: bSec.ID, Name: "B-Only-Agent", Title: "Other", Status: "ready"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	pinned, err := h.st.SystemSection(ctx, a.ID, "pinned")
@@ -540,9 +554,9 @@ func TestAuthzMatrix(t *testing.T) {
 
 	h.login("b@example.com", "correct-horse-1", bSecret, "203.0.113.90:9", false)
 	h.assertRunHidden(runRow.ID, marker, "203.0.113.90:9")
-	_, homeB, _ := h.do(http.MethodGet, "/", "", "203.0.113.90:9", nil)
-	if strings.Contains(homeB, "A-Only-Agent") || strings.Contains(homeB, "A-Private-Section") {
-		t.Fatal("B home leaked A")
+	code, homeB, hdr := h.do(http.MethodGet, "/", "", "203.0.113.90:9", nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/agents/"+bAgent.ID || strings.Contains(homeB, "A-Only-Agent") || strings.Contains(homeB, "A-Private-Section") || strings.Contains(hdr.Get("Location"), agent.ID) {
+		t.Fatalf("B home %d %s", code, hdr.Get("Location"))
 	}
 	for _, s := range append(changes, removes...) {
 		code, body := post(s, "203.0.113.90:9")
@@ -558,14 +572,14 @@ func TestAuthzMatrix(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(resumeBody, "event: fail") || !strings.Contains(resumeBody, marker) {
 		t.Fatalf("owner resume %d %s", code, resumeBody)
 	}
-	code, _, hdr := h.do(http.MethodPost, "/runs/"+runRow.ID+"/retry", h.form(url.Values{}), "203.0.113.91:9", nil)
+	code, _, hdr = h.do(http.MethodPost, "/runs/"+runRow.ID+"/retry", h.form(url.Values{}), "203.0.113.91:9", nil)
 	if code != http.StatusSeeOther {
 		t.Fatalf("retry %d %s", code, hdr.Get("Location"))
 	}
 	h.waitRuns(a.ID, thread.ID)
-	_, homeA, _ := h.do(http.MethodGet, "/", "", "203.0.113.91:9", nil)
-	if strings.Contains(homeA, "B-Only-Agent") || strings.Contains(homeA, "B-Private-Section") {
-		t.Fatal("A home leaked B")
+	_, homeA, hdr := h.do(http.MethodGet, "/", "", "203.0.113.91:9", nil)
+	if hdr.Get("Location") != "/agents/"+agent.ID || strings.Contains(homeA, "B-Only-Agent") || strings.Contains(homeA, "B-Private-Section") || strings.Contains(hdr.Get("Location"), bAgent.ID) {
+		t.Fatalf("A home %s", hdr.Get("Location"))
 	}
 	for _, s := range append(changes, removes...) {
 		code, body := post(s, "203.0.113.91:9")

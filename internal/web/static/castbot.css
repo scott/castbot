@@ -1241,9 +1241,6 @@ a.vmchip { display: inline-flex; align-items: center; text-decoration: none; col
 #agent-panel[hidden], .s19toast[hidden] { display: none !important; }
 .s19toast { gap: 10px; border-color: var(--acc-line); white-space: normal; }
 .s19toast b { font-weight: 700; }
-.pick { flex: 1; display: grid; place-items: center; text-align: center; padding: 48px 24px; }
-.pick h1 { font: 650 28px/1.2 var(--hd); margin: 0 0 8px; }
-.pick p { margin: 0 auto; max-width: 420px; color: var(--tx2); font-size: 15px; }
 .card-h .tag-new { color: var(--acc); background: var(--acc-soft); padding: 2px 7px; border-radius: 6px; }
 button.sclose, a.sclose { font: inherit; cursor: pointer; text-decoration: none; }
 .sclose:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }

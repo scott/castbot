@@ -39,7 +39,7 @@ func TestStaticVersionedCacheAndETag(t *testing.T) {
 	_, secret := h.account("static-cache@example.com", "Ada", "correct-horse-1")
 	ip := "203.0.113.44:9"
 	h.login("static-cache@example.com", "correct-horse-1", secret, ip, false)
-	_, appPage, _ := h.do(http.MethodGet, "/", "", ip, nil)
+	_, appPage, _ := h.do(http.MethodGet, "/?list=1", "", ip, nil)
 	for _, name := range []string{"sse.js", "stream.js", "secrets.js", "files.js", "create.js", "htmx.min.js"} {
 		url := staticHref(name)
 		if !strings.Contains(appPage, url) {
