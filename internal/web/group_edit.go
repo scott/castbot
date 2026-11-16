@@ -260,6 +260,7 @@ func (s *Server) fillOwnerGroup(r *http.Request, user store.User, p *page) error
 		views = append(views, view)
 	}
 	p.Group.Agents = views
+	p.Group.NeedsAgents = len(inGroup) < 2
 	humans, err := s.store.GroupHumans(ctx, user.ID, p.Group.ID)
 	if err != nil {
 		return err
@@ -453,6 +454,10 @@ func (s *Server) groupPin(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusNotFound, "Not found\n")
 		return
 	}
+	if err := s.keepGroupTitle(r, user, id); err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
 	if err := s.store.SetGroupPin(r.Context(), user.ID, id, !pinned); s.missing(w, err) {
 		return
 	}
@@ -468,7 +473,23 @@ func (s *Server) groupSection(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.PlaceGroup(r.Context(), user.ID, id, r.FormValue("section")); s.missing(w, err) {
 		return
 	}
+	if err := s.keepGroupTitle(r, user, id); err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
 	s.backGroup(w, r, id)
+}
+
+func (s *Server) keepGroupTitle(r *http.Request, user store.User, id string) error {
+	title := strings.TrimSpace(r.FormValue("title"))
+	if title == "" {
+		return nil
+	}
+	err := s.store.SetGroupTitle(r.Context(), user.ID, id, title)
+	if err == nil || errors.Is(err, store.ErrConflict) || errors.Is(err, store.ErrInvalid) || errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 func (s *Server) sectionFold(w http.ResponseWriter, r *http.Request) {

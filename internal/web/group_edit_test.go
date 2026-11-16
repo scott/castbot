@@ -13,6 +13,23 @@ import (
 	"github.com/scott/castbot/internal/store"
 )
 
+func startGroupID(t *testing.T, h *harness, ip string) string {
+	t.Helper()
+	code, _, hdr := h.do(http.MethodPost, "/groups", h.form(nil), ip, nil)
+	if code != http.StatusSeeOther {
+		t.Fatalf("start group %d %s", code, hdr.Get("Location"))
+	}
+	loc, err := url.Parse(hdr.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimPrefix(loc.Path, "/groups/")
+	if id == "" || strings.Contains(id, "/") || loc.RawQuery != "panel=group" {
+		t.Fatalf("start location %s", hdr.Get("Location"))
+	}
+	return id
+}
+
 func TestGroupControlsAsksAndReplies(t *testing.T) {
 	h := newHarness(t)
 	ip := "203.0.113.105:4000"
@@ -79,56 +96,80 @@ func TestGroupControlsAsksAndReplies(t *testing.T) {
 	}
 	signIn("alex-105@example.com", ownerSecret)
 
-	code, body, _ := h.do(http.MethodGet, "/groups/new", "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, `href="/">Cancel</a>`) || !strings.Contains(body, "They can reply on their own.") || !strings.Contains(body, `name="section"`) || !strings.Contains(body, "Research") || strings.Contains(body, "A group needs at least two of your agents.") {
-		t.Fatalf("new group %d", code)
+	code, _, hdr := h.do(http.MethodGet, "/groups/new", "", ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/?list=1" {
+		t.Fatalf("new group link %d %s", code, hdr.Get("Location"))
 	}
 	before, err := h.st.ListGroups(ctx, owner.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(before) != 0 {
-		t.Fatal("cancel page created a group")
+		t.Fatal("new page created a group")
 	}
 
 	h.logout(ip)
 	signIn("blair-105@example.com", outsiderSecret)
-	code, body, _ = h.do(http.MethodGet, "/groups/new", "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, "A group needs at least two of your agents.") || !strings.Contains(body, `href="/">Cancel</a>`) {
+	code, body, _ := h.do(http.MethodGet, "/groups/new", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, "A group needs at least two of your agents.") || !strings.Contains(body, `href="/">Cancel</a>`) || !strings.Contains(body, "They can reply on their own.") {
 		t.Fatalf("empty new group %d", code)
 	}
 	if rows, err := h.st.ListGroups(ctx, outsider.ID); err != nil || len(rows) != 0 {
 		t.Fatal("empty cancel created a group")
 	}
+	code, _, _ = h.do(http.MethodPost, "/groups", h.form(nil), ip, nil)
+	if code != http.StatusOK {
+		t.Fatalf("empty post %d", code)
+	}
+	if rows, err := h.st.ListGroups(ctx, outsider.ID); err != nil || len(rows) != 0 {
+		t.Fatal("empty post created a group")
+	}
 
 	h.logout(ip)
 	signIn("alex-105@example.com", ownerSecret)
-	code, _, _ = h.do(http.MethodPost, "/groups", h.form(url.Values{"title": {"Nope"}, "agent": {atlas.ID}, "section": {research.ID}}), ip, nil)
-	if code != http.StatusBadRequest {
-		t.Fatalf("one agent %d", code)
+	groupID := startGroupID(t, h, ip)
+	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID+"?panel=group", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, `value="New group"`) || !strings.Contains(body, ">Pin<") || !strings.Contains(body, `name="section"`) || !strings.Contains(body, "Research") || !strings.Contains(body, "A group needs at least two of your agents.") || !strings.Contains(body, "Agents here can reply.") || strings.Contains(body, "With Atlas.") {
+		t.Fatalf("fresh group %d", code)
 	}
-	code, _, _ = h.do(http.MethodPost, "/groups", h.form(url.Values{"title": {"Standup"}, "agent": {atlas.ID, pip.ID}, "section": {outsider.ID}}), ip, nil)
+	code, _, hdr = h.do(http.MethodPost, "/groups/"+groupID+"/section", h.form(url.Values{"section": {outsider.ID}, "title": {"Nope"}}), ip, nil)
 	if code != http.StatusNotFound {
 		t.Fatalf("foreign section %d", code)
 	}
-	if rows, err := h.st.ListGroups(ctx, owner.ID); err != nil || len(rows) != 0 {
-		t.Fatal("rejected create left a group")
+	got, err := h.st.GetThread(ctx, owner.ID, groupID)
+	if err != nil || got.Title != "New group" {
+		t.Fatal("foreign section renamed the group")
 	}
-	code, _, hdr := h.do(http.MethodPost, "/groups", h.form(url.Values{"title": {"Standup"}, "agent": {atlas.ID, pip.ID}, "member": {member.ID}, "section": {research.ID}}), ip, nil)
-	if code != http.StatusSeeOther || !strings.HasPrefix(hdr.Get("Location"), "/groups/") {
-		t.Fatalf("create %d %s", code, hdr.Get("Location"))
+	code, _, hdr = h.do(http.MethodPost, "/groups/"+groupID+"/edit", h.form(url.Values{"title": {"Standup"}, "agent": {atlas.ID}}), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/groups/"+groupID+"?panel=group" {
+		t.Fatalf("one agent while new %d %s", code, hdr.Get("Location"))
 	}
-	groupID := strings.TrimPrefix(hdr.Get("Location"), "/groups/")
+	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID+"?panel=group", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, "With Atlas.") || !strings.Contains(body, `value="`+atlas.ID+`" checked`) || strings.Contains(body, `value="`+pip.ID+`" checked`) {
+		t.Fatal("chat did not show the one agent")
+	}
+	code, _, hdr = h.do(http.MethodPost, "/groups/"+groupID+"/edit", h.form(url.Values{"title": {"Standup"}, "agent": {atlas.ID, pip.ID}, "member": {member.ID}}), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/groups/"+groupID+"?panel=group" {
+		t.Fatalf("save group %d %s", code, hdr.Get("Location"))
+	}
+	code, _, hdr = h.do(http.MethodPost, "/groups/"+groupID+"/section", h.form(url.Values{"section": {research.ID}, "title": {"Standup"}}), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/groups/"+groupID+"?panel=group" {
+		t.Fatalf("place %d %s", code, hdr.Get("Location"))
+	}
+	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID+"?panel=group", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, "Group chat · Research") || !strings.Contains(body, "With Atlas") || !strings.Contains(body, "Pip Lane") || strings.Contains(body, "A group needs at least two of your agents.") {
+		t.Fatal("chat did not show the saved group")
+	}
 	code, body, _ = h.do(http.MethodGet, "/?list=1", "", ip, nil)
 	if code != http.StatusOK || strings.Count(body, `/groups/`+groupID) != 1 || !strings.Contains(body, "Research") || !strings.Contains(body, "Group chat") {
 		t.Fatalf("placed group %d", code)
 	}
 	advance(time.Second)
-	code, _, hdr = h.do(http.MethodPost, "/groups", h.form(url.Values{"title": {"Planning"}, "agent": {atlas.ID, moss.ID}, "section": {"groups"}}), ip, nil)
+	planID := startGroupID(t, h, ip)
+	code, _, hdr = h.do(http.MethodPost, "/groups/"+planID+"/edit", h.form(url.Values{"title": {"Planning"}, "agent": {atlas.ID, moss.ID}}), ip, nil)
 	if code != http.StatusSeeOther {
 		t.Fatalf("second group %d", code)
 	}
-	planID := strings.TrimPrefix(hdr.Get("Location"), "/groups/")
 	code, body, _ = h.do(http.MethodGet, "/?list=1", "", ip, nil)
 	if code != http.StatusOK || strings.Index(body, "Planning") < 0 || strings.Index(body, "Standup") < 0 || strings.Index(body, "Planning") < strings.Index(body, "Standup") {
 		t.Fatal("unpinned order")
@@ -234,7 +275,7 @@ func TestGroupControlsAsksAndReplies(t *testing.T) {
 		t.Fatalf("fold groups %d", code)
 	}
 	code, body, _ = h.do(http.MethodGet, "/?list=1", "", ip, nil)
-	if strings.Contains(body, "/groups/"+planID) || !strings.Contains(body, `aria-label="Expand Groups"`) || !strings.Contains(body, `href="/groups/new"`) {
+	if strings.Contains(body, "/groups/"+planID) || !strings.Contains(body, `aria-label="Expand Groups"`) || !strings.Contains(body, `action="/groups"`) {
 		t.Fatal("groups collapse")
 	}
 	if code, _, _ = h.do(http.MethodPost, "/sections/groups/fold", h.form(nil), ip, nil); code != http.StatusSeeOther {
@@ -273,7 +314,7 @@ func TestGroupControlsAsksAndReplies(t *testing.T) {
 	if _, err := h.st.FailRun(ctx, owner.ID, queued.ID, "stopped", 0); err != nil {
 		t.Fatal(err)
 	}
-	got, err := h.st.GetThread(ctx, owner.ID, groupID)
+	got, err = h.st.GetThread(ctx, owner.ID, groupID)
 	if err != nil || got.Title != "Standup" {
 		t.Fatal("busy save changed the title")
 	}

@@ -210,12 +210,16 @@ func (s *Server) groupNew(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p, err := s.groupForm(r, user)
+	n, err := s.groupAgentCount(r, user)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, http.StatusOK, "app", finish(p))
+	if n < 2 {
+		s.renderGroupShort(w, r, user)
+		return
+	}
+	http.Redirect(w, r, "/?list=1", http.StatusSeeOther)
 }
 
 func (s *Server) groupForm(r *http.Request, user store.User) (page, error) {
@@ -254,32 +258,41 @@ func (s *Server) groupCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	section := strings.TrimSpace(r.FormValue("section"))
-	if section != "" && section != "groups" {
-		if _, err := s.store.GetSection(r.Context(), user.ID, section); s.missing(w, err) {
-			return
-		}
-	}
-	th, err := s.store.CreateGroup(r.Context(), user.ID, r.FormValue("title"), r.Form["agent"], r.Form["member"])
-	if errors.Is(err, store.ErrInvalid) {
-		p, perr := s.groupForm(r, user)
-		if perr != nil {
-			http.Error(w, "Error", http.StatusInternalServerError)
-			return
-		}
-		p.FormError = "Enter a title and choose at least two of your agents."
-		s.render(w, http.StatusBadRequest, "app", finish(p))
+	n, err := s.groupAgentCount(r, user)
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
+	if n < 2 {
+		s.renderGroupShort(w, r, user)
+		return
+	}
+	th, err := s.store.StartGroup(r.Context(), user.ID)
 	if s.missing(w, err) {
 		return
 	}
-	if section != "" && section != "groups" {
-		if err := s.store.PlaceGroup(r.Context(), user.ID, th.ID, section); s.missing(w, err) {
-			return
-		}
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
 	}
-	http.Redirect(w, r, "/groups/"+url.PathEscape(th.ID), http.StatusSeeOther)
+	http.Redirect(w, r, groupPanelPath(th.ID), http.StatusSeeOther)
+}
+
+func (s *Server) groupAgentCount(r *http.Request, user store.User) (int, error) {
+	agents, err := s.store.ListAgents(r.Context(), user.ID)
+	if err != nil {
+		return 0, err
+	}
+	return len(agents), nil
+}
+
+func (s *Server) renderGroupShort(w http.ResponseWriter, r *http.Request, user store.User) {
+	p, err := s.groupForm(r, user)
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "app", finish(p))
 }
 
 func (s *Server) groupShow(w http.ResponseWriter, r *http.Request) {
@@ -434,6 +447,7 @@ func (s *Server) groupPage(r *http.Request, user store.User, threadID string) (p
 		ID: th.ID, Title: th.Title, Who: groupWho(agents, humans), Poll: open,
 		Owner: th.UserID == user.ID, Pinned: card.Pinned, SectionID: card.SectionID,
 		Letter: letter(th.Title),
+		Place:  groupPlace(card.Pinned, sectionName(p, card.SectionID)),
 		Note:   askSentence(r.URL.Query().Get("ask"), sectionName(p, card.SectionID)),
 	}
 	return p, nil
@@ -464,6 +478,17 @@ func sectionName(p page, id string) string {
 
 func (s *Server) startGroupReplies(ctx context.Context, th store.Thread, visible store.Message, agents []store.Agent) {
 	s.fanGroup(ctx, th, visible, agents, true, "")
+}
+
+func groupPlace(pinned bool, section string) string {
+	label := "Group chat"
+	if pinned {
+		label = "Pinned"
+	}
+	if section == "" {
+		return label
+	}
+	return label + " · " + section
 }
 
 func groupWho(agents []store.Agent, humans []store.User) string {

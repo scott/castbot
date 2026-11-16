@@ -35,11 +35,11 @@
 {{define "groupMain"}}
 <header class="ch-h s19h{{if .Pane}} pane-open{{end}}">
 <a class="ibtn back" href="/?list=1" aria-label="Back to agents">{{template "backsvg" .}}</a>
-<a class="who-btn" href="/groups/{{.Group.ID}}?panel=group" data-open-panel data-panel-tab hx-get="/groups/{{.Group.ID}}?panel=group" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" aria-label="Open {{.Group.Title}}"><span class="av c0" aria-hidden="true">{{.Group.Letter}}</span><span class="grow"><span class="nm">{{.Group.Title}}</span><span class="sub">Group chat</span></span></a>
+<a class="who-btn" href="/groups/{{.Group.ID}}?panel=group" data-open-panel data-panel-tab hx-get="/groups/{{.Group.ID}}?panel=group" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" aria-label="Open {{.Group.Title}}"><span class="av c0" aria-hidden="true">{{.Group.Letter}}</span><span class="grow"><span class="nm">{{.Group.Title}}</span><span class="sub">{{if .Group.Place}}{{.Group.Place}}{{else}}Group chat{{end}}</span></span></a>
 <span class="hsp"></span>
 <a class="ibtn ptoggle{{if .Pane}} on{{end}}" data-panel-toggle href="/groups/{{.Group.ID}}?panel=group" data-open-panel hx-get="/groups/{{.Group.ID}}?panel=group" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false" aria-expanded="{{if .Pane}}true{{else}}false{{end}}" aria-controls="agent-panel" aria-label="Group panel"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></a>
 </header>
-<div class="group-intro"><p class="sub">{{.Group.Who}} Agents here can reply. Mention one with @Name when you want that agent to reply.</p>{{if .Group.Note}}<p class="ask" role="status">{{.Group.Note}}</p>{{end}}</div>
+<div class="group-intro"><p class="sub">{{if .Group.Who}}{{.Group.Who}} {{end}}Agents here can reply. Mention one with @Name when you want that agent to reply.</p>{{if .Group.Note}}<p class="ask" role="status">{{.Group.Note}}</p>{{end}}</div>
 <div class="ch-body">{{template "groupFeed" .}}</div>
 <div class="comp-wrap"><form class="comp" id="composer" method="post" action="/groups/{{.Group.ID}}/messages" hx-post="/groups/{{.Group.ID}}/messages" hx-target="#group-feed" hx-swap="outerHTML">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -50,7 +50,7 @@
 
 {{define "groupPane"}}
 <aside class="pane s19pane group-pane" id="agent-panel" role="complementary" aria-label="{{.Group.Title}} panel">
-<div class="pane-h s19ph"><a class="btn ghost pclose-ph ph-only" href="/groups/{{.Group.ID}}" data-close-panel aria-label="Back to chat">{{template "backsvg" .}}Chat</a><span class="av c0 lg dt-only" aria-hidden="true">{{.Group.Letter}}</span><div class="grow"><div class="nm">{{.Group.Title}}</div><div class="sub">Group chat</div></div><a class="btn ghost sm pclose dt-only" href="/groups/{{.Group.ID}}" data-close-panel aria-label="Close group panel (Esc)">{{template "xsvg" .}}Close</a></div>
+<div class="pane-h s19ph"><a class="btn ghost pclose-ph ph-only" href="/groups/{{.Group.ID}}" data-close-panel aria-label="Back to chat">{{template "backsvg" .}}Chat</a><span class="av c0 lg dt-only" aria-hidden="true">{{.Group.Letter}}</span><div class="grow"><div class="nm">{{.Group.Title}}</div><div class="sub">{{if .Group.Place}}{{.Group.Place}}{{else}}Group chat{{end}}</div></div><a class="btn ghost sm pclose dt-only" href="/groups/{{.Group.ID}}" data-close-panel aria-label="Close group panel (Esc)">{{template "xsvg" .}}Close</a></div>
 <div class="pbody">
 {{if .Group.Confirming}}
 <section class="psec">
@@ -69,8 +69,8 @@
 {{else}}
 <section class="psec">
 <div class="psec-h"><h4>Sidebar</h4></div>
-<form method="post" action="/groups/{{.Group.ID}}/pin"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">{{if .Group.Pinned}}Unpin{{else}}Pin{{end}}</button></form>
-<form method="post" action="/groups/{{.Group.ID}}/section"><input type="hidden" name="csrf" value="{{.CSRF}}"><div class="field"><span class="lab">Section</span><p class="help">This places the group in your sidebar only.</p><div class="selwrap"><select class="sel" name="section" aria-label="Section"><option value="groups"{{if not .Group.SectionID}} selected{{end}}>Groups</option>{{range .Sections}}<option value="{{.ID}}"{{if eq .ID $.Group.SectionID}} selected{{end}}>{{.Name}}</option>{{end}}</select><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></div></div><button class="btn sm" type="submit">Move</button></form>
+<form method="post" action="/groups/{{.Group.ID}}/pin"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="title" value="{{.Group.Title}}" data-group-title><button class="btn sm" type="submit">{{if .Group.Pinned}}Unpin{{else}}Pin{{end}}</button></form>
+<form method="post" action="/groups/{{.Group.ID}}/section"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="title" value="{{.Group.Title}}" data-group-title><div class="field"><span class="lab">Section</span><p class="help">This places the group in your sidebar only.</p><div class="selwrap"><select class="sel" name="section" aria-label="Section"><option value="groups"{{if not .Group.SectionID}} selected{{end}}>Groups</option>{{range .Sections}}<option value="{{.ID}}"{{if eq .ID $.Group.SectionID}} selected{{end}}>{{.Name}}</option>{{end}}</select><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></div></div><button class="btn sm" type="submit">Move</button></form>
 </section>
 {{if .Group.Owner}}
 <section class="psec">
@@ -80,8 +80,8 @@
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 {{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
 {{if .Group.Note}}<div class="banner" role="status"><span class="grow">{{.Group.Note}}</span></div>{{end}}
-<div class="field"><span class="lab">Title</span><div class="inp"><input name="title" maxlength="80" aria-label="Title" value="{{.Group.Title}}" required></div></div>
-<div class="field"><span class="lab">Agents</span><div class="glist">{{range .Group.Agents}}<label class="check gpick"><input class="vh" type="checkbox" name="agent" value="{{.ID}}"{{if .Checked}} checked{{end}}><span class="box">{{template "checksvg" .}}</span><span class="av {{.Color}} xs" aria-hidden="true">{{.Letter}}</span><span class="grow"><span class="t1">{{.Name}}</span>{{if .Title}}<span class="t2">{{.Title}}</span>{{end}}</span></label>{{end}}</div></div>
+<div class="field"><span class="lab">Title</span><div class="inp"><input name="title" maxlength="80" aria-label="Title" value="{{.Group.Title}}" data-saved="{{.Group.Title}}" required></div></div>
+<div class="field"><span class="lab">Agents</span>{{if .Group.NeedsAgents}}<p class="help">A group needs at least two of your agents.</p>{{end}}<div class="glist">{{range .Group.Agents}}<label class="check gpick"><input class="vh" type="checkbox" name="agent" value="{{.ID}}"{{if .Checked}} checked{{end}}><span class="box">{{template "checksvg" .}}</span><span class="av {{.Color}} xs" aria-hidden="true">{{.Letter}}</span><span class="grow"><span class="t1">{{.Name}}</span>{{if .Title}}<span class="t2">{{.Title}}</span>{{end}}</span></label>{{end}}</div></div>
 {{if .Members}}<div class="field"><span class="lab">People</span><p class="help">Checked people can read this chat and post in it.</p><div class="glist">{{range .Members}}<label class="check gpick"><input class="vh" type="checkbox" name="member" value="{{.ID}}"{{if .Checked}} checked{{end}}><span class="box">{{template "checksvg" .}}</span><span class="grow"><span class="t1">{{.Name}}</span></span></label>{{end}}</div></div>{{end}}
 <div class="acts"><button class="btn pri" type="submit">Save</button> <a class="btn" href="/groups/{{.Group.ID}}">Cancel</a></div>
 </form>
@@ -102,17 +102,8 @@
 <header class="ph-top ph-only"><a class="ibtn" href="/" aria-label="Back">{{template "backsvg" .}}</a><span class="t">New group</span></header>
 <div class="page-h"><div><h1 class="dt-only">New group</h1><p class="sub">A group holds several of your agents. They can reply on their own. Mention one with @Name when you want that agent to reply.</p></div></div>
 <div class="page-b">
-{{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
-{{if lt (len .Group.Agents) 2}}<p class="muted">A group needs at least two of your agents.</p><a class="btn" href="/">Cancel</a>{{else}}
-<form method="post" action="/groups">
-<input type="hidden" name="csrf" value="{{.CSRF}}">
-<div class="field"><span class="lab">Title</span><div class="inp"><input name="title" maxlength="80" aria-label="Title" required></div></div>
-<div class="field"><span class="lab">Section</span><p class="help">This places the group in your sidebar only.</p><select class="sel" name="section" aria-label="Section"><option value="groups" selected>Groups</option>{{range .Sections}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></div>
-<div class="field"><span class="lab">Agents</span>{{range .Group.Agents}}<label class="check"><input class="vh" type="checkbox" name="agent" value="{{.ID}}"{{if .Checked}} checked{{end}}><span class="box">{{template "checksvg" .}}</span>{{.Name}}</label>{{end}}</div>
-{{if .Members}}<div class="field"><span class="lab">People</span><p class="help">Checked people can read this chat and post in it.</p>{{range .Members}}<label class="check"><input class="vh" type="checkbox" name="member" value="{{.ID}}"{{if .Checked}} checked{{end}}><span class="box">{{template "checksvg" .}}</span>{{.Name}}</label>{{end}}</div>{{end}}
-<div class="acts"><button class="btn pri" type="submit">Create group</button> <a class="btn" href="/">Cancel</a></div>
-</form>
-{{end}}
+<p class="muted">A group needs at least two of your agents.</p>
+<a class="btn" href="/">Cancel</a>
 </div>
 {{end}}
 

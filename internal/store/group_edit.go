@@ -197,7 +197,9 @@ func (s *Store) FoldedSections(ctx context.Context, userID string) (map[string]b
 
 // UpdateGroup changes the title, agents, and people on a group the caller created.
 // A run that is still open is ErrConflict and changes nothing.
-// The caller stays a member. At least two of the caller's agents must remain.
+// The caller stays a member. Once two of the caller's agents are in the group,
+// at least two must remain. A group that still has fewer than two can be saved
+// with the agents chosen so far.
 func (s *Store) UpdateGroup(ctx context.Context, userID, threadID, title string, agentIDs, memberIDs []string) error {
 	th, err := s.creatorGroup(ctx, userID, threadID)
 	if err != nil {
@@ -218,7 +220,11 @@ func (s *Store) UpdateGroup(ctx context.Context, userID, threadID, title string,
 	if err != nil {
 		return err
 	}
-	if len(agents) < 2 {
+	current, err := s.Participants(ctx, userID, th.ID)
+	if err != nil {
+		return err
+	}
+	if len(agents) < 2 && len(current) >= 2 {
 		return ErrInvalid
 	}
 	user, err := s.GetUser(ctx, userID)
@@ -322,6 +328,28 @@ func (s *Store) groupHumans(ctx context.Context, user User, memberIDs []string) 
 		humans = append(humans, id)
 	}
 	return humans, nil
+}
+
+// SetGroupTitle renames a group the caller created.
+// A run that is still open is ErrConflict and the title stays.
+func (s *Store) SetGroupTitle(ctx context.Context, userID, threadID, title string) error {
+	th, err := s.creatorGroup(ctx, userID, threadID)
+	if err != nil {
+		return err
+	}
+	title = strings.TrimSpace(title)
+	if title == "" || len(title) > 80 {
+		return ErrInvalid
+	}
+	open, err := s.GroupOpen(ctx, userID, th.ID)
+	if err != nil {
+		return err
+	}
+	if open {
+		return ErrConflict
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE threads SET title = ? WHERE id = ? AND user_id = ? AND kind = 'group'`, title, th.ID, userID)
+	return err
 }
 
 func (s *Store) creatorGroup(ctx context.Context, userID, threadID string) (Thread, error) {

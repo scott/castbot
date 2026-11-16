@@ -351,6 +351,23 @@ func (s *Store) CreateGroup(ctx context.Context, userID, title string, agentIDs,
 		seenHuman[id] = true
 		humans = append(humans, id)
 	}
+	return s.insertGroup(ctx, user, title, agents, humans)
+}
+
+// StartGroup opens a group chat the caller can configure in the panel.
+// The title is "New group" and no agents are included yet.
+func (s *Store) StartGroup(ctx context.Context, userID string) (Thread, error) {
+	user, err := s.GetUser(ctx, userID)
+	if err != nil {
+		return Thread{}, err
+	}
+	if user.Disabled {
+		return Thread{}, ErrNotFound
+	}
+	return s.insertGroup(ctx, user, "New group", nil, []string{userID})
+}
+
+func (s *Store) insertGroup(ctx context.Context, user User, title string, agents, humans []string) (Thread, error) {
 	id, err := newID()
 	if err != nil {
 		return Thread{}, err
@@ -362,25 +379,25 @@ func (s *Store) CreateGroup(ctx context.Context, userID, title string, agentIDs,
 	defer tx.Rollback()
 	stamp := s.stamp(s.Now())
 	if _, err := tx.ExecContext(ctx, `INSERT INTO threads(id, workspace_id, user_id, kind, agent_id, title, job_id, created_at) VALUES (?, ?, ?, 'group', NULL, ?, '', ?)`,
-		id, user.WorkspaceID, userID, title, stamp); err != nil {
+		id, user.WorkspaceID, user.ID, title, stamp); err != nil {
 		return Thread{}, err
 	}
 	for _, agentID := range agents {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO thread_participants(thread_id, agent_id, user_id, workspace_id) VALUES (?, ?, ?, ?)`,
-			id, agentID, userID, user.WorkspaceID); err != nil {
+			id, agentID, user.ID, user.WorkspaceID); err != nil {
 			return Thread{}, err
 		}
 	}
 	for _, memberID := range humans {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO thread_members(thread_id, member_id, user_id, workspace_id) VALUES (?, ?, ?, ?)`,
-			id, memberID, userID, user.WorkspaceID); err != nil {
+			id, memberID, user.ID, user.WorkspaceID); err != nil {
 			return Thread{}, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return Thread{}, err
 	}
-	return s.GetThread(ctx, userID, id)
+	return s.GetThread(ctx, user.ID, id)
 }
 
 // ListGroups returns group threads the caller can open, newest first.

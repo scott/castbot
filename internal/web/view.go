@@ -91,9 +91,9 @@ type groupLink struct {
 }
 
 type groupPage struct {
-	ID, Title, Who, Note, ConfirmID, SectionID, Letter string
-	Poll, Owner, Pinned, Busy, Confirming              bool
-	Agents                                             []agentView
+	ID, Title, Who, Note, ConfirmID, SectionID, Letter, Place string
+	Poll, Owner, Pinned, Busy, Confirming, NeedsAgents        bool
+	Agents                                                    []agentView
 }
 
 type cliTokView struct {

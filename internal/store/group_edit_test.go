@@ -51,6 +51,40 @@ func TestGroupPinPlaceFoldEditDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	started, err := s.StartGroup(ctx, owner.ID)
+	if err != nil || started.Title != "New group" {
+		t.Fatalf("start %q %v", started.Title, err)
+	}
+	if agents, err := s.GroupAgents(ctx, owner.ID, started.ID); err != nil || len(agents) != 0 {
+		t.Fatalf("start agents %#v %v", agents, err)
+	}
+	if err := s.UpdateGroup(ctx, owner.ID, started.ID, "Draft", []string{atlas.ID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateGroup(ctx, owner.ID, started.ID, "Draft", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateGroup(ctx, owner.ID, started.ID, "Notes", []string{atlas.ID, pip.ID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateGroup(ctx, owner.ID, started.ID, "Notes", []string{atlas.ID}, nil); err != ErrInvalid {
+		t.Fatalf("drop below two %v", err)
+	}
+	if err := s.SetGroupTitle(ctx, member.ID, started.ID, "Nope"); err != ErrNotFound {
+		t.Fatalf("member title %v", err)
+	}
+	if err := s.SetGroupTitle(ctx, owner.ID, started.ID, "  "); err != ErrInvalid {
+		t.Fatalf("blank title %v", err)
+	}
+	if err := s.SetGroupTitle(ctx, owner.ID, started.ID, "Planning"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetThread(ctx, owner.ID, started.ID); err != nil || got.Title != "Planning" {
+		t.Fatalf("renamed %q %v", got.Title, err)
+	}
+	if err := s.DeleteGroup(ctx, owner.ID, started.ID); err != nil {
+		t.Fatal(err)
+	}
 	now = now.Add(time.Second)
 	older, err := s.CreateGroup(ctx, owner.ID, "Older", []string{atlas.ID, pip.ID}, []string{member.ID})
 	if err != nil {

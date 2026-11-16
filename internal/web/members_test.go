@@ -163,22 +163,18 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 		t.Fatalf("owner home %d %s", code, hdr.Get("Location"))
 	}
 	code, body, _ = h.do(http.MethodGet, "/settings", "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, "1 of 4") || !strings.Contains(body, `href="/groups/new"`) {
+	if code != http.StatusOK || !strings.Contains(body, "1 of 4") || !strings.Contains(body, `action="/groups"`) {
 		t.Fatalf("owner machines %d bytes", len(body))
 	}
-	code, body, _ = h.do(http.MethodPost, "/groups", h.form(mapForm("title", "Standup", "agent", atlas.ID)), ip, nil)
-	if code != http.StatusBadRequest || !strings.Contains(body, "Enter a title and choose at least two of your agents.") {
-		t.Fatalf("one agent %d (%d bytes)", code, len(body))
-	}
-	code, body, _ = h.do(http.MethodGet, "/groups/new", "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, `name="agent" value="`+atlas.ID) || !strings.Contains(body, `name="agent" value="`+pip.ID) || !strings.Contains(body, `name="member" value="`+member.ID) || !strings.Contains(body, "Checked people can read this chat") || strings.Contains(body, "A group needs at least two of your agents.") {
+	groupID := startGroupID(t, h, ip)
+	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID+"?panel=group", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(body, `name="agent" value="`+atlas.ID) || !strings.Contains(body, `name="agent" value="`+pip.ID) || !strings.Contains(body, `name="member" value="`+member.ID) || !strings.Contains(body, "Checked people can read this chat") || !strings.Contains(body, "A group needs at least two of your agents.") {
 		t.Fatalf("new group %d (%d bytes)", code, len(body))
 	}
-	code, _, hdr = h.do(http.MethodPost, "/groups", h.form(url.Values{"title": {"Standup"}, "agent": {atlas.ID, pip.ID}, "member": {member.ID}}), ip, nil)
-	if code != http.StatusSeeOther || !strings.HasPrefix(hdr.Get("Location"), "/groups/") {
+	code, _, hdr = h.do(http.MethodPost, "/groups/"+groupID+"/edit", h.form(url.Values{"title": {"Standup"}, "agent": {atlas.ID, pip.ID}, "member": {member.ID}}), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/groups/"+groupID+"?panel=group" {
 		t.Fatalf("create group %d %s", code, hdr.Get("Location"))
 	}
-	groupID := strings.TrimPrefix(hdr.Get("Location"), "/groups/")
 	code, body, _ = h.do(http.MethodPost, "/settings/invites", h.form(mapForm("email", "late-s13@example.com", "name", "Late Joiner")), ip, nil)
 	if code != http.StatusOK {
 		t.Fatalf("late invite %d", code)
@@ -235,7 +231,7 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 		t.Fatalf("member home %d %s", code, hdr.Get("Location"))
 	}
 	code, body, _ = h.do(http.MethodGet, "/?list=1", "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, "Standup") || strings.Contains(body, "Pick an agent") || strings.Contains(body, "Create your first agent") || strings.Contains(body, `href="/groups/new"`) || strings.Contains(body, "/agents/"+atlas.ID) || strings.Contains(body, "owner private note 13") {
+	if code != http.StatusOK || !strings.Contains(body, "Standup") || strings.Contains(body, "Pick an agent") || strings.Contains(body, "Create your first agent") || strings.Contains(body, `action="/groups"`) || strings.Contains(body, "/agents/"+atlas.ID) || strings.Contains(body, "owner private note 13") {
 		t.Fatal("member list did not show the shared group")
 	}
 	code, body, _ = h.do(http.MethodGet, "/new-agent", "", ip, nil)
