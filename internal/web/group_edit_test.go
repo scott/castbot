@@ -157,7 +157,8 @@ func TestGroupControlsAsksAndReplies(t *testing.T) {
 		t.Fatalf("place %d %s", code, hdr.Get("Location"))
 	}
 	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID+"?panel=group", "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, "Group chat · Research") || !strings.Contains(body, "With Atlas") || !strings.Contains(body, "Pip Lane") || strings.Contains(body, "A group needs at least two of your agents.") {
+	who := subText(body)
+	if code != http.StatusOK || !strings.Contains(body, "Group chat · Research") || !strings.Contains(who, "Atlas") || !strings.Contains(who, "Pip") || !strings.Contains(body, "Pip Lane") || strings.Contains(body, "A group needs at least two of your agents.") {
 		t.Fatal("chat did not show the saved group")
 	}
 	code, body, _ = h.do(http.MethodGet, "/?list=1", "", ip, nil)
@@ -323,7 +324,7 @@ func TestGroupControlsAsksAndReplies(t *testing.T) {
 		t.Fatalf("save %d %s", code, hdr.Get("Location"))
 	}
 	code, body, _ = h.do(http.MethodGet, "/groups/"+groupID, "", ip, nil)
-	who := subText(body)
+	who = subText(body)
 	if !strings.Contains(body, "Forum") || !strings.Contains(who, "Atlas") || !strings.Contains(who, "Moss") || strings.Contains(who, ", Pip,") || strings.Contains(who, "and Pip.") || strings.HasPrefix(who, "With Pip ") {
 		t.Fatal("rename was not visible")
 	}
