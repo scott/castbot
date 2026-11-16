@@ -259,6 +259,11 @@ ORDER BY m.journal_seq LIMIT 1`,
 	if err := rowsAffected(res); err != nil {
 		return Message{}, RunEvent{}, err
 	}
+	// A look that has nothing to add must be hidden in this same transaction.
+	// The after-run hook also marks it, but a reader can load the row before that hook runs.
+	if err := hideLookPass(ctx, tx, userID, runID, msgID, body); err != nil {
+		return Message{}, RunEvent{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return Message{}, RunEvent{}, err
 	}

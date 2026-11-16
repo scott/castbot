@@ -36,13 +36,15 @@ type agentView struct {
 	Model, Status, ChipClass, ChipLabel, ChipMeta      string
 	SizeLabel, IdleLabel, Created                      string
 	Approvals, Unread                                  int
-	On, Avatar                                         bool
+	On, Avatar, Checked                                bool
 	ActSub                                             template.HTML
 }
 
 type sectionView struct {
 	ID, Name, Kind string
+	Collapsed      bool
 	Agents         []agentView
+	Groups         []groupLink
 }
 
 type chipView struct {
@@ -76,7 +78,7 @@ type threadView struct {
 
 type memberView struct {
 	ID, Name, Email, Role string
-	You                   bool
+	You, Checked          bool
 }
 
 type inviteView struct {
@@ -84,14 +86,14 @@ type inviteView struct {
 }
 
 type groupLink struct {
-	ID, Title, Href, Letter string
-	On                      bool
+	ID, Title, Href, Letter, Sub string
+	On, Pinned                   bool
 }
 
 type groupPage struct {
-	ID, Title, Who string
-	Poll           bool
-	Agents         []agentView
+	ID, Title, Who, Note, ConfirmID, SectionID, Letter, Place string
+	Poll, Owner, Pinned, Busy, Confirming, NeedsAgents        bool
+	Agents                                                    []agentView
 }
 
 type cliTokView struct {
@@ -221,6 +223,7 @@ type page struct {
 	QuotaMachines    string
 	QuotaUploads     string
 	Groups           []groupLink
+	GroupsFolded     bool
 	Group            groupPage
 	Routines         routinePanel
 	Run              runBar
@@ -301,6 +304,9 @@ func finish(p page) page {
 		p.BodyClass = "p-main no-bnav"
 	case "group":
 		p.BodyClass = "p-chat"
+		if p.Pane || p.Panel != "" {
+			p.BodyClass += " p-slide"
+		}
 	case "approvals", "routines", "files", "usage":
 		p.BodyClass = "p-main"
 		p.ShowNav = true

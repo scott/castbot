@@ -666,13 +666,29 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 		return page{}, err
 	}
 	loc := userLocation(user.Timezone)
-	groups, err := s.store.ListGroups(r.Context(), user.ID)
+	cards, err := s.store.ListGroupCards(r.Context(), user.ID)
+	if err != nil {
+		return page{}, err
+	}
+	folds, err := s.store.FoldedSections(r.Context(), user.ID)
 	if err != nil {
 		return page{}, err
 	}
 	var groupLinks []groupLink
-	for _, row := range groups {
-		groupLinks = append(groupLinks, groupLink{ID: row.ID, Title: row.Title, Href: "/groups/" + url.PathEscape(row.ID), Letter: letter(row.Title)})
+	placed := map[string][]groupLink{}
+	for _, row := range cards {
+		link := groupLink{
+			ID: row.ID, Title: row.Title, Href: "/groups/" + url.PathEscape(row.ID),
+			Letter: letter(row.Title), Pinned: row.Pinned, Sub: "Group chat",
+		}
+		if row.Pinned {
+			link.Sub = "Pinned"
+		}
+		if row.SectionID == "" {
+			groupLinks = append(groupLinks, link)
+		} else {
+			placed[row.SectionID] = append(placed[row.SectionID], link)
+		}
 	}
 	open := map[string]store.OpenRun{}
 	if rows, err := s.store.ListOpenRuns(r.Context(), user.ID); err == nil {
@@ -691,20 +707,24 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 	}
 	var sv []sectionView
 	for _, sec := range sections {
-		sv = append(sv, sectionView{ID: sec.ID, Name: sec.Name, Kind: sec.Kind, Agents: by[sec.ID]})
+		sv = append(sv, sectionView{
+			ID: sec.ID, Name: sec.Name, Kind: sec.Kind,
+			Agents: by[sec.ID], Groups: placed[sec.ID], Collapsed: folds[sec.ID],
+		})
 	}
 	p := page{
-		Theme:      user.Theme,
-		CSRF:       from(r).CSRF,
-		User:       user,
-		HasUser:    true,
-		Initials:   initials(user.DisplayName),
-		Sections:   sv,
-		Approvals:  approvals,
-		AgentCount: len(agents),
-		Empty:      len(agents) == 0,
-		RoleLine:   roleLine(user.Role, user.WorkspaceName),
-		Groups:     groupLinks,
+		Theme:        user.Theme,
+		CSRF:         from(r).CSRF,
+		User:         user,
+		HasUser:      true,
+		Initials:     initials(user.DisplayName),
+		Sections:     sv,
+		Approvals:    approvals,
+		AgentCount:   len(agents),
+		Empty:        len(agents) == 0,
+		RoleLine:     roleLine(user.Role, user.WorkspaceName),
+		Groups:       groupLinks,
+		GroupsFolded: folds["groups"],
 		PasswordOn: func() string {
 			d := monthDay(user.PasswordChangedAt, loc)
 			if d == "" {

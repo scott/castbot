@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+func TestEchoLookPass(t *testing.T) {
+	if EchoText("echo", GroupLookMark+"\nquiet night\n") != GroupLookPass {
+		t.Fatal("quiet look")
+	}
+	if EchoText("echo", GroupLookMark+"\nhello team\n") != "echo has something to add." {
+		t.Fatal("look reply")
+	}
+	if !strings.Contains(EchoText("echo", "hello there"), "You said:") {
+		t.Fatal("ordinary reply")
+	}
+}
+
 func TestCastTimingDefaults(t *testing.T) {
 	if KeepaliveInterval != 5*time.Second {
 		t.Fatal(KeepaliveInterval)

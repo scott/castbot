@@ -117,11 +117,19 @@ func (s *Server) startQueued(ctx context.Context, runRow store.Run) {
 	if err != nil {
 		return
 	}
+	full, err := s.store.GetMessage(ctx, runRow.UserID, msg.ID)
+	if err != nil {
+		return
+	}
+	text := full.Body
+	if full.Origin == "look" {
+		text = lookPrompt(full.Body)
+	}
 	th, err := s.store.GetThread(ctx, runRow.UserID, runRow.ThreadID)
 	if err != nil {
 		return
 	}
-	s.runs.Start(runJob(runRow.UserID, runRow.ThreadID, runRow.AgentID, runRow.ID, msg.ID, msg.Body, th.CastSessionID, s.priorTurns(ctx, runRow.UserID, runRow.ThreadID, msg.ID)))
+	s.runs.Start(runJob(runRow.UserID, runRow.ThreadID, runRow.AgentID, runRow.ID, full.ID, text, th.CastSessionID, s.priorTurns(ctx, runRow.UserID, runRow.ThreadID, full.ID)))
 }
 
 func (s *Server) settleRoutine(job run.Job, status string) {

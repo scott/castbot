@@ -388,12 +388,240 @@ function restoreScroll() {
   }
 }
 
+function onGroupChat() {
+  return /^\/groups\/[^/]+$/.test(location.pathname);
+}
+
+function groupLetter(name) {
+  var chars = Array.from(String(name || "").trim());
+  if (!chars.length) {
+    return "?";
+  }
+  return chars[0].toUpperCase();
+}
+
+function applyGroupTitle(raw, saved) {
+  var name = String(raw || "").trim();
+  if (!name) {
+    name = String(saved || "").trim();
+  }
+  if (!name) {
+    return;
+  }
+  var letter = groupLetter(name);
+  document.querySelectorAll(".s19h .who-btn .nm, .group-pane .pane-h .nm").forEach(function (el) {
+    el.textContent = name;
+  });
+  document.querySelectorAll(".s19h .who-btn .av, .group-pane .pane-h .av").forEach(function (el) {
+    el.textContent = letter;
+  });
+  document.querySelectorAll(".sb a.ag").forEach(function (link) {
+    if (link.getAttribute("href") !== location.pathname) {
+      return;
+    }
+    var nm = link.querySelector(".nm");
+    var av = link.querySelector(".av");
+    if (nm) {
+      nm.textContent = name;
+    }
+    if (av) {
+      av.textContent = letter;
+    }
+  });
+  var who = document.querySelector(".s19h .who-btn");
+  if (who) {
+    who.setAttribute("aria-label", "Open " + name);
+  }
+  var pane = document.querySelector(".group-pane");
+  if (pane) {
+    pane.setAttribute("aria-label", name + " panel");
+  }
+  document.querySelectorAll("[data-group-title]").forEach(function (input) {
+    input.value = name;
+  });
+}
+
+function applyGroupRoster(form) {
+  var intro = document.querySelector(".group-intro .sub");
+  if (!intro || !form) {
+    return;
+  }
+  var names = [];
+  form.querySelectorAll('input[name="agent"]:checked').forEach(function (box) {
+    var label = box.closest("label");
+    var text = label && label.querySelector(".t1");
+    if (text && text.textContent) {
+      names.push(text.textContent);
+    }
+  });
+  var people = [];
+  form.querySelectorAll('input[name="member"]:checked').forEach(function (box) {
+    var label = box.closest("label");
+    var text = label && label.querySelector(".t1");
+    if (text && text.textContent) {
+      people.push(text.textContent);
+    }
+  });
+  if (people.length) {
+    var me = document.querySelector(".acct .nm");
+    if (me && me.textContent) {
+      names.push(me.textContent);
+    }
+    people.forEach(function (name) {
+      names.push(name);
+    });
+  }
+  var who = "";
+  if (names.length === 1) {
+    who = "With " + names[0] + ".";
+  } else if (names.length === 2) {
+    who = "With " + names[0] + " and " + names[1] + ".";
+  } else if (names.length > 2) {
+    who = "With " + names.slice(0, -1).join(", ") + ", and " + names[names.length - 1] + ".";
+  }
+  var rest = "Agents here can reply. Mention one with @Name when you want that agent to reply.";
+  intro.textContent = who ? who + " " + rest : rest;
+}
+
+function applyGroupPlace() {
+  var pin = document.querySelector('.group-pane form[action$="/pin"] button');
+  var sel = document.querySelector('.group-pane select[name="section"]');
+  var pinned = !!(pin && pin.textContent.trim() === "Unpin");
+  var section = "";
+  if (sel && sel.value && sel.value !== "groups" && sel.selectedIndex >= 0) {
+    section = sel.options[sel.selectedIndex].text;
+  }
+  var text = pinned ? "Pinned" : "Group chat";
+  if (section) {
+    text += " · " + section;
+  }
+  document.querySelectorAll(".s19h .who-btn .sub, .group-pane .pane-h .sub").forEach(function (el) {
+    el.textContent = text;
+  });
+}
+
+function copyGroupTitle(form) {
+  var title = document.querySelector('.group-pane form[action$="/edit"] input[name="title"]');
+  if (!title || !form) {
+    return;
+  }
+  form.querySelectorAll("[data-group-title]").forEach(function (input) {
+    input.value = title.value;
+  });
+}
+
+function groupPaneQuery(scope, selector) {
+  if (!scope || !scope.querySelector) {
+    scope = document;
+  }
+  if (scope.classList && scope.classList.contains("group-pane")) {
+    return scope.querySelector(selector);
+  }
+  return scope.querySelector(".group-pane " + selector);
+}
+
+function bindGroupSetup(root) {
+  var scope = root && root.querySelector ? root : document;
+  var edit = groupPaneQuery(scope, 'form[action$="/edit"]');
+  if (edit && !edit.dataset.bound) {
+    edit.dataset.bound = "1";
+    var title = edit.querySelector('input[name="title"]');
+    var cancel = edit.querySelector("a.btn");
+    if (cancel) {
+      cancel.addEventListener("mousedown", function () {
+        edit.dataset.skip = "1";
+      });
+    }
+    if (title) {
+      title.addEventListener("input", function () {
+        applyGroupTitle(title.value, title.getAttribute("data-saved") || "");
+      });
+      title.addEventListener("change", function () {
+        window.setTimeout(function () {
+          if (edit.dataset.skip) {
+            delete edit.dataset.skip;
+            return;
+          }
+          if (title.value.trim() === (title.getAttribute("data-saved") || "").trim()) {
+            return;
+          }
+          edit.requestSubmit();
+        }, 0);
+      });
+    }
+    edit.querySelectorAll('input[name="agent"], input[name="member"]').forEach(function (box) {
+      box.addEventListener("mousedown", function () {
+        edit.dataset.skip = "1";
+      });
+      box.addEventListener("change", function () {
+        applyGroupRoster(edit);
+        edit.requestSubmit();
+      });
+    });
+  }
+  var forms = [];
+  var pinForm = groupPaneQuery(scope, 'form[action$="/pin"]');
+  var sectionForm = groupPaneQuery(scope, 'form[action$="/section"]');
+  if (pinForm) {
+    forms.push(pinForm);
+  }
+  if (sectionForm) {
+    forms.push(sectionForm);
+  }
+  forms.forEach(function (form) {
+    if (form.dataset.bound) {
+      return;
+    }
+    form.dataset.bound = "1";
+    form.addEventListener("submit", function () {
+      copyGroupTitle(form);
+    });
+  });
+  var section = groupPaneQuery(scope, 'select[name="section"]');
+  if (section && !section.dataset.bound) {
+    section.dataset.bound = "1";
+    section.addEventListener("mousedown", function () {
+      if (edit) {
+        edit.dataset.skip = "1";
+      }
+    });
+    section.addEventListener("change", function () {
+      applyGroupPlace();
+      if (section.form) {
+        section.form.requestSubmit();
+      }
+    });
+  }
+  var pin = pinForm && pinForm.querySelector("button");
+  if (pin && !pin.dataset.bound) {
+    pin.dataset.bound = "1";
+    pin.addEventListener("mousedown", function () {
+      if (edit) {
+        edit.dataset.skip = "1";
+      }
+    });
+  }
+}
+
+function agentPanelTab() {
+  var tab = storeGet("castbot.panelTab") || "agent";
+  if (!tab || tab === "closed" || tab === "group") {
+    return "agent";
+  }
+  return tab;
+}
+
 function panelOpen() {
   var panel = document.getElementById("agent-panel");
   return !!(panel && !panel.hidden && panel.classList.contains("s19pane"));
 }
 
 function chatURL() {
+  var path = location.pathname;
+  var groupForm = path.match(/^\/groups\/([^/]+)\/(?:edit|delete)$/);
+  if (groupForm) {
+    path = "/groups/" + groupForm[1];
+  }
   var q = new URLSearchParams(location.search);
   q.delete("panel");
   q.delete("routine");
@@ -402,7 +630,8 @@ function chatURL() {
   q.delete("view");
   q.delete("give");
   q.delete("revoke");
-  var next = location.pathname;
+  q.delete("confirm");
+  var next = path;
   if (q.toString()) {
     next += "?" + q.toString();
   }
@@ -432,21 +661,20 @@ function bootPanel() {
     return;
   }
   var onAgent = /^\/agents\/[^/]+$/.test(location.pathname);
+  var onGroup = onGroupChat();
   var panel = q.get("panel");
-  if (onAgent && !panel) {
+  if ((onAgent || onGroup) && !panel) {
     var wide = window.matchMedia && window.matchMedia("(min-width: 1280px)").matches;
     var pref = storeGet("castbot.panel");
     if (wide && pref !== "closed") {
-      var tab = storeGet("castbot.panelTab") || "agent";
-      if (!tab || tab === "closed") {
-        tab = "agent";
-      }
-      window.__castbotOpen = tab;
+      window.__castbotOpen = onGroup ? "group" : agentPanelTab();
     }
   }
   if (panel) {
     storeSet("castbot.panel", "open");
-    storeSet("castbot.panelTab", panel);
+    if (panel !== "group") {
+      storeSet("castbot.panelTab", panel);
+    }
     armPanelHistory();
   }
 }
@@ -520,7 +748,9 @@ function openDefaultPanel() {
   window.htmx.ajax("GET", url, { target: "#agent-panel", swap: "outerHTML" });
   history.pushState({ castbotPanel: true }, "", url);
   storeSet("castbot.panel", "open");
-  storeSet("castbot.panelTab", tab);
+  if (tab !== "group") {
+    storeSet("castbot.panelTab", tab);
+  }
 }
 
 function rememberView() {
@@ -632,6 +862,14 @@ function focusPanelTab(panel) {
   var tab = panel.querySelector(".ptabs a.on") || panel.querySelector(".ptabs a");
   if (tab) {
     tab.focus();
+    return;
+  }
+  var items = panel.querySelectorAll("a, button, input, select, textarea");
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].offsetParent !== null) {
+      items[i].focus();
+      return;
+    }
   }
 }
 
@@ -647,7 +885,10 @@ function armPanelLinks(root) {
       continue;
     }
     var href = a.getAttribute("href") || "";
-    if (href.charAt(0) === "#" || href.indexOf("/agents/") !== 0 || href.indexOf("panel=") < 0) {
+    if (href.charAt(0) === "#" || href.indexOf("panel=") < 0) {
+      continue;
+    }
+    if (href.indexOf("/agents/") !== 0 && href.indexOf("/groups/") !== 0) {
       continue;
     }
     a.setAttribute("hx-get", href);
@@ -811,10 +1052,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
   var tog = document.querySelector("[data-panel-toggle]");
   if (tog && !panelOpen()) {
-    var tab = storeGet("castbot.panelTab") || "agent";
-    if (!tab || tab === "closed") {
-      tab = "agent";
-    }
+    var tab = onGroupChat() ? "group" : agentPanelTab();
     var url = new URL(tog.getAttribute("href"), location.origin);
     url.searchParams.set("panel", tab);
     var next = url.pathname + url.search;
@@ -824,6 +1062,7 @@ document.addEventListener("DOMContentLoaded", function () {
   armPanelLinks();
   armToasts();
   syncPanelChrome(document.getElementById("agent-panel"));
+  bindGroupSetup(document);
   watchSettings();
   if (location.hash === "#replace-open" || location.hash === "#replace-hint") {
     var opener = document.getElementById(location.hash.slice(1));
@@ -884,6 +1123,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var panel = document.getElementById("agent-panel");
     syncPanelChrome(panel);
     armPanelLinks(panel);
+    bindGroupSetup(panel);
     var elt = ev.detail.requestConfig && ev.detail.requestConfig.elt;
     var mode = elt && elt.getAttribute("data-hist-now");
     var href = elt && (elt.getAttribute("href") || elt.getAttribute("hx-get"));
@@ -895,7 +1135,9 @@ document.addEventListener("DOMContentLoaded", function () {
     var panelName = new URL(href || location.href, location.origin).searchParams.get("panel");
     if (panelName) {
       storeSet("castbot.panel", "open");
-      storeSet("castbot.panelTab", panelName);
+      if (panelName !== "group") {
+        storeSet("castbot.panelTab", panelName);
+      }
     }
     focusPanelTab(panel);
   });

@@ -515,6 +515,11 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV30(); err != nil {
 		return err
 	}
+	// Version 31 is per-person pins, section placement, collapsed sections,
+	// and the current delete confirmation for a group.
+	if err := s.migrateV31(); err != nil {
+		return err
+	}
 	return nil
 }
 

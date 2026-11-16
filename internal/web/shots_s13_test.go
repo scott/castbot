@@ -130,9 +130,9 @@ func shootS13(t *testing.T, browser context.Context, dir, base, session, groupID
 		needle = `(function(){var t=document.body.innerText||'';var box=document.querySelector('#composer textarea');return t.indexOf('Standup')>=0&&t.indexOf('@Atlas and @Pip can you review the notes?')>=0&&t.indexOf('I can review the notes.')>=0&&t.indexOf('I will take the notes.')>=0&&t.indexOf('Thanks, I will read them too.')>=0&&!!box&&box.placeholder==='Message the group'&&t.indexOf('OPENROUTER')<0&&t.indexOf('\u2014')<0;})()`
 		scroll = `#composer`
 	case "new":
-		page = base + "/groups/new"
-		needle = `(function(){var t=document.body.innerText||'';return t.indexOf('New group')>=0&&t.indexOf('Atlas')>=0&&t.indexOf('Pip')>=0&&t.indexOf('Quinn Hale')>=0&&t.indexOf('Checked people can read this chat and post in it.')>=0&&t.indexOf('A group needs at least two of your agents.')<0&&t.indexOf('\u2014')<0;})()`
-		scroll = `form[action="/groups"]`
+		page = base + "/?list=1"
+		needle = `(function(){var t=document.body.innerText||'';var title=document.querySelector('.group-pane form[action$="/edit"] input[name="title"]');return t.indexOf('New group')>=0&&t.indexOf('Atlas')>=0&&t.indexOf('Pip')>=0&&t.indexOf('Quinn Hale')>=0&&t.indexOf('Checked people can read this chat and post in it.')>=0&&t.indexOf('A group needs at least two of your agents.')>=0&&t.indexOf('Create group')<0&&!!title&&title.value==='New group'&&t.indexOf('\u2014')<0;})()`
+		scroll = `.group-pane form[action$="/edit"] input[name="title"]`
 	case "invite":
 		page = base + invitePath
 		needle = `(function(){var t=document.body.innerText||'';return t.indexOf('Join Personal')>=0&&t.indexOf('Alex Rivera invited Pip Lane')>=0&&t.indexOf('Create account')>=0&&t.indexOf('cbi_')<0&&t.indexOf('\u2014')<0;})()`
@@ -142,7 +142,15 @@ func shootS13(t *testing.T, browser context.Context, dir, base, session, groupID
 	if err := chromedp.Run(ctx, cliOpen(t, base, session, page, width, height)...); err != nil {
 		t.Fatalf("open %s: %s", kind, redactInvite(err.Error(), invitePath))
 	}
-	if err := chromedp.Run(ctx, shotPoll(t, "s13 "+kind, js(needle))); err != nil {
+	if kind == "new" {
+		if err := chromedp.Run(ctx, chromedp.Click(`form[action="/groups"] button`, chromedp.ByQuery)); err != nil && !containsNav(err) {
+			t.Fatalf("open new group: %v", err)
+		}
+		waitNavShot(t, ctx, "s13 "+kind, needle)
+		if err := chromedp.Run(ctx, pageReady(t)); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := chromedp.Run(ctx, shotPoll(t, "s13 "+kind, js(needle))); err != nil {
 		var text string
 		_ = chromedp.Run(ctx, chromedp.Evaluate(js(`document.body?document.body.innerText:''`), &text))
 		t.Fatalf("needle %s: %s\n%s", kind, redactInvite(err.Error(), invitePath), redactInvite(text, invitePath))
