@@ -46,13 +46,15 @@ Forward routes, all `POST`, with the machine bearer:
 
 The guest does not choose the upstream host. `github` on `/egress/http` is `api.github.com`. `digitalocean` on `/egress/http` is `api.digitalocean.com`. DigitalOcean MCP is only `https://mcp.digitalocean.com/mcp`. `/egress/git` accepts GitHub only. `path` is absolute. Methods are GET, HEAD, POST, PUT, PATCH, and DELETE.
 
-A refusal is HTTP 403:
+HTTP and git refusals are HTTP 403:
 
 ```json
 {"error": "not_connected", "message": "Connections are not available on this machine."}
 ```
 
-`error` is `not_connected`, `approval_required`, `redirect_refused`, or `bad_request`. The messages are fixed sentences. The guest copies those four codes and the four card results. It does not copy any other host text.
+`error` is `not_connected`, `approval_required`, `redirect_refused`, or `bad_request`. The messages are fixed sentences. HTTP and git copy those four codes and the four card results. They do not copy any other host text.
+
+An MCP refusal, once the JSON-RPC message has been read, is HTTP 200. The `message` is a JSON-RPC error whose text is one of those four sentences. The guest shim turns any non-200 into the not-connected sentence, so the real sentence has to travel inside a 200. A body that is not a JSON-RPC object stays HTTP 403.
 
 `/egress/http`, `/egress/git`, and `/egress/mcp` run only when that provider is in the live list. `/egress/secret-request` runs whenever the status says `enabled`, including when `providers` is empty, so an agent can ask for a token it does not have yet.
 
@@ -62,7 +64,7 @@ The decoded request body may be up to 32 MiB, which is the guest buffer. The JSO
 
 A mutating call (POST, PUT, PATCH, DELETE) needs a host approval card. A git fetch is a read only when it is real git smart HTTP on `github.com`: `GET` of a path ending in `/info/refs` with the query exactly `service=git-upload-pack`, or `POST` of `/<owner>/<repo>(.git)/git-upload-pack`. Mentioning `git-upload-pack` in an API query or path does not make the call a read. `git-receive-pack` stays a write, including `GET` discovery on `info/refs`.
 
-The card shows a short summary of the request. Secret-shaped text in that summary is removed. The approval is stored with a hash of the exact call (method, path, query, and body; for a tool call, the tool name and canonical arguments). A later call is forwarded only when that hash matches, and the approval is consumed once. A different body or different arguments is rejected and does not reach the upstream. An approved card that is not used expires on the same clock as a pending card. The handler returns `approval_required` as soon as the card exists. It does not hold the request open: the guest's forward budget for HTTP, git, and MCP is 60 seconds. A denied, expired, or mismatched card does not reach the upstream. The card lasts 10 minutes. A runtime approval for a tool name does not authorize a connection write on its own.
+The card shows a short summary of the request. Secret-shaped text in that summary is removed. The approval is stored with a hash of the exact call (method, path, query, and body; for a tool call, the tool name and canonical arguments). A later call is forwarded only when that hash matches, and the approval is consumed once. A different body or different arguments is rejected and does not reach the upstream. An approved card that is not used expires on the same clock as a pending card. The handler returns the approval sentence as soon as the card exists. It does not hold the request open: the guest's forward budget for HTTP, git, and MCP is 60 seconds. When Always approve for this prompt is already on, that card is approved and consumed in the same request and the call is forwarded. A denied, expired, or mismatched card does not reach the upstream. The card lasts 10 minutes. A runtime approval for a tool name does not authorize a connection write on its own.
 
 `/egress/secret-request` may stay open for the 60 minute card. Its result is only `saved`, `declined`, `expired`, or `already_configured`.
 
@@ -72,7 +74,7 @@ Audit rows store the connection, method, path, and outcome. They do not store th
 
 GitHub uses an in-process adapter. It exposes a small read and write set (current user, repos, issues, pull requests, and file contents). Writes go through the same approval wait and the same allowlisted proxy.
 
-DigitalOcean does not use that adapter. Every DigitalOcean MCP message is posted to `https://mcp.digitalocean.com/mcp` with the vault token. The guest still speaks to `castbot-mcp digitalocean`. The control plane opens the hosted session, then forwards `tools/list` and `tools/call`. `find_tools` and `retrieve_schema` are reads. `invoke_tool` is a write, so it asks unless the owner set Always allow. The older droplet and app tool names are refused. `CASTBOT_MCP_DIGITALOCEAN` is ignored, so a local process is not started for this connection.
+DigitalOcean does not use that adapter. Every DigitalOcean MCP message is posted to `https://mcp.digitalocean.com/mcp` with the vault token. The guest still speaks to `castbot-mcp digitalocean`. The control plane opens the hosted session, then forwards `tools/list` and `tools/call`. `find_tools` and `retrieve_schema` are reads. `invoke_tool` is a write, so it asks unless the owner set Always allow. An `invoke_tool` that still needs a card is HTTP 200 with the approval sentence, and the hosted server is not called. An active Always approve grant for this prompt forwards that call in the same request. The older droplet and app tool names are refused. `CASTBOT_MCP_DIGITALOCEAN` is ignored, so a local process is not started for this connection.
 
 A local GitHub MCP process is not started on the 512 MB control plane. Set `CASTBOT_MCP_GITHUB` only on a host that has the memory. That process gets a clean environment with one token variable, stops after 45 seconds idle, and its stdout is checked for the token. That path is optional and off by default. It is not used for DigitalOcean.
 

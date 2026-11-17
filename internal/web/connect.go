@@ -410,7 +410,7 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
 			"connection": server, "outcome": connect.OutcomeBad, "tool": clipAudit(rpcTool(msg)),
 		})
-		writeEgressFail(w, "bad_request")
+		writeMCPFail(w, msg.ID, "bad_request", "")
 		return
 	}
 	switch s.namedToolGate(r.Context(), userID, server, msg) {
@@ -418,7 +418,7 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
 			"connection": server, "outcome": "denied", "tool": clipAudit(rpcTool(msg)),
 		})
-		writeEgressFail(w, "bad_request")
+		writeMCPFail(w, msg.ID, "bad_request", "")
 		return
 	case "allow":
 	default:
@@ -432,7 +432,7 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 			args := rpcArgs(msg)
 			hash, hashErr := connect.MCPHash(tool, args)
 			if hashErr != nil || tool == "" {
-				writeEgressFail(w, "bad_request")
+				writeMCPFail(w, msg.ID, "bad_request", "")
 				return
 			}
 			call := connect.Call{
@@ -448,14 +448,14 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 				_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
 					"connection": server, "outcome": outcome, "tool": clipAudit(call.Tool),
 				})
-				writeEgressFail(w, egressCode(outcome))
+				writeMCPFail(w, msg.ID, egressCode(outcome), "")
 				return
 			}
 		}
 	}
 	token, err := s.store.ConnectionValue(r.Context(), userID, server)
 	if err != nil {
-		writeEgressFail(w, "not_connected")
+		writeMCPFail(w, msg.ID, "not_connected", "")
 		return
 	}
 	var out json.RawMessage
@@ -465,13 +465,13 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 			_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
 				"connection": server, "outcome": connect.Code(err), "tool": clipAudit(rpcTool(msg)),
 			})
-			writeEgressFail(w, egressCode(connect.Code(err)))
+			writeMCPFail(w, msg.ID, egressCode(connect.Code(err)), token)
 			return
 		}
 	} else if s.mcpPool().Has(server) {
 		out, err = s.mcpPool().RoundTrip(r.Context(), server, token, body.Message)
 		if err != nil {
-			writeEgressFail(w, "bad_request")
+			writeMCPFail(w, msg.ID, "bad_request", token)
 			return
 		}
 	} else {
@@ -482,7 +482,7 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 			_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
 				"connection": server, "outcome": connect.Code(err), "tool": clipAudit(rpcTool(msg)),
 			})
-			writeEgressFail(w, egressCode(connect.Code(err)))
+			writeMCPFail(w, msg.ID, egressCode(connect.Code(err)), token)
 			return
 		}
 	}
@@ -577,9 +577,10 @@ func (s *Server) waitSecret(ctx context.Context, userID, id string) string {
 }
 
 // gateApproval lets a mutating call through only when a card is already
-// approved. A missing card is created and the call returns at once. The
-// guest forward budget is 60 seconds, so this handler does not hold the
-// request open while a person decides.
+// approved, or when Always approve for this prompt consumes a new card
+// in this request. A missing card is created and the call returns at
+// once. The guest forward budget is 60 seconds, so this handler does
+// not hold the request open while a person decides.
 func (s *Server) gateApproval(ctx context.Context, userID, agentID string, call connect.Call) error {
 	method := strings.ToUpper(strings.TrimSpace(call.Method))
 	path := auditPath(call.URL)
@@ -641,12 +642,20 @@ func (s *Server) gateApproval(ctx context.Context, userID, agentID string, call 
 	if err != nil {
 		return err
 	}
-	// A grant for this prompt approves the card before the page is told,
-	// so it does not sit on the pending bar. The guest retries and consumes it.
+	// A grant for this prompt approves and consumes the card in this
+	// request, so the call is forwarded now. Cast agents do not retry an
+	// approval error on their own. A grant that cannot be consumed still
+	// returns approval_required, and the next identical call uses the card.
 	if row.RunID != "" {
 		if msgID, merr := s.store.PromptMessageID(ctx, userID, row.RunID); merr == nil && msgID != "" {
 			if active, aerr := s.store.PromptGrantActive(ctx, userID, msgID); aerr == nil && active {
-				_, _, _ = s.store.GrantConnectApproval(ctx, userID, row.ID)
+				granted, claimed, gerr := s.store.GrantConnectApproval(ctx, userID, row.ID)
+				if gerr == nil && claimed {
+					ok, cerr := s.store.ConsumeConnectApproval(ctx, userID, granted.ID)
+					if cerr == nil && ok {
+						return nil
+					}
+				}
 			}
 		}
 	}
@@ -1070,6 +1079,29 @@ func writeEgressFail(w http.ResponseWriter, code string) {
 		code = "bad_request"
 	}
 	writeJSON(w, http.StatusForbidden, map[string]string{"error": code, "message": egressMessage(code)})
+}
+
+// writeMCPFail returns HTTP 200 with a JSON-RPC error. The guest shim
+// turns every non-200 into the not-connected sentence, so the fixed
+// sentence has to travel inside a 200 for the agent to see it.
+func writeMCPFail(w http.ResponseWriter, id json.RawMessage, code, token string) {
+	switch code {
+	case "not_connected", "approval_required", "redirect_refused", "bad_request":
+	default:
+		code = "bad_request"
+	}
+	if len(id) == 0 || len(id) > 128 || !json.Valid(id) || (token != "" && bytes.Contains(id, []byte(token))) {
+		id = json.RawMessage("null")
+	}
+	raw, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error":   map[string]any{"code": -32000, "message": egressMessage(code)},
+	})
+	if err != nil || (token != "" && bytes.Contains(raw, []byte(token))) {
+		raw = []byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"The connection request was rejected."}}`)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"message": json.RawMessage(raw)})
 }
 
 func cleanApprovalID(id string) string {
