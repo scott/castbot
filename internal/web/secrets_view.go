@@ -1001,7 +1001,7 @@ func (s *Server) giveSecretsForm(ctx context.Context, user store.User, agent sto
 		form.Note = agent.Name + " reloads to get it. No new machine."
 	}
 	for _, sec := range rows {
-		if have[sec.ID] || connect.BlocksGuest(sec.Name) {
+		if have[sec.ID] || connect.BlocksGuest(sec.Name) || store.BlocksSSHSeed(sec.Name) {
 			continue
 		}
 		gids, err := s.store.GrantAgentIDs(ctx, user.ID, sec.ID)

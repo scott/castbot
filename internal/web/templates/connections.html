@@ -10,6 +10,7 @@
 <a class="back-to dt-only" href="/settings/connections">{{template "backsvg" .}}Connections</a>
 <section class="card" id="conn-detail" aria-labelledby="conn-title"><div class="card-h"><h3 id="conn-title">{{.Connections.Detail.Title}}</h3><span class="side">{{if .Connections.Detail.On}}Connected{{else}}Not connected{{end}}</span></div>
 <p>{{.Connections.Detail.Body}}</p>
+{{if .Connections.Detail.SSHKey}}<p id="conn-ssh">New droplets use the SSH key <span class="mono">{{.Connections.Detail.SSHKey}}</span>. The private key stays in your vault.</p>{{end}}
 <form id="conn-form" method="post" action="/settings/connections/{{.Connections.Detail.ID}}"><input type="hidden" name="csrf" value="{{.CSRF}}">
 {{if .Connections.Detail.NeedsSecret}}<div class="field">
 {{if and .Connections.Detail.HasSecret (not .Connections.Detail.EditToken)}}
