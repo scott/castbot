@@ -359,7 +359,7 @@ func TestNamedToolPolicySkipsOrBlocksTheHostCard(t *testing.T) {
 	mu.Lock()
 	gotDials = dials
 	mu.Unlock()
-	if code != http.StatusForbidden || !strings.Contains(body, `"error":"bad_request"`) || gotDials != 1 || strings.Contains(body, connectCanary) {
+	if code != http.StatusOK || !mcpSentence(body, "The connection request was rejected.") || gotDials != 1 || strings.Contains(body, connectCanary) {
 		t.Fatalf("deny %d dials %d %s", code, gotDials, body)
 	}
 	if err := h.st.SaveConnectionLevels(context.Background(), user.ID, connect.GitHub, map[string]string{"create_issue": "ask"}); err != nil {
@@ -369,7 +369,7 @@ func TestNamedToolPolicySkipsOrBlocksTheHostCard(t *testing.T) {
 	mu.Lock()
 	gotDials = dials
 	mu.Unlock()
-	if code != http.StatusForbidden || !strings.Contains(body, `"error":"approval_required"`) || gotDials != 1 {
+	if code != http.StatusOK || !mcpSentence(body, "This action needs approval.") || gotDials != 1 {
 		t.Fatalf("ask %d dials %d %s", code, gotDials, body)
 	}
 	if waitConnectCardText(t, h, user.ID, agent.ID, "create_issue") == "" {

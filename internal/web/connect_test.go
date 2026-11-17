@@ -547,8 +547,8 @@ func TestApprovalBindsTheExactRequest(t *testing.T) {
 		return `{"server":"github","message":{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_issue","arguments":{"owner":"octo","repo":"demo","title":"` + title + `"}}}}`
 	}
 	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/mcp", mcp("harmless"))
-	if code != http.StatusForbidden || !strings.Contains(body, `"error":"approval_required"`) || dials != before {
-		t.Fatalf("mcp card %d dials %d", code, dials)
+	if code != http.StatusOK || !mcpSentence(body, "This action needs approval.") || dials != before {
+		t.Fatalf("mcp card %d dials %d %s", code, dials, body)
 	}
 	mcpID := waitConnectCardText(t, h, user.ID, agent.ID, "create_issue")
 	code, _, _ = h.do(http.MethodPost, "/agents/"+agent.ID+"/connect-approvals/"+mcpID+"/approve", h.form(url.Values{}), ip, map[string]string{"HX-Request": "true"})
@@ -556,8 +556,8 @@ func TestApprovalBindsTheExactRequest(t *testing.T) {
 		t.Fatalf("mcp approve %d", code)
 	}
 	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/mcp", mcp("swapped"))
-	if code != http.StatusForbidden || !strings.Contains(body, `"error":"approval_required"`) || dials != before {
-		t.Fatalf("swapped args %d dials %d", code, dials)
+	if code != http.StatusOK || !mcpSentence(body, "This action needs approval.") || dials != before {
+		t.Fatalf("swapped args %d dials %d %s", code, dials, body)
 	}
 	code, body = machinePost(t, h, ip, token, agent.ID, "/egress/mcp", mcp("harmless"))
 	if code != 200 || dials != before+1 || strings.Contains(body, connectCanary) {
