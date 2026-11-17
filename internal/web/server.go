@@ -411,6 +411,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /agents/{id}/machine/card", s.machineCard)
 	mux.HandleFunc("GET /agents/{id}/machine/sync", s.machineSync)
 	mux.HandleFunc("GET /agents/{id}/machine/logs", s.machineLogs)
+	mux.HandleFunc("GET /agents/{id}/machine/history", s.machineHistory)
 	mux.HandleFunc("POST /agents/{id}/machine/refresh", s.refreshMachinePanel)
 	mux.HandleFunc("GET /agents/{id}/machine/replace", s.confirmReplace)
 	mux.HandleFunc("POST /agents/{id}/machine/replace", s.postReplace)

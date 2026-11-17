@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -133,11 +134,9 @@ func (s *Server) fillMachineExtras(r *http.Request, user store.User, agent store
 		view.LogText = ""
 		view.LogLive = false
 		view.LogNote = "Logs and files wait until the replace is done."
-		view.FilesNote = view.LogNote
 		return
 	}
 	s.fillMachineLogs(r.Context(), user.ID, agent.ID, view)
-	s.fillMachineFiles(r, user, agent, view)
 }
 
 func (s *Server) fillMachineLogs(ctx context.Context, userID, agentID string, view *machineView) {
@@ -215,83 +214,6 @@ func scrubLog(raw string, secrets []string) string {
 	return strings.TrimRight(strings.Join(out, "\n"), "\n")
 }
 
-func (s *Server) fillMachineFiles(r *http.Request, user store.User, agent store.Agent, view *machineView) {
-	if view.State == "" {
-		view.FilesNote = "No machine yet, so there are no workspace files."
-		return
-	}
-	listErr := false
-	if view.State == "running" {
-		if err := s.refreshWorkspaceLimited(r.Context(), user.ID, agent.ID); err != nil {
-			listErr = true
-		}
-	}
-	cached, err := s.store.ListCached(r.Context(), user.ID, agent.ID)
-	if err != nil {
-		view.FilesNote = "No workspace files yet."
-		return
-	}
-	base := "/agents/" + url.PathEscape(agent.ID)
-	for _, row := range cached {
-		if strings.HasPrefix(row.Name, "uploads/") {
-			continue
-		}
-		view.Files = append(view.Files, fileRow{
-			Name:     row.Name,
-			Meta:     formatSize(row.Size),
-			Href:     base + "?panel=files&file=" + url.QueryEscape(row.ID),
-			Download: base + "/files/" + url.PathEscape(row.ID) + "/download",
-		})
-	}
-	if listErr {
-		view.FilesNote = "The file list could not be read. The machine was not woken."
-		return
-	}
-	if view.State == "paused" {
-		if len(view.Files) == 0 {
-			view.FilesNote = "No workspace files yet. Opening this panel does not wake the machine."
-		} else {
-			view.FilesNote = "Last list from the machine. Opening this panel does not wake it."
-		}
-		return
-	}
-	if view.State != "running" {
-		if len(view.Files) == 0 {
-			view.FilesNote = "No workspace files yet."
-		} else {
-			view.FilesNote = "Last list from the machine. Opening this panel does not wake it."
-		}
-		return
-	}
-	if len(view.Files) == 0 {
-		view.FilesNote = "No workspace files yet."
-		return
-	}
-	view.FilesNote = "Workspace files on this machine. Downloads stream through castbot."
-}
-
-func (s *Server) refreshWorkspaceLimited(ctx context.Context, userID, agentID string) error {
-	h, _, _ := s.hostConfig()
-	if h == nil {
-		return nil
-	}
-	endpoint, token, err := s.store.VMCredentials(ctx, userID, agentID)
-	if err != nil || endpoint == "" || token == "" {
-		return nil
-	}
-	cctx, cancel := context.WithTimeout(ctx, guestReadLimit)
-	listed, err := h.ListWorkspace(cctx, endpoint, token)
-	cancel()
-	if err != nil {
-		return err
-	}
-	rows := make([]store.ListedFile, 0, len(listed))
-	for _, item := range listed {
-		rows = append(rows, store.ListedFile{Name: item.Name, Size: item.Size})
-	}
-	return s.store.ObserveWorkspace(ctx, userID, agentID, rows)
-}
-
 func (s *Server) machineLogs(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.requireUser(w, r)
 	if !ok {
@@ -312,5 +234,26 @@ func (s *Server) machineLogs(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "machineLogs", page{
 		Agent:   agentView{ID: agent.ID},
 		Machine: view,
+	})
+}
+
+func (s *Server) machineHistory(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	agent, err := s.store.GetAgent(r.Context(), user.ID, r.PathValue("id"))
+	if s.missing(w, err) {
+		return
+	}
+	offset, err := strconv.Atoi(r.URL.Query().Get("offset"))
+	if err != nil || offset < 0 {
+		writeText(w, http.StatusBadRequest, "Bad request\n")
+		return
+	}
+	shown, more, next := pageHistory(s.replaceHistory(r.Context(), user, agent.ID, userLocation(user.Timezone)), offset)
+	s.render(w, http.StatusOK, "machineHistoryMore", page{
+		Agent:   agentView{ID: agent.ID},
+		Replace: replaceView{History: shown, HistoryMore: more, HistoryNext: next},
 	})
 }

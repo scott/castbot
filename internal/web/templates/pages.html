@@ -136,7 +136,7 @@
 {{range .Groups}}{{template "groupRow" .}}{{end}}{{end}}
 </div>
 {{end}}{{end}}
-{{if or .Groups (ge .AgentCount 2)}}<div class="sec"><h4><form class="fold" method="post" action="/sections/groups/fold"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="fold{{if .GroupsFolded}} shut{{end}}" type="submit" aria-expanded="{{if .GroupsFolded}}false{{else}}true{{end}}" aria-label="{{if .GroupsFolded}}Expand{{else}}Collapse{{end}} Groups"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button></form>Groups{{if ge .AgentCount 2}} <form class="inline" method="post" action="/groups"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="link" type="submit">New</button></form>{{end}}</h4>{{if not .GroupsFolded}}{{range .Groups}}{{template "groupRow" .}}{{end}}{{end}}</div>{{end}}
+{{if or .Groups (ge .AgentCount 2)}}<div class="sec"><h4><form class="fold" method="post" action="/sections/groups/fold"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="fold{{if .GroupsFolded}} shut{{end}}" type="submit" aria-expanded="{{if .GroupsFolded}}false{{else}}true{{end}}" aria-label="{{if .GroupsFolded}}Expand{{else}}Collapse{{end}} Groups"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button></form>Groups</h4>{{if not .GroupsFolded}}{{range .Groups}}{{template "groupRow" .}}{{end}}{{end}}</div>{{end}}
 {{if .Empty}}<div class="sb-empty"><span>No agents yet. Each agent you create gets its own machine.</span><a class="btn sm pri" href="/new-agent">{{template "plus" .}}New agent</a></div>{{end}}
 <div class="sb-foot"><a class="acct{{if eq .Page "settings" "password" "stub" "secrets" "connections"}} on{{end}}" href="/settings" aria-label="Account and settings"><span class="av me">{{.Initials}}</span><span class="grow"><span class="nm">{{.User.DisplayName}}</span><br><span class="sub">{{.User.WorkspaceName}} workspace</span></span>{{template "gear" .}}</a></div>
 </aside>
@@ -161,7 +161,7 @@
 {{end}}
 
 {{define "approvalCard"}}
-{{if .Fold}}<details class="appr appr-fold{{if .Approved}} done{{end}} settled" id="appr-{{.ID}}"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>
+{{if .Fold}}<details class="appr appr-fold{{if .Approved}} done{{end}} settled" id="{{if .Hist}}hist-{{end}}appr-{{.ID}}"{{if .Find}} data-find="{{.Find}}"{{end}}{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>
 <summary class="appr-sum"><span class="ico" aria-hidden="true">{{if .Approved}}{{template "checksvg" .}}{{else if eq .Fold "Denied"}}{{template "xsvg" .}}{{else}}<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>{{end}}</span><span class="st">{{.Fold}}</span><span class="tn">{{.Tool}}</span>{{if .When}}<span class="stamp">{{.When}}</span>{{end}}<svg class="i sm chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></summary>
 <div class="appr-more">{{template "approvalCardBody" .}}</div>
 </details>{{else}}<div class="appr{{if .Approved}} done{{end}}{{if not .Pending}} settled{{end}}" id="appr-{{.ID}}"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>{{template "approvalCardBody" .}}</div>{{end}}
@@ -424,20 +424,19 @@
 {{if .Replace.RollbackTag}}<p class="fineprint" id="rollback-note">Previous runtime {{.Replace.RollbackTag}} can be restored for {{.Replace.RollbackDays}} days. Memory and workspace files are copied again.</p>{{end}}
 {{if .Replace.LockLine}}<p class="lockline">This machine is being replaced. Pause, Wake, Delete and Add to Cast CLI are off until it is done.</p>{{end}}
 {{template "machineLogs" .}}
-<section class="mfiles" id="machine-files">
-<div class="mhead"><h3>Files</h3><a class="link" href="/agents/{{.Agent.ID}}?panel=files">Open files</a></div>
-{{if .Machine.FilesNote}}<p class="fineprint">{{.Machine.FilesNote}}</p>{{end}}
-{{if .Machine.Files}}<div class="inp fsearch"><input type="search" id="machine-file-filter" placeholder="Filter by name" aria-label="Filter machine files"></div>
-<div class="flist">{{range .Machine.Files}}<div class="frow"><a class="grow fmain" href="{{.Href}}"><span class="t1">{{.Name}}</span><span class="t2">{{.Meta}}</span></a><a class="ibtn line fdl" href="{{.Download}}" aria-label="Download {{.Name}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg></a></div>{{end}}</div>{{end}}
-</section>
 {{if .Replace.Reason}}<p class="reason">{{.Replace.Reason}}{{if .Replace.ReasonHref}} <a class="link" href="{{.Replace.ReasonHref}}">{{.Replace.ReasonLabel}}</a>{{end}}</p>{{end}}
 {{if .Replace.HintBold}}<div class="rhint{{if .Replace.Same}} quiet{{end}}"><div><b>{{.Replace.HintBold}}</b> {{.Replace.HintRest}}</div>{{if and .Replace.Update .Replace.CanReplace}}<a class="btn sm pri" id="replace-hint" href="/agents/{{.Agent.ID}}/machine/replace?opener=replace-hint">Replace machine</a>{{end}}</div>{{end}}
 {{template "cliBox" .}}
 {{if .Machine.CanDelete}}<form class="machine-del" method="post" action="/agents/{{.Agent.ID}}/machine/delete"><input type="hidden" name="csrf" value="{{.CSRF}}"><label class="lab" for="confirm-name">Type {{.Agent.Name}} to delete this machine</label><div class="inp"><input id="confirm-name" name="confirm" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Type the agent name"{{if .Replace.Lock}} disabled{{end}}></div><button class="btn sm danger-ghost" type="submit"{{if .Replace.Lock}} disabled{{end}}>Delete agent</button><p class="fineprint">Deleting removes this agent and its machine. This cannot be undone. Memory export is not in this version.</p></form>{{end}}
-{{if .Replace.History}}<section class="hist"><h3>Machine history</h3><ul class="evs">{{range .Replace.History}}<li><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}</ul></section>{{end}}
+{{if .Replace.History}}<section class="hist" id="machine-history"><h3>Machine history</h3><ul class="evs" id="machine-history-list">{{range .Replace.History}}<li><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}</ul>{{if .Replace.HistoryMore}}<div id="machine-history-more"><button class="link" type="button" hx-get="/agents/{{.Agent.ID}}/machine/history?offset={{.Replace.HistoryNext}}" hx-target="#machine-history-more" hx-swap="outerHTML" hx-disabled-elt="this">Show more</button></div>{{end}}</section>{{end}}
 {{if .Replace.LogNote}}<p class="fineprint">{{.Replace.LogNote}}</p>{{end}}
 <p class="fineprint">State from the cloud API. Checking it does not wake the machine.</p>
 </div>
+{{end}}
+
+{{define "machineHistoryMore"}}
+{{range .Replace.History}}<li hx-swap-oob="beforeend:#machine-history-list"><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}
+<div id="machine-history-more">{{if .Replace.HistoryMore}}<button class="link" type="button" hx-get="/agents/{{.Agent.ID}}/machine/history?offset={{.Replace.HistoryNext}}" hx-target="#machine-history-more" hx-swap="outerHTML" hx-disabled-elt="this">Show more</button>{{end}}</div>
 {{end}}
 
 {{define "machineLogs"}}

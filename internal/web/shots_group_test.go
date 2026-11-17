@@ -122,9 +122,7 @@ func shootGroup(t *testing.T, browser context.Context, dir, base, session, group
 		}
 	}
 	if kind == "new" {
-		if err := chromedp.Run(ctx, chromedp.Click(`form[action="/groups"] button`, chromedp.ByQuery)); err != nil && !containsNav(err) {
-			t.Fatalf("open new group: %v", err)
-		}
+		openNewGroup(t, ctx)
 		waitNavShot(t, ctx, "105 "+kind, needle)
 		if err := chromedp.Run(ctx, pageReady(t)); err != nil {
 			t.Fatal(err)
@@ -137,6 +135,35 @@ func shootGroup(t *testing.T, browser context.Context, dir, base, session, group
 	assertNoSideScroll(t, ctx)
 	assertShotClean(t, ctx)
 	saveShot(t, ctx, filepath.Join(dir, kind+"-"+theme+"-"+name+".png"))
+}
+
+func openNewGroup(t *testing.T, ctx context.Context) {
+	t.Helper()
+	var ok bool
+	err := chromedp.Run(ctx, chromedp.Evaluate(js(`(function(){
+		var csrf = document.querySelector('input[name="csrf"]');
+		if (!csrf) return false;
+		var form = document.createElement('form');
+		form.method = 'post';
+		form.action = '/groups';
+		var input = document.createElement('input');
+		input.type = 'hidden';
+		input.name = 'csrf';
+		input.value = csrf.value;
+		form.appendChild(input);
+		var button = document.createElement('button');
+		button.type = 'submit';
+		button.id = 'shot-new-group';
+		form.appendChild(button);
+		document.body.appendChild(form);
+		return true;
+	})()`), &ok))
+	if err != nil || !ok {
+		t.Fatalf("prepare new group: %v %v", ok, err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Click(`#shot-new-group`, chromedp.ByQuery)); err != nil && !containsNav(err) {
+		t.Fatalf("open new group: %v", err)
+	}
 }
 
 func markDoc(t *testing.T, ctx context.Context) {
@@ -200,9 +227,7 @@ func TestGroupSetupReflects(t *testing.T) {
 	if err := chromedp.Run(tabCtx, cliOpen(t, ts.URL, sessionToken(t, h, owner.ID), ts.URL+"/?list=1", 1280, 800)...); err != nil {
 		t.Fatal(err)
 	}
-	if err := chromedp.Run(tabCtx, chromedp.Click(`form[action="/groups"] button`, chromedp.ByQuery)); err != nil && !containsNav(err) {
-		t.Fatal(err)
-	}
+	openNewGroup(t, tabCtx)
 	ready := `(function(){var form=document.querySelector('.group-pane form[action$="/edit"]');var title=document.querySelector('.group-pane form[action$="/edit"] input[name="title"]');return !!form&&form.dataset.bound==='1'&&!!title&&title.value==='New group';})()`
 	waitNavShot(t, tabCtx, "setup ready", ready)
 	var set bool

@@ -994,10 +994,35 @@ function trapPanelTab(ev) {
   }
 }
 
+function filterApprovals() {
+  var filter = document.getElementById("approval-filter");
+  var list = document.getElementById("approval-earlier");
+  if (!list) return;
+  var q = filter ? (filter.value || "").trim().toLowerCase() : "";
+  var rows = list.querySelectorAll("[data-find]");
+  var shown = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var hit = q === "" || (rows[i].getAttribute("data-find") || "").indexOf(q) !== -1;
+    rows[i].hidden = !hit;
+    if (hit) shown++;
+  }
+  var empty = document.getElementById("approval-filter-empty");
+  if (empty) empty.hidden = q === "" || shown > 0;
+}
+
 document.addEventListener("input", function (ev) {
   if (ev.target && ev.target.closest && ev.target.closest("#composer")) {
     saveDraft();
   }
+  if (ev.target && ev.target.id === "approval-filter") filterApprovals();
+});
+
+document.addEventListener("search", function (ev) {
+  if (ev.target && ev.target.id === "approval-filter") filterApprovals();
+});
+
+document.addEventListener("htmx:afterSettle", function () {
+  filterApprovals();
 });
 
 document.addEventListener("scroll", function (ev) {

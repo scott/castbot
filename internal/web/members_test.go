@@ -163,7 +163,7 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 		t.Fatalf("owner home %d %s", code, hdr.Get("Location"))
 	}
 	code, body, _ = h.do(http.MethodGet, "/settings", "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, "1 of 4") || !strings.Contains(body, `action="/groups"`) {
+	if code != http.StatusOK || !strings.Contains(body, "1 of 4") || !strings.Contains(body, `aria-label="Collapse Groups"`) || strings.Contains(body, `action="/groups"`) || strings.Contains(body, ">New</button>") {
 		t.Fatalf("owner machines %d bytes", len(body))
 	}
 	groupID := startGroupID(t, h, ip)

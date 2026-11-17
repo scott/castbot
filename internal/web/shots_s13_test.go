@@ -143,9 +143,7 @@ func shootS13(t *testing.T, browser context.Context, dir, base, session, groupID
 		t.Fatalf("open %s: %s", kind, redactInvite(err.Error(), invitePath))
 	}
 	if kind == "new" {
-		if err := chromedp.Run(ctx, chromedp.Click(`form[action="/groups"] button`, chromedp.ByQuery)); err != nil && !containsNav(err) {
-			t.Fatalf("open new group: %v", err)
-		}
+		openNewGroup(t, ctx)
 		waitNavShot(t, ctx, "s13 "+kind, needle)
 		if err := chromedp.Run(ctx, pageReady(t)); err != nil {
 			t.Fatal(err)
