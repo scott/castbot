@@ -40,9 +40,10 @@ func Catalog() []Entry {
 		},
 		{
 			ID: DigitalOcean, Title: "DigitalOcean", SecretName: SecretNameDigitalOcean,
-			Detail:     "API token. You choose what it can access. Stored in your vault.",
+			Detail:     "API token. Calls use the MCP server only. You choose what it can access. Stored in your vault.",
 			TokenLabel: "DigitalOcean token",
-			Hosts:      []string{"api.digitalocean.com"},
+			// The MCP host is the tool path. The API host stays for doctl HTTP.
+			Hosts: []string{"mcp.digitalocean.com", "api.digitalocean.com"},
 		},
 	}
 }
@@ -101,9 +102,10 @@ type Tool struct {
 	Query []string
 }
 
-// Tools is the adapter catalog for one connection.
-// It is not the full official server. Official processes are not started
-// on the small control plane. See the connections doc.
+// Tools is the policy catalog for one connection.
+// GitHub entries are the in-process adapter. DigitalOcean entries are the
+// hosted MCP server tools. They are not turned into API requests.
+// See the connections doc.
 func Tools(connection string) []Tool {
 	switch connection {
 	case GitHub:
@@ -113,6 +115,19 @@ func Tools(connection string) []Tool {
 	default:
 		return nil
 	}
+}
+
+// RetiredTool reports a DigitalOcean adapter name that must not be forwarded.
+func RetiredTool(connection, name string) bool {
+	if connection != DigitalOcean {
+		return false
+	}
+	for _, tool := range retiredDigitalOceanTools {
+		if tool == name {
+			return true
+		}
+	}
+	return false
 }
 
 // FindTool returns one adapter tool.
@@ -133,6 +148,7 @@ func PermNames() []string {
 			out = append(out, tool.Name)
 		}
 	}
+	out = append(out, retiredDigitalOceanTools...)
 	return out
 }
 
@@ -150,11 +166,19 @@ var githubTools = []Tool{
 	{Name: "create_or_update_file", Title: "GitHub: write a file", Write: true, Method: "PUT", Path: "/repos/{owner}/{repo}/contents/{path}"},
 }
 
+// digitalOceanTools are the hosted MCP router tools. Path stays empty so
+// the adapter cannot turn them into api.digitalocean.com requests.
 var digitalOceanTools = []Tool{
-	{Name: "do_account_get", Title: "DigitalOcean: account", Method: "GET", Path: "/v2/account"},
-	{Name: "do_droplets_list", Title: "DigitalOcean: list droplets", Method: "GET", Path: "/v2/droplets", Query: []string{"page", "per_page"}},
-	{Name: "do_droplet_get", Title: "DigitalOcean: read a droplet", Method: "GET", Path: "/v2/droplets/{droplet_id}"},
-	{Name: "do_apps_list", Title: "DigitalOcean: list apps", Method: "GET", Path: "/v2/apps", Query: []string{"page", "per_page"}},
-	{Name: "do_droplet_create", Title: "DigitalOcean: create a droplet", Write: true, Method: "POST", Path: "/v2/droplets"},
-	{Name: "do_droplet_delete", Title: "DigitalOcean: delete a droplet", Write: true, Method: "DELETE", Path: "/v2/droplets/{droplet_id}"},
+	{Name: "find_tools", Title: "DigitalOcean: find tools"},
+	{Name: "retrieve_schema", Title: "DigitalOcean: read a tool schema"},
+	{Name: "invoke_tool", Title: "DigitalOcean: run a tool", Write: true},
+}
+
+var retiredDigitalOceanTools = []string{
+	"do_account_get",
+	"do_droplets_list",
+	"do_droplet_get",
+	"do_apps_list",
+	"do_droplet_create",
+	"do_droplet_delete",
 }

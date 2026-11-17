@@ -354,7 +354,7 @@ func relayHeaders(h http.Header, token string) map[string]string {
 func allowRelayHeader(key string) bool {
 	key = strings.ToLower(key)
 	switch key {
-	case "content-type", "cache-control", "etag", "content-disposition":
+	case "content-type", "cache-control", "etag", "content-disposition", "mcp-session-id":
 		return true
 	default:
 		return strings.HasPrefix(key, "x-git-")

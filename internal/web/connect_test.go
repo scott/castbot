@@ -704,7 +704,7 @@ func connectUpstream(t *testing.T, h http.HandlerFunc) (*httptest.Server, *conne
 		Subject:      pkix.Name{CommonName: "api.github.com"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
-		DNSNames:     []string{"api.github.com", "github.com"},
+		DNSNames:     []string{"api.github.com", "github.com", "api.digitalocean.com", "mcp.digitalocean.com"},
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}

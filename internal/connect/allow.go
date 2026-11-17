@@ -237,7 +237,7 @@ func MethodOK(method string) bool {
 
 // APIURL is the allowlisted API URL for a guest path. The guest does not
 // choose the host. github maps to api.github.com. digitalocean maps to
-// api.digitalocean.com.
+// api.digitalocean.com. DigitalOcean MCP does not use this function.
 func APIURL(provider, pth, query string) (string, error) {
 	return upstreamURL(provider, false, pth, query)
 }
