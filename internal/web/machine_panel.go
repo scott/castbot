@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -312,5 +313,26 @@ func (s *Server) machineLogs(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "machineLogs", page{
 		Agent:   agentView{ID: agent.ID},
 		Machine: view,
+	})
+}
+
+func (s *Server) machineHistory(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	agent, err := s.store.GetAgent(r.Context(), user.ID, r.PathValue("id"))
+	if s.missing(w, err) {
+		return
+	}
+	offset, err := strconv.Atoi(r.URL.Query().Get("offset"))
+	if err != nil || offset < 0 {
+		writeText(w, http.StatusBadRequest, "Bad request\n")
+		return
+	}
+	shown, more, next := pageHistory(s.replaceHistory(r.Context(), user, agent.ID, userLocation(user.Timezone)), offset)
+	s.render(w, http.StatusOK, "machineHistoryMore", page{
+		Agent:   agentView{ID: agent.ID},
+		Replace: replaceView{History: shown, HistoryMore: more, HistoryNext: next},
 	})
 }

@@ -911,6 +911,8 @@ textarea.ph::placeholder { color: var(--tx3); }
 .bline.warnl { color: var(--warn); font-size: 13.5px; }
 .hist { display: grid; gap: 8px; }
 .hist h3 { margin: 0; font-size: 14px; }
+.hist button.link { border: 0; background: none; padding: 0; font: inherit; cursor: pointer; text-align: left; }
+.hist #machine-history-more:empty { display: none; }
 .hist .evs { list-style: none; margin: 0; padding: 0; }
 .hist .evs li { display: grid; gap: 2px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
 .hist .evs li:first-child { border-top: 0; padding-top: 0; }

@@ -171,6 +171,98 @@ func TestMachinePanelAuthz(t *testing.T) {
 	if code != http.StatusNotFound {
 		t.Fatalf("logs %d", code)
 	}
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine/history?offset=5", "", ip, nil)
+	if code != http.StatusNotFound || strings.Contains(body, "Machine history") {
+		t.Fatalf("history %d", code)
+	}
+}
+
+func TestMachineHistoryShowsFiveThenMore(t *testing.T) {
+	ip := "203.0.113.21:9"
+	h := newHarness(t)
+	user, secret := h.account("hist-ada@example.com", "Ada", "correct-horse-1")
+	h.login("hist-ada@example.com", "correct-horse-1", secret, ip, false)
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, _, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{
+		SectionID: sec.ID, Name: "Pip", Title: "Notes", Status: "ready",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seedHistory(t, h, user.ID, short.ID, []string{
+		store.EventRunning, store.EventGuestReady, store.EventPauseRequested,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, body, _ := h.do(http.MethodGet, "/agents/"+short.ID+"?panel=machine", "", ip, nil)
+	if code != 200 || strings.Count(body, "Machine running") != 1 || strings.Count(body, "Guest ready") != 1 || strings.Count(body, "Paused after idle") != 1 || strings.Contains(body, "Show more") {
+		t.Fatalf("short history %d", code)
+	}
+
+	agent, _, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{
+		SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := []string{
+		store.EventCreateRequested,
+		store.EventCreateAccepted,
+		store.EventRunning,
+		store.EventGuestReady,
+		store.EventPauseRequested,
+		store.EventPauseObserved,
+		store.EventWakeRequested,
+		store.EventWakeRunning,
+	}
+	if err := seedHistory(t, h, user.ID, agent.ID, kinds); err != nil {
+		t.Fatal(err)
+	}
+	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
+	if code != 200 || strings.Count(body, "Woke for a message") != 2 || strings.Count(body, "Paused after idle") != 2 || strings.Count(body, "Guest ready") != 1 {
+		t.Fatalf("first page %d", code)
+	}
+	if strings.Contains(body, "Machine running") || strings.Contains(body, "Machine create requested") || strings.Count(body, "Show more") != 1 {
+		t.Fatal("first page showed older rows or skipped Show more")
+	}
+	if !strings.Contains(body, `/machine/history?offset=5`) || !strings.Contains(body, `hx-target="#machine-history-more"`) || !strings.Contains(body, `hx-swap="outerHTML"`) {
+		t.Fatal("Show more does not append the next page")
+	}
+
+	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/machine/history?offset=5", "", ip, nil)
+	if code != 200 || strings.Contains(body, "<!doctype") || strings.Contains(body, "Show more") || strings.Contains(body, "Guest ready") || strings.Contains(body, "Woke for a message") {
+		t.Fatalf("next page %d", code)
+	}
+	if strings.Count(body, "Machine running") != 1 || strings.Count(body, "Machine create requested") != 2 || strings.Count(body, `hx-swap-oob="beforeend:#machine-history-list"`) != 3 {
+		t.Fatal("next page did not add the older rows")
+	}
+	if !strings.Contains(body, `id="machine-history-more"></div>`) {
+		t.Fatal("Show more stayed after the last rows")
+	}
+	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/machine/history?offset=nope", "", ip, nil)
+	if code != http.StatusBadRequest {
+		t.Fatalf("bad offset %d", code)
+	}
+}
+
+func seedHistory(t *testing.T, h *harness, userID, agentID string, kinds []string) error {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := h.st.BeginVM(ctx, userID, agentID, "castbot-"+agentID, "example.invalid/castbot-runtime:s07"); err != nil {
+		return err
+	}
+	if err := h.st.FinishVM(ctx, userID, agentID, "vm-"+agentID, "https://vm.example", "running", ""); err != nil {
+		return err
+	}
+	for _, kind := range kinds {
+		if err := h.st.AddVMEvent(ctx, userID, agentID, kind, 0); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func TestSettingsMachineEstimate(t *testing.T) {

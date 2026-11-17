@@ -434,10 +434,15 @@
 {{if .Replace.HintBold}}<div class="rhint{{if .Replace.Same}} quiet{{end}}"><div><b>{{.Replace.HintBold}}</b> {{.Replace.HintRest}}</div>{{if and .Replace.Update .Replace.CanReplace}}<a class="btn sm pri" id="replace-hint" href="/agents/{{.Agent.ID}}/machine/replace?opener=replace-hint">Replace machine</a>{{end}}</div>{{end}}
 {{template "cliBox" .}}
 {{if .Machine.CanDelete}}<form class="machine-del" method="post" action="/agents/{{.Agent.ID}}/machine/delete"><input type="hidden" name="csrf" value="{{.CSRF}}"><label class="lab" for="confirm-name">Type {{.Agent.Name}} to delete this machine</label><div class="inp"><input id="confirm-name" name="confirm" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Type the agent name"{{if .Replace.Lock}} disabled{{end}}></div><button class="btn sm danger-ghost" type="submit"{{if .Replace.Lock}} disabled{{end}}>Delete agent</button><p class="fineprint">Deleting removes this agent and its machine. This cannot be undone. Memory export is not in this version.</p></form>{{end}}
-{{if .Replace.History}}<section class="hist"><h3>Machine history</h3><ul class="evs">{{range .Replace.History}}<li><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}</ul></section>{{end}}
+{{if .Replace.History}}<section class="hist" id="machine-history"><h3>Machine history</h3><ul class="evs" id="machine-history-list">{{range .Replace.History}}<li><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}</ul>{{if .Replace.HistoryMore}}<div id="machine-history-more"><button class="link" type="button" hx-get="/agents/{{.Agent.ID}}/machine/history?offset={{.Replace.HistoryNext}}" hx-target="#machine-history-more" hx-swap="outerHTML" hx-disabled-elt="this">Show more</button></div>{{end}}</section>{{end}}
 {{if .Replace.LogNote}}<p class="fineprint">{{.Replace.LogNote}}</p>{{end}}
 <p class="fineprint">State from the cloud API. Checking it does not wake the machine.</p>
 </div>
+{{end}}
+
+{{define "machineHistoryMore"}}
+{{range .Replace.History}}<li hx-swap-oob="beforeend:#machine-history-list"><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}
+<div id="machine-history-more">{{if .Replace.HistoryMore}}<button class="link" type="button" hx-get="/agents/{{.Agent.ID}}/machine/history?offset={{.Replace.HistoryNext}}" hx-target="#machine-history-more" hx-swap="outerHTML" hx-disabled-elt="this">Show more</button>{{end}}</div>
 {{end}}
 
 {{define "machineLogs"}}

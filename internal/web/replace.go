@@ -44,6 +44,8 @@ type replaceView struct {
 	NowTag, NextTag                             string
 	ChatBold, ChatRest                          string
 	History                                     []histItem
+	HistoryMore                                 bool
+	HistoryNext                                 int
 	NoMachine                                   bool
 	LogNote                                     string
 	Poll                                        bool
@@ -162,7 +164,10 @@ func (s *Server) replaceView(ctx context.Context, user store.User, agent store.A
 			}
 		}
 	}
-	out.History = s.replaceHistory(ctx, user, agent.ID, loc)
+	shown, more, nextOff := pageHistory(s.replaceHistory(ctx, user, agent.ID, loc), 0)
+	out.History = shown
+	out.HistoryMore = more
+	out.HistoryNext = nextOff
 	if out.Banner == "ok" {
 		out.LogNote = "Machine logs from the new machine. Logs from the old machine were not kept."
 	} else if out.HasImage || out.NoMachine || out.Lock {
@@ -260,6 +265,24 @@ func (s *Server) hasActiveCLI(ctx context.Context, userID, agentID string) bool 
 		}
 	}
 	return false
+}
+
+const machineHistoryPage = 5
+
+// pageHistory returns one page of history, newest first.
+// offset is how many rows are already on the page.
+func pageHistory(items []histItem, offset int) (shown []histItem, more bool, next int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(items) {
+		offset = len(items)
+	}
+	end := offset + machineHistoryPage
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end], end < len(items), end
 }
 
 func (s *Server) replaceHistory(ctx context.Context, user store.User, agentID string, loc *time.Location) []histItem {
