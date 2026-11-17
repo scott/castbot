@@ -116,9 +116,9 @@ type cardView struct {
 	ID, RunID, Tool, Line, CSRF, When, At                 string
 	Extra, From, Reason                                   string
 	SubmitURL, DeclineURL, ApproveURL, DenyURL, AlwaysURL string
-	FieldLabel, SubmitLabel, Fold                         string
+	FieldLabel, SubmitLabel, Fold, Find                   string
 	Args                                                  []argView
-	Pending, ReadOnly, Approved, Secret, OOB              bool
+	Pending, ReadOnly, Approved, Secret, OOB, Hist        bool
 	NeedsValue                                            bool
 }
 
@@ -168,7 +168,7 @@ type page struct {
 	ModelTitle       string
 	ModelSub         string
 	ApprovalsWaiting []cardView
-	ApprovalsEarlier []earlierRow
+	ApprovalsEarlier []cardView
 	Toasts           []toastView
 	Agent            agentView
 	HasAgent         bool

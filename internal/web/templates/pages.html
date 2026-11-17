@@ -161,7 +161,7 @@
 {{end}}
 
 {{define "approvalCard"}}
-{{if .Fold}}<details class="appr appr-fold{{if .Approved}} done{{end}} settled" id="appr-{{.ID}}"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>
+{{if .Fold}}<details class="appr appr-fold{{if .Approved}} done{{end}} settled" id="{{if .Hist}}hist-{{end}}appr-{{.ID}}"{{if .Find}} data-find="{{.Find}}"{{end}}{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>
 <summary class="appr-sum"><span class="ico" aria-hidden="true">{{if .Approved}}{{template "checksvg" .}}{{else if eq .Fold "Denied"}}{{template "xsvg" .}}{{else}}<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>{{end}}</span><span class="st">{{.Fold}}</span><span class="tn">{{.Tool}}</span>{{if .When}}<span class="stamp">{{.When}}</span>{{end}}<svg class="i sm chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></summary>
 <div class="appr-more">{{template "approvalCardBody" .}}</div>
 </details>{{else}}<div class="appr{{if .Approved}} done{{end}}{{if not .Pending}} settled{{end}}" id="appr-{{.ID}}"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>{{template "approvalCardBody" .}}</div>{{end}}

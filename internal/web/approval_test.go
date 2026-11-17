@@ -1442,7 +1442,7 @@ func TestDecisionSyncsPaneAndChatCard(t *testing.T) {
 	if pane == "" || strings.Contains(pane, ">Approve<") || strings.Contains(pane, `id="appr-`+ap.ID+`"`) || !strings.Contains(pane, "Nothing is waiting") {
 		t.Fatalf("pane still pending %s", pane)
 	}
-	if !strings.Contains(pane, "Earlier") || !strings.Contains(pane, "bash") {
+	if !strings.Contains(pane, "Earlier") || !strings.Contains(pane, "bash") || !strings.Contains(pane, "appr-fold") || !strings.Contains(pane, `id="approval-filter"`) || strings.Contains(pane, "ahist") {
 		t.Fatalf("pane missing the decided row %s", pane)
 	}
 	badge := between(body, `id="approvals-count"`, `id="approval-pill"`)

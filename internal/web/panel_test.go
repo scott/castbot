@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -458,4 +459,75 @@ func namedAgent(t *testing.T, h *harness, userID, name string) store.Agent {
 	}
 	t.Fatalf("no agent %s", name)
 	return store.Agent{}
+}
+
+func TestApprovalsPaneFoldsHistory(t *testing.T) {
+	h := newHarness(t)
+	clock := time.Date(2026, 11, 17, 15, 0, 0, 0, time.UTC)
+	h.st.SetNow(func() time.Time { return clock })
+	user, secret := h.account("hist-s19@example.com", "Ada", "correct-horse-1")
+	ip := "203.0.113.41:9"
+	h.login("hist-s19@example.com", "correct-horse-1", secret, ip, false)
+	agent := makeAgent(t, h.st, user.ID, "Atlas")
+	ctx := context.Background()
+	runRow, err := h.st.CreateRun(ctx, user.ID, agentThread(t, h, user.ID, agent.ID), agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 21
+	for i := 0; i < n; i++ {
+		clock = time.Date(2026, 11, 17, 15, i, 0, 0, time.UTC)
+		raw := fmt.Sprintf(`{"id":"req-hist-%02d","tool":"tool-%02d","arguments":{"command":"echo hist-%02d"}}`, i, i, i)
+		ap, err := h.st.RecordPermission(ctx, user.ID, runRow.ID, []byte(raw), clock.Add(time.Hour), i+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		status := "approved"
+		if i == n-1 {
+			status = "denied"
+		}
+		if _, ok, err := h.st.ClaimDecision(ctx, user.ID, ap.ID, runRow.ID, status, user.ID); err != nil || !ok {
+			t.Fatalf("claim %d %v", i, err)
+		}
+	}
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=approvals", "", ip, nil)
+	if code != http.StatusOK {
+		t.Fatal(code)
+	}
+	if strings.Contains(body, "ahist") || !strings.Contains(body, "Nothing is waiting.") {
+		t.Fatalf("history still a bullet list %s", body)
+	}
+	earlier := between(body, `id="approval-earlier"`, `id="approval-filter-empty"`)
+	if earlier == "" {
+		t.Fatal("missing history")
+	}
+	if strings.Count(earlier, `class="appr appr-fold`) != n || strings.Count(earlier, `id="hist-appr-`) != n {
+		t.Fatalf("folded %d ids %d", strings.Count(earlier, `class="appr appr-fold`), strings.Count(earlier, `id="hist-appr-`))
+	}
+	if strings.Contains(earlier, " open") || strings.Contains(earlier, ">Approve<") || strings.Contains(earlier, ">Deny<") {
+		t.Fatal("history card is expanded or still decidable")
+	}
+	if !strings.Contains(earlier, "M9 6l6 6-6 6") || !strings.Contains(earlier, ">Denied<") || !strings.Contains(earlier, ">Approved<") {
+		t.Fatal("collapsed summary missing")
+	}
+	if !strings.Contains(earlier, "echo hist-00") || !strings.Contains(earlier, "echo hist-20") {
+		t.Fatal("expand body missing the command")
+	}
+	newest := strings.Index(earlier, ">tool-20<")
+	oldest := strings.Index(earlier, ">tool-00<")
+	if newest < 0 || oldest < newest {
+		t.Fatalf("order newest %d oldest %d", newest, oldest)
+	}
+	if !strings.Contains(body, `id="approval-filter"`) || !strings.Contains(body, `aria-label="Search approvals"`) || !strings.Contains(body, "No approvals match.") || !strings.Contains(earlier, `data-find="`) {
+		t.Fatal("missing search")
+	}
+	if !strings.Contains(earlier, "echo hist-00") || !strings.Contains(strings.ToLower(earlier), "echo hist-20") {
+		t.Fatal("search text missing")
+	}
+	_, otherSecret := h.account("other-hist@example.com", "Other", "correct-horse-1")
+	h.login("other-hist@example.com", "correct-horse-1", otherSecret, "203.0.113.42:9", false)
+	code, other, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=approvals", "", "203.0.113.42:9", nil)
+	if code != http.StatusNotFound || strings.Contains(other, "echo hist-") || strings.Contains(other, "tool-20") {
+		t.Fatalf("other %d %s", code, other)
+	}
 }

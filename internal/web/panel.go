@@ -18,12 +18,6 @@ type glanceRow struct {
 	Title, Sub, Href string
 }
 
-// earlierRow is a settled or CLI approval in the Approvals tab.
-type earlierRow struct {
-	Tool, Line, When string
-	OK               bool
-}
-
 // toastView is one approval toast for an agent the person is not viewing.
 type toastView struct {
 	AgentName, Tool, Href string
@@ -420,7 +414,7 @@ func (s *Server) fillApprovalsCtx(ctx context.Context, user store.User, agent st
 	if err != nil {
 		return
 	}
-	var earlier []earlierRow
+	var earlier []cardView
 	for _, row := range rows {
 		card := s.presentApproval(row, user, csrf)
 		if row.Status == "expired" {
@@ -430,9 +424,12 @@ func (s *Server) fillApprovalsCtx(ctx context.Context, user store.User, agent st
 			p.ApprovalsWaiting = append(p.ApprovalsWaiting, card)
 			continue
 		}
-		earlier = append(earlier, earlierRow{
-			Tool: card.Tool, Line: card.Line, When: card.When, OK: row.Status == "approved",
-		})
+		if card.Fold == "" {
+			card.Fold = "Waiting"
+		}
+		card.Hist = true
+		card.Find = approvalFind(card)
+		earlier = append(earlier, card)
 	}
 	if connects, err := s.store.ListConnectApprovals(ctx, user.ID, agent.ID, time.Unix(0, 0)); err == nil {
 		for _, row := range connects {
@@ -442,14 +439,23 @@ func (s *Server) fillApprovalsCtx(ctx context.Context, user store.User, agent st
 			p.ApprovalsWaiting = append(p.ApprovalsWaiting, s.presentConnect(user, row, csrf))
 		}
 	}
-	if len(earlier) > 20 {
-		earlier = earlier[len(earlier)-20:]
-	}
-	// Oldest waiting first. Earlier reads newest first.
+	// Oldest waiting first. Earlier is the full history, newest first,
+	// so the search box can find an approval older than the first screen.
 	for i, j := 0, len(earlier)-1; i < j; i, j = i+1, j-1 {
 		earlier[i], earlier[j] = earlier[j], earlier[i]
 	}
 	p.ApprovalsEarlier = earlier
+}
+
+func approvalFind(card cardView) string {
+	parts := []string{card.Tool, card.Fold, card.Line, card.When, card.From, card.Extra}
+	for _, arg := range card.Args {
+		parts = append(parts, arg.Key)
+		if !arg.Hidden {
+			parts = append(parts, arg.Value)
+		}
+	}
+	return strings.ToLower(strings.Join(parts, " "))
 }
 
 // approvalsSyncHTML is the approvals list, tab count, and header pill.
