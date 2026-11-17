@@ -26,9 +26,9 @@ type connCard struct {
 }
 
 type connDetail struct {
-	ID, Title, Body, TokenLabel, TokenMask string
-	NeedsSecret, On, HasSecret, EditToken  bool
-	Tools                                  []connTool
+	ID, Title, Body, TokenLabel, TokenMask, SSHKey string
+	NeedsSecret, On, HasSecret, EditToken          bool
+	Tools                                          []connTool
 }
 
 type connTool struct {
@@ -140,11 +140,24 @@ func (s *Server) connectionSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
+	notice := "saved"
+	if !wasOn {
+		notice = "connected"
+	}
+	if panel.ID == connect.DigitalOcean {
+		if _, err := s.ensureDigitalOceanSSH(r.Context(), user.ID); err != nil {
+			if wasOn {
+				notice = "ssh-saved"
+			} else {
+				notice = "ssh"
+			}
+		}
+	}
 	if wasOn {
-		http.Redirect(w, r, "/settings/connections?notice=saved", http.StatusSeeOther)
+		http.Redirect(w, r, "/settings/connections?notice="+notice, http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/settings/connections/"+url.PathEscape(panel.ID)+"?notice=connected", http.StatusSeeOther)
+	http.Redirect(w, r, "/settings/connections/"+url.PathEscape(panel.ID)+"?notice="+notice, http.StatusSeeOther)
 }
 
 func (s *Server) connectionDisconnect(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +240,16 @@ func (s *Server) connectionDetail(ctx context.Context, userID string, panel conn
 			return connDetail{}, err
 		}
 	}
+	sshKey := ""
+	if panel.ID == connect.DigitalOcean {
+		key, kerr := s.store.ConnectionSSHKey(ctx, userID, panel.ID)
+		if kerr != nil && !errors.Is(kerr, store.ErrNotFound) {
+			return connDetail{}, kerr
+		}
+		if kerr == nil {
+			sshKey = key.Fingerprint
+		}
+	}
 	var tools []connTool
 	for _, tool := range panel.Tools {
 		level := tool.DefaultLevel()
@@ -239,7 +262,7 @@ func (s *Server) connectionDetail(ctx context.Context, userID string, panel conn
 	}
 	return connDetail{
 		ID: panel.ID, Title: panel.Title, Body: panel.Body, TokenLabel: panel.TokenLabel,
-		TokenMask: mask, NeedsSecret: panel.NeedsSecret, On: on, HasSecret: has, Tools: tools,
+		TokenMask: mask, SSHKey: sshKey, NeedsSecret: panel.NeedsSecret, On: on, HasSecret: has, Tools: tools,
 	}, nil
 }
 
@@ -303,6 +326,10 @@ func connectionNotice(kind string) string {
 		return "Saved. Every agent you own uses these choices."
 	case "disconnected":
 		return "Disconnected. Tool choices stay. Every agent you own is off until you connect again."
+	case "ssh":
+		return "Connected. The SSH key could not be registered yet."
+	case "ssh-saved":
+		return "Saved. The SSH key could not be registered yet."
 	default:
 		return ""
 	}
@@ -316,6 +343,9 @@ func (s *Server) turnOnAccountConnection(ctx context.Context, user store.User, c
 	}
 	if err := s.store.SetConnectionSwitch(ctx, user.ID, connection, true); err != nil {
 		return err
+	}
+	if connection == connect.DigitalOcean {
+		_, _ = s.ensureDigitalOceanSSH(ctx, user.ID)
 	}
 	return s.projectConnection(ctx, user, connection, true)
 }

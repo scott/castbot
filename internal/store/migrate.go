@@ -520,6 +520,11 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV31(); err != nil {
 		return err
 	}
+	// Version 32 is the DigitalOcean SSH public key for new droplets.
+	// The private seed stays in the vault and is not a column.
+	if err := s.migrateV32(); err != nil {
+		return err
+	}
 	return nil
 }
 

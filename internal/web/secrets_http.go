@@ -174,6 +174,9 @@ func (s *Server) vaultCreateConnection(w http.ResponseWriter, r *http.Request, u
 			return
 		}
 	}
+	if connection == connect.DigitalOcean {
+		_, _ = s.ensureDigitalOceanSSH(r.Context(), user.ID)
+	}
 	if err := s.enableConnectionAgents(r.Context(), user, connection, ids); s.missing(w, err) {
 		return
 	}
@@ -260,6 +263,9 @@ func (s *Server) vaultMove(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		agents = append(agents, extra...)
+	}
+	if connection == connect.DigitalOcean {
+		_, _ = s.ensureDigitalOceanSSH(r.Context(), user.ID)
 	}
 	if err := s.enableConnectionAgents(r.Context(), user, connection, agents); s.missing(w, err) {
 		return

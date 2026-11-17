@@ -413,44 +413,59 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 		writeMCPFail(w, msg.ID, "bad_request", "")
 		return
 	}
-	switch s.namedToolGate(r.Context(), userID, server, msg) {
-	case "deny":
+	gate := s.namedToolGate(r.Context(), userID, server, msg)
+	if gate == "deny" {
 		_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
 			"connection": server, "outcome": "denied", "tool": clipAudit(rpcTool(msg)),
 		})
 		writeMCPFail(w, msg.ID, "bad_request", "")
 		return
-	case "allow":
-	default:
-		if connectNeedsApproval(server, msg) {
-			entry, _ := connect.Lookup(server)
-			hostName := "api.github.com"
-			if len(entry.Hosts) > 0 {
-				hostName = entry.Hosts[0]
-			}
-			tool := rpcTool(msg)
-			args := rpcArgs(msg)
-			hash, hashErr := connect.MCPHash(tool, args)
-			if hashErr != nil || tool == "" {
+	}
+	if server == connect.DigitalOcean {
+		next, prepErr := s.prepareDigitalOceanCreate(r.Context(), userID, body.Message)
+		if prepErr != nil {
+			_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
+				"connection": server, "outcome": "ssh_key", "tool": clipAudit(rpcTool(msg)),
+			})
+			writeMCPFail(w, msg.ID, "ssh_key", "")
+			return
+		}
+		if next != nil {
+			body.Message = next
+			if json.Unmarshal(body.Message, &msg) != nil {
 				writeMCPFail(w, msg.ID, "bad_request", "")
 				return
 			}
-			call := connect.Call{
-				Connection: server,
-				Method:     "POST",
-				URL:        "https://" + hostName + "/mcp",
-				Tool:       tool,
-				Hash:       hash,
-				Summary:    connect.MCPSummary(tool, args),
-			}
-			if err := s.gateApproval(r.Context(), userID, agentID, call); err != nil {
-				outcome := connect.Code(err)
-				_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
-					"connection": server, "outcome": outcome, "tool": clipAudit(call.Tool),
-				})
-				writeMCPFail(w, msg.ID, egressCode(outcome), "")
-				return
-			}
+		}
+	}
+	if gate != "allow" && connectNeedsApproval(server, msg) {
+		entry, _ := connect.Lookup(server)
+		hostName := "api.github.com"
+		if len(entry.Hosts) > 0 {
+			hostName = entry.Hosts[0]
+		}
+		tool := rpcTool(msg)
+		args := rpcArgs(msg)
+		hash, hashErr := connect.MCPHash(tool, args)
+		if hashErr != nil || tool == "" {
+			writeMCPFail(w, msg.ID, "bad_request", "")
+			return
+		}
+		call := connect.Call{
+			Connection: server,
+			Method:     "POST",
+			URL:        "https://" + hostName + "/mcp",
+			Tool:       tool,
+			Hash:       hash,
+			Summary:    connect.MCPSummary(tool, args),
+		}
+		if err := s.gateApproval(r.Context(), userID, agentID, call); err != nil {
+			outcome := connect.Code(err)
+			_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
+				"connection": server, "outcome": outcome, "tool": clipAudit(call.Tool),
+			})
+			writeMCPFail(w, msg.ID, egressCode(outcome), "")
+			return
 		}
 	}
 	token, err := s.store.ConnectionValue(r.Context(), userID, server)
@@ -1067,6 +1082,8 @@ func egressMessage(code string) string {
 		return "This action needs approval."
 	case "redirect_refused":
 		return "The connection proxy refused a redirect."
+	case "ssh_key":
+		return "The SSH key is not registered yet."
 	default:
 		return "The connection request was rejected."
 	}
@@ -1086,7 +1103,7 @@ func writeEgressFail(w http.ResponseWriter, code string) {
 // sentence has to travel inside a 200 for the agent to see it.
 func writeMCPFail(w http.ResponseWriter, id json.RawMessage, code, token string) {
 	switch code {
-	case "not_connected", "approval_required", "redirect_refused", "bad_request":
+	case "not_connected", "approval_required", "redirect_refused", "bad_request", "ssh_key":
 	default:
 		code = "bad_request"
 	}

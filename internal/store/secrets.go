@@ -61,7 +61,11 @@ func SecretNameOK(name string) bool {
 func secretNameBlocked(name string) bool {
 	// Connection vault names are not environment variables. A provider token
 	// alias may already exist as an env row so it can be moved. Grants and
-	// the guest pull still refuse that name.
+	// the guest pull still refuse that name. The SSH seed is blocked here
+	// so a person cannot save it as an environment secret.
+	if BlocksSSHSeed(name) {
+		return true
+	}
 	switch strings.ToUpper(strings.TrimSpace(name)) {
 	case connect.SecretNameGitHub, connect.SecretNameDigitalOcean:
 		return true
@@ -466,7 +470,7 @@ func (s *Store) grantSecret(ctx context.Context, userID, agentID, secretID strin
 	if err := s.db.QueryRowContext(ctx, `SELECT kind FROM secrets WHERE id = ? AND user_id = ?`, secretID, userID).Scan(&kind); err != nil {
 		return scanErr(err)
 	}
-	if kind == "connection" || connect.BlocksGuest(sec.Name) {
+	if kind == "connection" || connect.BlocksGuest(sec.Name) || BlocksSSHSeed(sec.Name) {
 		return ErrInvalid
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO agent_secret_grants(agent_id, secret_id, workspace_id, user_id) VALUES (?, ?, ?, ?)
@@ -530,7 +534,7 @@ WHERE g.user_id = ? AND g.agent_id = ? AND f.provider = '' AND f.kind = 'env' OR
 		if err := rows.Scan(&sec.ID, &sec.WorkspaceID, &sec.UserID, &sec.Name, &sec.Label, &sec.Provider, &sec.CreatedAt, &rotated); err != nil {
 			return nil, err
 		}
-		if connect.BlocksGuest(sec.Name) {
+		if connect.BlocksGuest(sec.Name) || BlocksSSHSeed(sec.Name) {
 			continue
 		}
 		sec.RotatedAt = rotated.String
@@ -557,7 +561,7 @@ WHERE g.user_id = ? AND g.agent_id = ? AND f.provider = '' AND f.kind = 'env' OR
 		if err := rows.Scan(&sec.ID, &sec.Name, &ct, &nonce); err != nil {
 			return nil, err
 		}
-		if connect.BlocksGuest(sec.Name) {
+		if connect.BlocksGuest(sec.Name) || BlocksSSHSeed(sec.Name) {
 			continue
 		}
 		val, err := s.openBox(ct, nonce)

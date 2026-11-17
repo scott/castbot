@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/auth"
+	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
 )
@@ -56,6 +59,8 @@ func newHarnessWith(t *testing.T, client runtime.Client) *harness {
 	}
 	srv := New(st, key, client)
 	srv.SetDevEcho(true)
+	// A test that does not install connectUpstream must not call DigitalOcean.
+	srv.SetConnectDial(closedConnectDial())
 	if os.Getenv("CASTBOT_MODELS_OFFLINE") == "1" {
 		srv.ModelCatalog().SetOffline()
 	}
@@ -69,6 +74,14 @@ func newHarnessWith(t *testing.T, client runtime.Client) *harness {
 // testStatusRefresh starts a background status refresh for screenshot servers.
 // Unit tests leave it nil so a render does not call Status on its own later.
 var testStatusRefresh func(*Server)
+
+func closedConnectDial() *connect.Dial {
+	return &connect.Dial{
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("test dial is closed")
+		},
+	}
+}
 
 func (h *harness) account(email, name, password string) (store.User, string) {
 	h.t.Helper()
