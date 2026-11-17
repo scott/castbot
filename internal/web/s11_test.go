@@ -57,10 +57,9 @@ func TestMachinePanelRunning(t *testing.T) {
 	}
 	for _, line := range []string{
 		`id="month-est"`, "$0.04", "An estimate, not a bill.",
-		"boot ok", "[redacted]", "********", "notes.md", "Open files",
+		"boot ok", "[redacted]", "********",
 		"Latest lines from the machine.",
-		"Workspace files on this machine.",
-		`/machine/logs`, `id="machine-file-filter"`,
+		`/machine/logs`,
 	} {
 		if !strings.Contains(body, line) {
 			t.Fatalf("missing %q", line)
@@ -69,7 +68,10 @@ func TestMachinePanelRunning(t *testing.T) {
 	if strings.Contains(body, secret) || strings.Contains(body, shaped) || strings.Contains(body, token) {
 		t.Fatal("secret or token leaked into the machine panel")
 	}
-	if callCount(fake, "logs") != 1 || callCount(fake, "list-files") != 1 {
+	if strings.Contains(body, "notes.md") || strings.Contains(body, "Open files") || strings.Contains(body, `id="machine-files"`) {
+		t.Fatal("machine panel still lists files")
+	}
+	if callCount(fake, "logs") != 1 || callCount(fake, "list-files") != 0 {
 		t.Fatalf("logs %d list %d", callCount(fake, "logs"), callCount(fake, "list-files"))
 	}
 	if _, edge := fake.Snapshot(); edge != 0 {
@@ -99,7 +101,6 @@ func TestMachinePanelDoesNotWake(t *testing.T) {
 	for _, line := range []string{
 		"The machine is paused.",
 		"Logs stay on the machine. Wake it to read the tail. This check does not wake it.",
-		"Opening this panel does not wake the machine.",
 	} {
 		if !strings.Contains(body, line) {
 			t.Fatalf("missing %q", line)

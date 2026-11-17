@@ -424,12 +424,6 @@
 {{if .Replace.RollbackTag}}<p class="fineprint" id="rollback-note">Previous runtime {{.Replace.RollbackTag}} can be restored for {{.Replace.RollbackDays}} days. Memory and workspace files are copied again.</p>{{end}}
 {{if .Replace.LockLine}}<p class="lockline">This machine is being replaced. Pause, Wake, Delete and Add to Cast CLI are off until it is done.</p>{{end}}
 {{template "machineLogs" .}}
-<section class="mfiles" id="machine-files">
-<div class="mhead"><h3>Files</h3><a class="link" href="/agents/{{.Agent.ID}}?panel=files">Open files</a></div>
-{{if .Machine.FilesNote}}<p class="fineprint">{{.Machine.FilesNote}}</p>{{end}}
-{{if .Machine.Files}}<div class="inp fsearch"><input type="search" id="machine-file-filter" placeholder="Filter by name" aria-label="Filter machine files"></div>
-<div class="flist">{{range .Machine.Files}}<div class="frow"><a class="grow fmain" href="{{.Href}}"><span class="t1">{{.Name}}</span><span class="t2">{{.Meta}}</span></a><a class="ibtn line fdl" href="{{.Download}}" aria-label="Download {{.Name}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg></a></div>{{end}}</div>{{end}}
-</section>
 {{if .Replace.Reason}}<p class="reason">{{.Replace.Reason}}{{if .Replace.ReasonHref}} <a class="link" href="{{.Replace.ReasonHref}}">{{.Replace.ReasonLabel}}</a>{{end}}</p>{{end}}
 {{if .Replace.HintBold}}<div class="rhint{{if .Replace.Same}} quiet{{end}}"><div><b>{{.Replace.HintBold}}</b> {{.Replace.HintRest}}</div>{{if and .Replace.Update .Replace.CanReplace}}<a class="btn sm pri" id="replace-hint" href="/agents/{{.Agent.ID}}/machine/replace?opener=replace-hint">Replace machine</a>{{end}}</div>{{end}}
 {{template "cliBox" .}}

@@ -23,8 +23,6 @@ type machineView struct {
 	Estimate                                         string
 	LogText, LogNote                                 string
 	LogLive                                          bool
-	Files                                            []fileRow
-	FilesNote                                        string
 }
 
 type usageLine struct {

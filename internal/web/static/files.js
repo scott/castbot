@@ -356,11 +356,9 @@
 
     document.addEventListener("input", function (ev) {
       var filter = ev.target;
-      if (!filter || (filter.id !== "file-filter" && filter.id !== "machine-file-filter")) return;
+      if (!filter || filter.id !== "file-filter") return;
       var q = (filter.value || "").trim().toLowerCase();
-      var root = document;
-      if (filter.id === "machine-file-filter") root = document.getElementById("machine-files") || document;
-      var rows = root.querySelectorAll(".frow");
+      var rows = document.querySelectorAll(".frow");
       for (var i = 0; i < rows.length; i++) {
         var name = (rows[i].querySelector(".t1") || {}).textContent || "";
         rows[i].hidden = q !== "" && name.toLowerCase().indexOf(q) === -1;
