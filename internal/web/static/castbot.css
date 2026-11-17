@@ -201,6 +201,7 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .m-user { justify-self: end; max-width: 78%; background: var(--raise); border: 1px solid var(--line); padding: 10px 14px; border-radius: 16px 16px 4px 16px; }
 .m-user .who { font-size: 12px; font-weight: 650; color: var(--tx2); margin-bottom: 2px; }
 .m-agent { display: grid; grid-template-columns: 30px minmax(0,1fr); gap: 12px; align-items: start; }
+.m-agent.pending:not(:has(.body > :not([hidden]):not(:empty):not(.act-slot))) { align-items: center; }
 .m-agent .av { width: 30px; height: 30px; font-size: 13px; border-radius: 9px; }
 .m-agent .body { display: grid; gap: 10px; min-width: 0; }
 .m-agent .who { font-size: 12px; font-weight: 650; color: var(--tx2); }
@@ -1353,6 +1354,7 @@ button.sclose, a.sclose { font: inherit; cursor: pointer; text-decoration: none;
 .tools:empty, .md-tail:empty, .fail-slot:empty, .act-slot:empty { display: none; }
 .ag .sub.act-sub { display: inline-flex; align-items: center; gap: 6px; }
 .md { display: grid; gap: 12px; min-width: 0; font-size: 15px; line-height: 1.6; color: var(--tx); }
+.cards:empty, .md:empty { display: none; }
 .md > * { margin: 0; min-width: 0; }
 .md h1, .md h2, .md h3, .md h4 { font-family: var(--hd); line-height: 1.3; letter-spacing: -.005em; margin-top: 6px; }
 .md h1 { font-size: 19px; font-weight: 750; }
