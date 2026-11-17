@@ -130,15 +130,35 @@ func Reason(class string) string {
 }
 
 // ImageTag is the short tag after the last colon.
+// A hex digest of 32 or more characters is cut to its first 12,
+// the length Docker uses for a short image id. Named tags stay whole.
 func ImageTag(ref string) string {
 	ref = strings.TrimSpace(ref)
+	tag := ref
 	if i := strings.LastIndex(ref, ":"); i >= 0 {
-		tag := ref[i+1:]
-		if tag != "" && !strings.Contains(tag, "/") {
-			return tag
+		candidate := ref[i+1:]
+		if candidate != "" && !strings.Contains(candidate, "/") {
+			tag = candidate
 		}
 	}
-	return ref
+	if len(tag) >= 32 && hexOnly(tag) {
+		return tag[:12]
+	}
+	return tag
+}
+
+func hexOnly(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // UIStep is the 1-based step the machine page shows.

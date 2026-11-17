@@ -19,6 +19,29 @@ const (
 	newImage = "example.invalid/castbot-runtime:ff6d7ea"
 )
 
+func TestImageTagKeepsNamesAndShortensDigests(t *testing.T) {
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const gitSHA = "0123456789abcdef0123456789abcdef01234567"
+	cases := []struct {
+		ref, want string
+	}{
+		{"example.invalid/castbot-runtime:s07", "s07"},
+		{"example.invalid/castbot-runtime:7b5e414", "7b5e414"},
+		{"example.invalid/castbot-runtime:ff6d7ea", "ff6d7ea"},
+		{"registry.example/castbot-runtime@sha256:" + digest, digest[:12]},
+		{"sha256:" + digest, digest[:12]},
+		{digest, digest[:12]},
+		{"registry.example/castbot-runtime:" + gitSHA, gitSHA[:12]},
+		{"registry.example/org/name", "registry.example/org/name"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := ImageTag(tc.ref); got != tc.want {
+			t.Errorf("ImageTag(%q) = %q, want %q", tc.ref, got, tc.want)
+		}
+	}
+}
+
 type rig struct {
 	st    *store.Store
 	fake  *host.Fake

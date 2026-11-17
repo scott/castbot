@@ -14,6 +14,47 @@ import (
 	"github.com/scott/castbot/internal/store"
 )
 
+func TestMachinePanelShortensImageDigest(t *testing.T) {
+	const oldDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const newDigest = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	oldRef := "registry.example/castbot-runtime@sha256:" + oldDigest
+	newRef := "registry.example/castbot-runtime@sha256:" + newDigest
+	ip := "203.0.113.77:11"
+	h := newHarness(t)
+	h.srv.SetHost(host.NewFake(), newRef, "https://castbot.example")
+	user, secret := h.account("ada-digest@example.com", "Ada", "correct-horse-1")
+	h.login("ada-digest@example.com", "correct-horse-1", secret, ip, false)
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{
+		SectionID: sec.ID, Name: "Atlas", Title: "Docs helper", Status: "ready", Model: "model-large",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.BeginVM(context.Background(), user.ID, agent.ID, "castbot-old", oldRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.FinishVM(context.Background(), user.ID, agent.ID, "vm-old", "https://old.example", "running", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
+	shortOld, shortNew := oldDigest[:12], newDigest[:12]
+	if code != 200 || !strings.Contains(body, shortOld+" · Update available") || !strings.Contains(body, "A newer runtime is available ("+shortNew+").") {
+		t.Fatalf("short image %d", code)
+	}
+	if strings.Contains(body, oldDigest) || strings.Contains(body, newDigest) || strings.Contains(body, "registry.example") {
+		t.Fatal("machine panel showed the full image digest")
+	}
+	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/machine/replace", "", ip, nil)
+	if code != 200 || !strings.Contains(body, shortOld) || !strings.Contains(body, shortNew) || strings.Contains(body, oldDigest) || strings.Contains(body, newDigest) {
+		t.Fatalf("confirm image %d", code)
+	}
+}
+
 func TestReplacePageCopyAndRefusals(t *testing.T) {
 	ip := "203.0.113.77:9"
 	h := newHarness(t)
