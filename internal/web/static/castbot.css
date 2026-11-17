@@ -118,8 +118,6 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .sec h4 { display: flex; align-items: center; gap: 6px; font: 700 11.5px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--tx3); padding: 0 10px 6px; }
 .sec h4 .ibtn { width: 26px; height: 26px; margin-left: auto; }
 .sec h4 form.fold { display: inline-flex; }
-.sec h4 form.inline { display: inline-flex; margin: 0; }
-.sec h4 button.link { border: 0; background: none; padding: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
 .sec h4 button.fold { width: 26px; height: 26px; border: 0; background: transparent; color: var(--tx3); display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; padding: 0; }
 .sec h4 button.fold:hover { background: var(--hover); color: var(--tx); }
 .sec h4 button.fold .i { transform: rotate(90deg); }

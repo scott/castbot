@@ -276,7 +276,7 @@ func TestGroupControlsAsksAndReplies(t *testing.T) {
 		t.Fatalf("fold groups %d", code)
 	}
 	code, body, _ = h.do(http.MethodGet, "/?list=1", "", ip, nil)
-	if strings.Contains(body, "/groups/"+planID) || !strings.Contains(body, `aria-label="Expand Groups"`) || !strings.Contains(body, `action="/groups"`) {
+	if strings.Contains(body, "/groups/"+planID) || !strings.Contains(body, `aria-label="Expand Groups"`) || strings.Contains(body, `action="/groups"`) || strings.Contains(body, ">New</button>") {
 		t.Fatal("groups collapse")
 	}
 	if code, _, _ = h.do(http.MethodPost, "/sections/groups/fold", h.form(nil), ip, nil); code != http.StatusSeeOther {
