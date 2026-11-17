@@ -27,13 +27,12 @@ type Commands struct {
 	Idle         time.Duration
 }
 
-// FromEnv reads CASTBOT_MCP_GITHUB and CASTBOT_MCP_DIGITALOCEAN.
-// They are unset on the small control plane, so the adapter is used.
+// FromEnv reads CASTBOT_MCP_GITHUB.
+// DigitalOcean is the hosted MCP server, so CASTBOT_MCP_DIGITALOCEAN is ignored.
 func FromEnv() Commands {
 	return Commands{
-		GitHub:       fields(os.Getenv("CASTBOT_MCP_GITHUB")),
-		DigitalOcean: fields(os.Getenv("CASTBOT_MCP_DIGITALOCEAN")),
-		Idle:         ProcIdle,
+		GitHub: fields(os.Getenv("CASTBOT_MCP_GITHUB")),
+		Idle:   ProcIdle,
 	}
 }
 

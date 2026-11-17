@@ -123,6 +123,7 @@ type Server struct {
 
 	connectDial *connect.Dial
 	mcp         *connect.Pool
+	doMCP       *connect.Remote
 	models      *modellist.Catalog
 }
 

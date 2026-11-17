@@ -115,7 +115,7 @@ Control-plane routes, all under `{CASTBOT_URL}/api/castlet/agents/{agentID}` wit
 | `GET /egress` | Liveness. `200` with the status document. Anything else, including `404`, is disabled. |
 | `POST /egress/http` | API forward. Host maps `github` to `api.github.com` and `digitalocean` to `api.digitalocean.com`. |
 | `POST /egress/git` | Git smart HTTP. Host maps `github` to `https://github.com` plus `path`. |
-| `POST /egress/mcp` | One JSON-RPC message for `server`. |
+| `POST /egress/mcp` | One JSON-RPC message for `server`. `digitalocean` is forwarded only to `https://mcp.digitalocean.com/mcp`. |
 | `POST /egress/secret-request` | Card. Forwarded when liveness is enabled, including `{enabled:true, providers:[]}` and when only the other provider is listed. A disabled proxy, including `404` and a timeout, is refused at once and does not wait. When it is forwarded, the card may take up to 60 minutes. The result is only `saved`, `declined`, `expired`, or `already_configured`. |
 
 Castlet caches liveness for 5 seconds. A forward still goes to the host, which is the place that checks the grant, the allowlist, TLS, private addresses, redirects, and approval. The guest client does not follow a redirect and does not use `HTTP_PROXY` for these calls. `request_secret` reasons are trimmed to 500 characters and token-shaped fragments are replaced with `[redacted]` before they are sent.

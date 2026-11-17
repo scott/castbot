@@ -44,6 +44,15 @@ func (s *Server) mcpPool() *connect.Pool {
 	return s.mcp
 }
 
+func (s *Server) digitalOceanMCP() *connect.Remote {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.doMCP == nil {
+		s.doMCP = connect.NewRemote()
+	}
+	return s.doMCP
+}
+
 func scopesJSON(perms map[string]string) string {
 	extra := map[string]string{}
 	for key, level := range perms {
@@ -397,6 +406,13 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 		writeEgressFail(w, "bad_request")
 		return
 	}
+	if msg.Method == "tools/call" && connect.RetiredTool(server, rpcTool(msg)) {
+		_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
+			"connection": server, "outcome": connect.OutcomeBad, "tool": clipAudit(rpcTool(msg)),
+		})
+		writeEgressFail(w, "bad_request")
+		return
+	}
 	switch s.namedToolGate(r.Context(), userID, server, msg) {
 	case "deny":
 		_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
@@ -443,7 +459,16 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var out json.RawMessage
-	if s.mcpPool().Has(server) {
+	if server == connect.DigitalOcean {
+		out, err = s.digitalOceanMCP().RoundTrip(r.Context(), token, body.Message, s.dial())
+		if err != nil {
+			_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
+				"connection": server, "outcome": connect.Code(err), "tool": clipAudit(rpcTool(msg)),
+			})
+			writeEgressFail(w, egressCode(connect.Code(err)))
+			return
+		}
+	} else if s.mcpPool().Has(server) {
 		out, err = s.mcpPool().RoundTrip(r.Context(), server, token, body.Message)
 		if err != nil {
 			writeEgressFail(w, "bad_request")

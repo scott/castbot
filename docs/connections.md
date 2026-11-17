@@ -11,7 +11,7 @@ Two catalog entries exist: GitHub and DigitalOcean. There is no custom MCP serve
 | Connection | Vault name | Hosts |
 | --- | --- | --- |
 | GitHub | `GITHUB_CONNECTION` | `api.github.com`, `github.com` |
-| DigitalOcean | `DIGITALOCEAN_CONNECTION` | `api.digitalocean.com` |
+| DigitalOcean | `DIGITALOCEAN_CONNECTION` | `mcp.digitalocean.com`, `api.digitalocean.com` |
 
 The vault name is not an environment grant. `GrantSecret` rejects it. The guest pull rejects it. A hand-written grant row still does not leave the control plane: the pull keeps `kind = env` and also drops `GITHUB_CONNECTION` and `DIGITALOCEAN_CONNECTION` if a row is forced into that kind. castlet refuses the whole secrets response if either name appears.
 
@@ -44,7 +44,7 @@ Forward routes, all `POST`, with the machine bearer:
 | `/egress/mcp` | `{"server":"github","message":{}}` | `{"message":{}}` |
 | `/egress/secret-request` | `{"connection":"github","reason":"...","name":""}` | `{"result":"saved"}` |
 
-The guest does not choose the upstream host. `github` on `/egress/http` is `api.github.com`. `digitalocean` is `api.digitalocean.com`. `/egress/git` accepts GitHub only. `path` is absolute. Methods are GET, HEAD, POST, PUT, PATCH, and DELETE.
+The guest does not choose the upstream host. `github` on `/egress/http` is `api.github.com`. `digitalocean` on `/egress/http` is `api.digitalocean.com`. DigitalOcean MCP is only `https://mcp.digitalocean.com/mcp`. `/egress/git` accepts GitHub only. `path` is absolute. Methods are GET, HEAD, POST, PUT, PATCH, and DELETE.
 
 A refusal is HTTP 403:
 
@@ -70,9 +70,11 @@ Audit rows store the connection, method, path, and outcome. They do not store th
 
 ## MCP
 
-The shipped path is an in-process adapter. It exposes a small read and write set (current user, repos, issues, pull requests, and file contents for GitHub; account, droplets, and apps for DigitalOcean). Writes go through the same approval wait and the same allowlisted proxy.
+GitHub uses an in-process adapter. It exposes a small read and write set (current user, repos, issues, pull requests, and file contents). Writes go through the same approval wait and the same allowlisted proxy.
 
-Official MCP processes are not started on the 512 MB control plane. A Node server and a second native server, multiplied by concurrent agents, do not fit next to the control plane and the operating system. Set `CASTBOT_MCP_GITHUB` or `CASTBOT_MCP_DIGITALOCEAN` only on a host that has the memory. Those processes get a clean environment with one token variable, stop after 45 seconds idle, and their stdout is checked for the token. That path is optional and off by default.
+DigitalOcean does not use that adapter. Every DigitalOcean MCP message is posted to `https://mcp.digitalocean.com/mcp` with the vault token. The guest still speaks to `castbot-mcp digitalocean`. The control plane opens the hosted session, then forwards `tools/list` and `tools/call`. `find_tools` and `retrieve_schema` are reads. `invoke_tool` is a write, so it asks unless the owner set Always allow. The older droplet and app tool names are refused. `CASTBOT_MCP_DIGITALOCEAN` is ignored, so a local process is not started for this connection.
+
+A local GitHub MCP process is not started on the 512 MB control plane. Set `CASTBOT_MCP_GITHUB` only on a host that has the memory. That process gets a clean environment with one token variable, stops after 45 seconds idle, and its stdout is checked for the token. That path is optional and off by default. It is not used for DigitalOcean.
 
 The guest still sees a normal stdio MCP command: `/usr/local/bin/castbot-mcp` with one argument, `github`, `digitalocean`, or `request_secret`. The command file has no `env` block and no token. The image slice installs that binary and the loopback egress. This repo writes the command file into the bundle so a reload can pick it up.
 
@@ -90,10 +92,10 @@ Enabling the connection updates the bundle (shim file and permissions) and reloa
 
 ## Limits
 
-- The adapter is not the full official tool list. Reads and writes outside that list need the optional host process, which is not on by default and was not measured on a 512 MB control plane.
+- The GitHub adapter is not the full official tool list. Reads and writes outside that list need the optional host process, which is not on by default and was not measured on a 512 MB control plane. DigitalOcean tools come from the hosted MCP server.
 - The loopback egress, the `castbot-mcp` binary, and the git, gh, and doctl wrappers belong to the image slice. This slice is the control plane those stubs call. A rebase onto that slice should keep these host routes and drop any second guest listener.
 - A person who can approve a card can cause the host to use the token. That is the point of the card. The guest process still never receives the token.
 - An approval that is still pending when the guest's 60 second forward ends does not run later by itself. The person approves the card, and a following call uses it.
 - Revoke stops new proxy calls. A request already inside the upstream timeout can finish.
-- The optional host MCP process is not put through the allowlist. The default adapter is. Leave `CASTBOT_MCP_GITHUB` and `CASTBOT_MCP_DIGITALOCEAN` unset on the small control plane.
+- The optional GitHub host MCP process is not put through the allowlist. The GitHub adapter and the DigitalOcean MCP server are. Leave `CASTBOT_MCP_GITHUB` unset on the small control plane. `CASTBOT_MCP_DIGITALOCEAN` is ignored.
 - Screenshots and logs in this repo use fake tokens. Do not put a real token in either.

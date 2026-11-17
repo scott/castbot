@@ -147,7 +147,7 @@ func TestProxyRedirectRechecksAllowlist(t *testing.T) {
 
 func proxyServer(t *testing.T, h http.HandlerFunc) (*httptest.Server, *Dial) {
 	t.Helper()
-	cert, pool := testCert(t, "api.github.com", "github.com", "api.digitalocean.com")
+	cert, pool := testCert(t, "api.github.com", "github.com", "api.digitalocean.com", "mcp.digitalocean.com")
 	ts := httptest.NewUnstartedServer(h)
 	ts.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
 	ts.StartTLS()

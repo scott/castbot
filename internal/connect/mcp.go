@@ -40,8 +40,15 @@ func HandleRPC(ctx context.Context, connection string, msg RPC, approved bool, u
 	case "ping":
 		return rpcResult(msg.ID, map[string]any{})
 	case "tools/list":
+		if connection == DigitalOcean {
+			// The hosted server lists its own tools. This adapter does not.
+			return rpcError(msg.ID, "unavailable"), nil
+		}
 		return rpcResult(msg.ID, map[string]any{"tools": toolSchemas(connection)})
 	case "tools/call":
+		if connection == DigitalOcean {
+			return rpcError(msg.ID, "unavailable"), nil
+		}
 		return callTool(ctx, connection, msg, approved, upstream)
 	default:
 		return rpcError(msg.ID, "unknown method"), nil

@@ -13,6 +13,7 @@ func TestAllowlistRefusesTricks(t *testing.T) {
 		{GitHub, "https://github.com/owner/repo.git/info/refs?service=git-upload-pack"},
 		{GitHub, "https://api.github.com:443/user"},
 		{DigitalOcean, "https://api.digitalocean.com/v2/account"},
+		{DigitalOcean, "https://mcp.digitalocean.com/mcp"},
 	}
 	for _, c := range ok {
 		if _, err := CheckURL(c.conn, c.raw); err != nil {
