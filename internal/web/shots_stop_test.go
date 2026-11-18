@@ -105,10 +105,7 @@ func shootStop(t *testing.T, browser context.Context, dir string, width, height 
 	token := sessionToken(t, h, user.ID)
 	tabCtx := tab(t, browser)
 	page := ts.URL + "/agents/" + agent.ID + "?thread=" + thread.ID
-	size := ""
-	if width <= 760 {
-		size = `&&(function(){var b=document.querySelector(".act form.stop button");if(!b)return false;var r=b.getBoundingClientRect();return r.width>=44&&r.height>=44;})()`
-	}
+	size := `&&(function(){var b=document.querySelector(".act form.stop button");if(!b)return false;var r=b.getBoundingClientRect();return r.height>0&&r.height<=28&&r.width<80&&(b.textContent||"").trim()==="Stop";})()`
 	working := `(function(){var t=document.body.innerText||"";var form=document.querySelector(".act form.stop");var comp=document.querySelector("#composer");return t.indexOf("Working")>=0&&t.indexOf("Half a reply")>=0&&!!form&&!!comp&&!comp.contains(form)` + size + `;})()`
 	if err := chromedp.Run(tabCtx, chromedp.Tasks{
 		network.Enable(),

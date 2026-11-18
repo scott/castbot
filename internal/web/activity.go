@@ -168,7 +168,7 @@ func stopFormHTML(runID, csrf string) string {
 	}
 	id := html.EscapeString(runID)
 	tok := html.EscapeString(csrf)
-	return `<form class="stop" method="post" action="/runs/` + id + `/stop" hx-post="/runs/` + id + `/stop" hx-target="closest .m-agent" hx-swap="outerHTML"><input type="hidden" name="csrf" value="` + tok + `"><button class="btn sm stop" type="submit">Stop</button></form>`
+	return `<form class="stop" method="post" action="/runs/` + id + `/stop" hx-post="/runs/` + id + `/stop" hx-target="closest .m-agent" hx-swap="outerHTML"><input type="hidden" name="csrf" value="` + tok + `"><button class="link stop" type="submit">Stop</button></form>`
 }
 
 func actSlotHTML(runID string, inner template.HTML, hidden bool) string {
