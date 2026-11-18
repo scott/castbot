@@ -907,6 +907,21 @@ textarea.ph::placeholder { color: var(--tx3); }
 .machine h2 { margin: 0; font: 650 22px/1.2 var(--hd); }
 .machine-del { display: grid; gap: 8px; }
 .machine .chip { justify-self: start; }
+.macts { display: grid; border: 1px solid var(--line); border-radius: 12px; background: var(--surf); min-width: 0; }
+.macts form { margin: 0; min-width: 0; }
+button.mact, a.mact { display: grid; gap: 3px; width: 100%; margin: 0; padding: 12px 14px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; appearance: none; min-height: 44px; min-width: 0; }
+.macts > :first-child.mact, .macts > :first-child .mact { border-top: 0; border-top-left-radius: 11px; border-top-right-radius: 11px; }
+.macts > :last-child.mact, .macts > :last-child .mact { border-bottom-left-radius: 11px; border-bottom-right-radius: 11px; }
+button.mact:hover, a.mact:hover { background: var(--hover); }
+button.mact.pri { background: var(--acc-soft); }
+button.mact.pri:hover { background: color-mix(in srgb, var(--acc) 22%, var(--surf)); }
+button.mact:disabled, button.mact[disabled] { opacity: .45; cursor: not-allowed; pointer-events: none; }
+button.mact:focus-visible, a.mact:focus-visible { outline: 2px solid var(--acc); outline-offset: -2px; }
+.mact .t1 { font-weight: 650; font-size: 14px; min-width: 0; }
+.mact .t2 { font-size: 12.5px; line-height: 1.45; font-weight: 450; color: var(--tx3); overflow-wrap: anywhere; min-width: 0; }
+a.mact { grid-template-columns: minmax(0, 1fr) 16px; column-gap: 12px; align-items: center; }
+a.mact .t1, a.mact .t2 { grid-column: 1; }
+a.mact::after { content: ""; grid-column: 2; grid-row: 1 / span 2; justify-self: center; width: 7px; height: 7px; border-right: 1.5px solid var(--tx3); border-top: 1.5px solid var(--tx3); transform: rotate(45deg); }
 @media (max-width: 760px) {
   .machine { padding-bottom: 88px; }
 }
@@ -959,8 +974,6 @@ textarea.ph::placeholder { color: var(--tx3); }
 .comp.locked .ph { color: var(--tx2); margin: 0; }
 .scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 20; }
 @media (max-width: 760px) {
-  .racts { display: grid; grid-template-columns: 1fr 1fr; }
-  .racts .btn, .racts a.btn { min-height: 44px; }
   .rhint { flex-wrap: wrap; }
   .rhint .btn { width: 100%; }
   .nomach .btn { width: 100%; }
