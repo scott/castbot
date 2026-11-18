@@ -6,6 +6,7 @@ import (
 	"os"
 	"syscall"
 
+	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
 )
 
@@ -44,7 +45,7 @@ func Plan(name string, args, env []string) Action {
 			return Action{Stderr: "castbot: " + egresscontract.Rejected, Code: 1}
 		}
 		switch args[0] {
-		case "github", "digitalocean", "request_secret":
+		case "github", "digitalocean", "request_secret", agentskill.ServerName:
 			return Action{Serve: args[0]}
 		default:
 			return Action{Stderr: "castbot: " + egresscontract.Rejected, Code: 1}

@@ -463,6 +463,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/castlet/agents/{id}/egress/mcp", s.machineEgressMCP)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/egress/secret-request", s.machineSecretRequest)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/handoff", s.machineHandoff)
+	mux.HandleFunc("POST /api/castlet/agents/{id}/agents", s.machineAgents)
 	mux.HandleFunc("POST /api/castlet/agents/{id}/bootstrap", s.bootstrap)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/bundle", s.machineBundle)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/secrets", s.machineSecrets)

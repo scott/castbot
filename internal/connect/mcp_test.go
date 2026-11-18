@@ -76,6 +76,9 @@ func TestShimHasNoToken(t *testing.T) {
 	if !strings.Contains(joined, "helper") || !strings.Contains(joined, RequestTool) || !strings.Contains(joined, GitHub) {
 		t.Fatal(joined)
 	}
+	if len(names) < 3 || names[0] != "helper" || names[1] != RequestTool || names[2] != "agents" {
+		t.Fatal(joined)
+	}
 	perms := PermissionsFor([]string{GitHub})
 	if perms[RequestTool] != "always-allow" || perms["mcp"] != "ask" || perms["get_me"] != "always-allow" || perms["create_issue"] != "ask" {
 		t.Fatalf("%#v", perms)

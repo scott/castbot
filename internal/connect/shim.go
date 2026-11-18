@@ -3,6 +3,8 @@ package connect
 import (
 	"sort"
 	"strings"
+
+	"github.com/scott/castbot/internal/agentskill"
 )
 
 // ShimCommand is the guest binary the image slice installs. It talks to
@@ -14,6 +16,8 @@ func ShimYAML(connection string) (string, bool) {
 	switch connection {
 	case RequestTool, GitHub, DigitalOcean:
 		return "command: " + ShimCommand + "\nargs:\n  - " + connection + "\n", true
+	case agentskill.ServerName:
+		return agentskill.ShimYAML(), true
 	default:
 		return "", false
 	}
@@ -25,6 +29,9 @@ func ShimFiles(enabled []string) map[string]string {
 	if yml, ok := ShimYAML(RequestTool); ok {
 		out["mcp/request_secret.yaml"] = yml
 	}
+	if yml, ok := ShimYAML(agentskill.ServerName); ok {
+		out[agentskill.ShimFile] = yml
+	}
 	for _, id := range enabled {
 		yml, ok := ShimYAML(id)
 		if !ok {
@@ -35,10 +42,10 @@ func ShimFiles(enabled []string) map[string]string {
 	return out
 }
 
-// ServerNames is the tools.mcp list: request_secret, then enabled connections,
-// then any kept name that is not one of ours.
+// ServerNames is the tools.mcp list: kept names that are not ours,
+// request_secret, agents, then enabled connections.
 func ServerNames(existing, enabled []string) []string {
-	ours := map[string]bool{RequestTool: true, GitHub: true, DigitalOcean: true}
+	ours := map[string]bool{RequestTool: true, GitHub: true, DigitalOcean: true, agentskill.ServerName: true}
 	var out []string
 	seen := map[string]bool{}
 	add := func(name string) {
@@ -56,6 +63,7 @@ func ServerNames(existing, enabled []string) []string {
 		add(name)
 	}
 	add(RequestTool)
+	add(agentskill.ServerName)
 	ordered := append([]string(nil), enabled...)
 	sort.Strings(ordered)
 	for _, name := range ordered {

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/connect"
 	"gopkg.in/yaml.v3"
 )
@@ -283,7 +284,7 @@ func mcpListNode(old *yaml.Node, enabled []string) *yaml.Node {
 	}
 	names := connect.ServerNames(existing, enabled)
 	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	ours := map[string]bool{connect.RequestTool: true, connect.GitHub: true, connect.DigitalOcean: true}
+	ours := map[string]bool{connect.RequestTool: true, connect.GitHub: true, connect.DigitalOcean: true, agentskill.ServerName: true}
 	for _, name := range names {
 		if node, ok := nodes[name]; ok && !ours[name] {
 			seq.Content = append(seq.Content, mcpKeep(name, node))
@@ -427,7 +428,20 @@ func labelize(key string) string {
 
 func skillNames(n *yaml.Node) []string {
 	if n.Kind == yaml.SequenceNode {
-		return seqStrings(n)
+		var out []string
+		for _, item := range n.Content {
+			switch item.Kind {
+			case yaml.ScalarNode:
+				if name := strings.TrimSpace(item.Value); name != "" {
+					out = append(out, name)
+				}
+			case yaml.MappingNode:
+				if name := mapScalar(item, "name"); name != "" {
+					out = append(out, name)
+				}
+			}
+		}
+		return out
 	}
 	if n.Kind != yaml.MappingNode {
 		return nil

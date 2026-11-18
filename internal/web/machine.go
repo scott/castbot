@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/bundle"
 )
 
@@ -86,17 +87,29 @@ func (s *Server) writeBundle(w http.ResponseWriter, r *http.Request, userID stri
 	if mapStoreErr(w, r, err) {
 		return
 	}
-	raw, sum, err := bundle.ArchiveFiles(b.YAML, b.Instructions, b.Extras)
-	if err != nil || sum != b.SHA256 {
+	stored, storedSum, err := bundle.ArchiveFiles(b.YAML, b.Instructions, b.Extras)
+	if err != nil || storedSum != b.SHA256 {
 		writeText(w, http.StatusInternalServerError, "Error\n")
 		return
 	}
+	raw, sum := serveBundle(b.YAML, b.Instructions, b.Extras, stored, storedSum)
 	w.Header().Set("Content-Type", "application/x-tar")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Castbot-Bundle-Version", b.Version)
-	w.Header().Set("X-Castbot-Bundle-SHA256", b.SHA256)
+	w.Header().Set("X-Castbot-Bundle-SHA256", sum)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
+}
+
+// serveBundle checks the stored tar, then serves a copy that includes the
+// create-agent skill and the instructions section. The header sum is the
+// served bytes. A later pull is stable because the additions are deterministic.
+func serveBundle(yaml, instructions string, extras map[string]string, stored []byte, storedSum string) ([]byte, string) {
+	raw, sum, err := bundle.ArchiveFiles(agentskill.Apply(yaml), agentskill.Instructions(instructions), agentskill.MergeExtras(extras))
+	if err != nil || sum == "" {
+		return stored, storedSum
+	}
+	return raw, sum
 }
 
 func (s *Server) writeSecretNames(w http.ResponseWriter, r *http.Request, userID string) {

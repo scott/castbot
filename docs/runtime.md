@@ -47,6 +47,7 @@ The image carries the guest side of Connections so a later control-plane change 
 | `doctl` | Runs the real `doctl` with an empty config and no token. `doctl auth` is refused, including when flags or `--` come first. `--access-token` and `-t` are removed, including after `--`. |
 | `castbot-mcp github` and `castbot-mcp digitalocean` | Speak MCP over stdio. `initialize` succeeds. `tools/list` and `tools/call` return the fixed not-connected sentence and do not wait. |
 | `castbot-mcp request_secret` | Lists `request_secret`. A call returns the not-connected sentence, or rejects a connection id other than `github` or `digitalocean`. |
+| `castbot-mcp agents` | Lists `create_agent` and `list_agents`. A call is posted to local `POST /agents`. It is not a connection and does not check whether a provider is connected. An older image does not include this command. The served instructions still describe the same steps, and a `castbot-create` fence at the end of a reply creates the agent until the machine is replaced. |
 
 When the host reports a provider as live, git rewrites `https://github.com/` and `https://www.github.com/` to the local git egress, doctl sends its API client at the local upstream prefix with the placeholder `castbot-local` (the egress strips that header), and `gh api` (flags `--method`, `--header`, `--input`, `--silent`, `--verbose`, `--hostname`) is posted to the local HTTP egress. Other `gh` commands stay unauthenticated, because `gh` has no plain HTTP API base URL that preserves the GitHub API without a guest token. The MCP shims are the GitHub and DigitalOcean tool path. `request_secret` is forwarded when the proxy is enabled, including when that provider is not connected yet. HTTP, git, and MCP are not.
 
@@ -75,10 +76,11 @@ Local routes:
 | `POST /http` | JSON forward below. `200` with a forward result, or `403` with a failure. |
 | `POST /mcp` | `{"server":"github","message":{...json-rpc...}}`. `200` is `{"message":{...}}`. |
 | `POST /secret-request` | `{"connection":"github","reason":"...","name":""}`. `200` is `{"result":"saved"}`. |
+| `POST /agents` | `{"name":"create_agent","arguments":{"description":"...","name":""}}` or `{"name":"list_agents","arguments":{}}`. `200` is `{"text":"...","error":false}`. Not gated on provider status. |
 | `GET` or `POST /git/{provider}/...` | Raw git smart HTTP. The path after the provider is the path on `github.com`. |
 | `GET` or `POST /upstream/{provider}/...` | Raw API HTTP. doctl uses base `http://127.0.0.1:8090/upstream/digitalocean/`. |
 
-`provider` and `server` and `connection` are `github` or `digitalocean`. `path` is an absolute path. The guest does not choose the upstream host or address. Methods are `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, and `DELETE`. Guest headers named authorization, cookie, host, and the hop-by-hop names are dropped. `X-Castbot-Approval` may carry an id of up to 80 letters, digits, `_`, or `-`. The guest buffers each request and response up to 32 MiB. A git clone whose pack is larger than that cannot pass this egress. The cap stays as it is, and it is a known limit for the host git proxy. A `3xx` from the host is not relayed and the `Location` is dropped.
+`provider` and `server` and `connection` on the connection routes are `github` or `digitalocean`. `POST /agents` does not take a provider. `path` is an absolute path. The guest does not choose the upstream host or address. Methods are `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, and `DELETE`. Guest headers named authorization, cookie, host, and the hop-by-hop names are dropped. `X-Castbot-Approval` may carry an id of up to 80 letters, digits, `_`, or `-`. The guest buffers each request and response up to 32 MiB. A git clone whose pack is larger than that cannot pass this egress. The cap stays as it is, and it is a known limit for the host git proxy. A `3xx` from the host is not relayed and the `Location` is dropped.
 
 Forward JSON, for `POST /http` and for the control-plane git and HTTP routes:
 
@@ -117,10 +119,11 @@ Control-plane routes, all under `{CASTBOT_URL}/api/castlet/agents/{agentID}` wit
 | `POST /egress/git` | Git smart HTTP. Host maps `github` to `https://github.com` plus `path`. |
 | `POST /egress/mcp` | One JSON-RPC message for `server`. `digitalocean` is forwarded only to `https://mcp.digitalocean.com/mcp`. |
 | `POST /egress/secret-request` | Card. Forwarded when liveness is enabled, including `{enabled:true, providers:[]}` and when only the other provider is listed. A disabled proxy, including `404` and a timeout, is refused at once and does not wait. When it is forwarded, the card may take up to 60 minutes. The result is only `saved`, `declined`, `expired`, or `already_configured`. |
+| `POST /agents` | Create or list agents for the machine's account. `create_agent` takes `description` and an optional `name`. `list_agents` takes no arguments. The response is `{"text":"...","error":false}`. This is not gated on a connected provider. |
 
 Castlet caches liveness for 5 seconds. A forward still goes to the host, which is the place that checks the grant, the allowlist, TLS, private addresses, redirects, and approval. The guest client does not follow a redirect and does not use `HTTP_PROXY` for these calls. `request_secret` reasons are trimmed to 500 characters and token-shaped fragments are replaced with `[redacted]` before they are sent.
 
-Example MCP config, with no environment entries, is shipped at `/opt/castbot/mcp/github.yaml`, `/opt/castbot/mcp/digitalocean.yaml`, and `/opt/castbot/mcp/request_secret.yaml`.
+Example MCP config, with no environment entries, is shipped at `/opt/castbot/mcp/github.yaml`, `/opt/castbot/mcp/digitalocean.yaml`, `/opt/castbot/mcp/request_secret.yaml`, and `/opt/castbot/mcp/agents.yaml`. This repository does not retag `CASTBOT_IMAGE`. A running machine keeps the image it was created with until Replace machine. The control plane still serves the create-agent instructions to that machine.
 
 ## Size and boot
 
