@@ -705,8 +705,15 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 .appr.appr-fold .ico { width: 28px; height: 28px; }
 .appr.appr-fold .appr-more { display: grid; gap: 12px; padding: 12px 14px 14px; border-top: 1px solid var(--line); }
 .appr-filter { margin: 2px 0 10px; }
-#approval-earlier { display: grid; gap: 8px; }
-#approval-earlier > .appr[hidden] { display: none !important; }
+#approval-earlier { display: grid; gap: 14px; }
+.appr-day { display: grid; gap: 8px; }
+.appr-day[hidden] { display: none !important; }
+.appr-day-h { margin: 0; font: 600 12px/1.3 var(--ui); letter-spacing: .02em; color: var(--tx3); }
+#approval-earlier .appr[hidden] { display: none !important; }
+#approval-earlier-count { margin: 0; }
+#approval-earlier-count[hidden] { display: none !important; }
+#approval-earlier-more { justify-self: start; justify-content: flex-start; border: 0; background: none; padding: 0; font: inherit; font-weight: 650; cursor: pointer; text-align: left; }
+#approval-earlier-more[hidden] { display: none !important; }
 #approval-filter-empty { margin: 4px 0 8px; }
 #approval-filter-empty[hidden] { display: none !important; }
 .rt-filter { margin-bottom: 12px; }

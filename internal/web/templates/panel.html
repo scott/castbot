@@ -60,9 +60,9 @@
 {{end}}
 
 {{define "approvalsBody"}}
-<div id="approvals-pane"{{if .SwapOOB}} hx-swap-oob="outerHTML"{{end}}>
+<div id="approvals-pane" data-agent="{{.Agent.ID}}"{{if .SwapOOB}} hx-swap-oob="outerHTML"{{end}}>
 {{if .ApprovalsWaiting}}<div class="psec-h"><h4>Waiting on you</h4></div>{{range .ApprovalsWaiting}}{{template "approvalCard" .}}<a class="inchat" href="#appr-{{.ID}}">Show in chat</a>{{end}}{{else}}<div class="pempty"><b>Nothing is waiting.</b><span>When {{.Agent.Name}} needs a yes or no, it shows here and in the chat.</span></div>{{end}}
-{{if .ApprovalsEarlier}}<div class="psec-h"><h4>Earlier</h4></div><div class="inp appr-filter"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input type="search" id="approval-filter" placeholder="Search approvals" aria-label="Search approvals" autocomplete="off" hx-preserve></div><div id="approval-earlier">{{range .ApprovalsEarlier}}{{template "approvalCard" .}}{{end}}</div><p class="fineprint" id="approval-filter-empty" hidden>No approvals match.</p>{{end}}
+{{if .ApprovalDays}}<div class="psec-h"><h4>Earlier</h4></div><div class="inp appr-filter"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input type="search" id="approval-filter" placeholder="Search approvals" aria-label="Search approvals" autocomplete="off" hx-preserve></div><div id="approval-earlier" data-page="{{.ApprovalHistoryPage}}">{{range .ApprovalDays}}<section class="appr-day"{{if .Hidden}} hidden{{end}}><h5 class="appr-day-h">{{.Label}}</h5>{{range .Cards}}{{template "approvalCard" .}}{{end}}</section>{{end}}</div><p class="fineprint" id="approval-earlier-count"{{if not .ApprovalEarlierMore}} hidden{{end}}>{{.ApprovalEarlierNote}}</p><button type="button" class="link" id="approval-earlier-more" aria-controls="approval-earlier"{{if not .ApprovalEarlierMore}} hidden{{end}}>Show more</button><p class="fineprint" id="approval-filter-empty" hidden>No approvals match.</p>{{end}}
 </div>
 {{end}}
 
