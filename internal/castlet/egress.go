@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
 )
 
@@ -66,6 +67,8 @@ func (s *Supervisor) ServeEgress(w http.ResponseWriter, r *http.Request) {
 		s.egressMCP(w, r)
 	case r.URL.Path == "/secret-request" && r.Method == http.MethodPost:
 		s.egressSecret(w, r)
+	case r.URL.Path == "/agents" && r.Method == http.MethodPost:
+		s.egressAgents(w, r)
 	case strings.HasPrefix(r.URL.Path, "/git/"):
 		s.egressRaw(w, r, "/git/")
 	case strings.HasPrefix(r.URL.Path, "/upstream/"):
@@ -292,6 +295,50 @@ func (s *Supervisor) egressSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(egresscontract.SecretResult{Result: result.Result})
+}
+
+// egressAgents forwards create_agent and list_agents. It is not a connection,
+// so it does not check whether a provider is connected.
+func (s *Supervisor) egressAgents(w http.ResponseWriter, r *http.Request) {
+	var call struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&call); err != nil {
+		writeAgentReply(w, egresscontract.Rejected, true)
+		return
+	}
+	switch call.Name {
+	case agentskill.ToolCreate, agentskill.ToolList:
+	default:
+		writeAgentReply(w, egresscontract.Rejected, true)
+		return
+	}
+	code, body, err := s.postEgress(r.Context(), "/agents", call, egressCallWait)
+	if err != nil {
+		writeAgentReply(w, egresscontract.NotConnected, true)
+		return
+	}
+	if code != http.StatusOK {
+		writeAgentReply(w, egresscontract.Rejected, true)
+		return
+	}
+	var result struct {
+		Text  string `json:"text"`
+		Error bool   `json:"error"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil || strings.TrimSpace(result.Text) == "" || len(result.Text) > 8000 {
+		writeAgentReply(w, egresscontract.Rejected, true)
+		return
+	}
+	writeAgentReply(w, result.Text, result.Error)
+}
+
+func writeAgentReply(w http.ResponseWriter, text string, failed bool) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"text": text, "error": failed})
 }
 
 func (s *Supervisor) postEgress(ctx context.Context, suffix string, payload any, timeout time.Duration) (int, []byte, error) {

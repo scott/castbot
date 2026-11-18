@@ -200,6 +200,22 @@ func TestCountKeysAreNotSecrets(t *testing.T) {
 	}
 }
 
+func TestSkillNamesReadsMapping(t *testing.T) {
+	raw := "name: Atlas\nskills:\n  - review\n  - name: create-agent\n    path: skills/create-agent\n"
+	spec, err := ParseYAML(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := SummarizeKept(spec.Kept)
+	joined := ""
+	for _, line := range lines {
+		joined += line.Label + " " + line.Value + "\n"
+	}
+	if !strings.Contains(joined, "review") || !strings.Contains(joined, "create-agent") {
+		t.Fatal(joined)
+	}
+}
+
 func TestSummarizeKeptListsLeftovers(t *testing.T) {
 	raw := "name: Atlas\nbrain:\n  model: openrouter/x\n  model_override: fast\nrepository: github.com/acme/helper\ndeployment:\n  region: mkc1\nskills:\n  - review\n"
 	spec, err := ParseYAML(raw)

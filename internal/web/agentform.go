@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/scott/castbot/internal/agentfile"
+	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/store"
@@ -939,7 +940,12 @@ func (s *Server) storeBundle(ctx context.Context, userID, agentID string, spec c
 	}
 	stamp := s.store.Now().UTC().Format("20060102150405.000000000")
 	version = stamp + "-" + version
-	_, err = s.store.PutBundleFiles(ctx, userID, agentID, version, string(raw), spec.Instructions, connect.ShimFiles(enabled))
+	prepared := agentskill.Apply(string(raw))
+	files := connect.ShimFiles(enabled)
+	for name, body := range agentskill.BundleFiles() {
+		files[name] = body
+	}
+	_, err = s.store.PutBundleFiles(ctx, userID, agentID, version, prepared, spec.Instructions, files)
 	return version, err
 }
 

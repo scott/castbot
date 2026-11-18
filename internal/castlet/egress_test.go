@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
 )
 
@@ -333,6 +334,43 @@ func TestSecretRequest404IsImmediate(t *testing.T) {
 	}
 	if hit.count("/egress/secret-request") != 0 {
 		t.Fatal("404 host was asked for a card")
+	}
+}
+
+func TestAgentsForwardIgnoresProviderStatus(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/egress") {
+			t.Errorf("agents forward checked egress %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer machine-capability" {
+			t.Errorf("auth %s", r.Header.Get("Authorization"))
+		}
+		if !strings.HasSuffix(r.URL.Path, "/agents") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"text":"Created Quill.","error":false,"user_id":"hidden"}`)
+	})
+	rec := httptest.NewRecorder()
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+agentskill.ToolCreate+`","arguments":{"description":"Sort the support inbox and draft replies."}}`))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Created Quill.") || strings.Contains(rec.Body.String(), "hidden") || strings.Contains(rec.Body.String(), fixtureValue) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if hit.count("/agents") != 1 {
+		t.Fatalf("forwards %d", hit.count("/agents"))
+	}
+	rec = httptest.NewRecorder()
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
+	if hit.count("/agents") != 1 || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
+		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
+	}
+	off := httptest.NewRequest(http.MethodPost, "/agents", strings.NewReader(`{"name":"`+agentskill.ToolList+`","arguments":{}}`))
+	off.RemoteAddr = "203.0.113.5:9"
+	rec = httptest.NewRecorder()
+	sup.ServeEgress(rec, off)
+	if rec.Code != http.StatusNotFound || hit.count("/agents") != 1 {
+		t.Fatalf("off loopback %d forwards %d", rec.Code, hit.count("/agents"))
 	}
 }
 

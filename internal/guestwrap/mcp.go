@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
 )
 
@@ -18,7 +19,7 @@ import (
 // It returns when stdin ends. A missing egress becomes a JSON-RPC error
 // and does not block.
 func ServeMCP(server, base string, in io.Reader, out io.Writer) error {
-	if server != "github" && server != "digitalocean" && server != "request_secret" {
+	if !allowedMCP(server) {
 		return errMCP
 	}
 	sc := bufio.NewScanner(in)
@@ -66,6 +67,12 @@ func ServeMCP(server, base string, in io.Reader, out io.Writer) error {
 				}
 				continue
 			}
+			if server == agentskill.ServerName {
+				if err := writeJSON(out, rpcResult(msg.ID, map[string]any{"tools": agentTools()})); err != nil {
+					return err
+				}
+				continue
+			}
 			reply, err := postJSON(base+"/mcp", egresscontract.MCPCall{Server: server, Message: json.RawMessage(line)}, 60*time.Second)
 			if err != nil {
 				if err := writeJSON(out, rpcError(msg.ID, egresscontract.NotConnected)); err != nil {
@@ -79,6 +86,13 @@ func ServeMCP(server, base string, in io.Reader, out io.Writer) error {
 		case "tools/call":
 			if server == "request_secret" {
 				text, isErr := callSecret(base, msg.Params)
+				if err := writeJSON(out, rpcResult(msg.ID, toolResult(text, isErr))); err != nil {
+					return err
+				}
+				continue
+			}
+			if server == agentskill.ServerName {
+				text, isErr := callAgents(base, msg.Params)
 				if err := writeJSON(out, rpcResult(msg.ID, toolResult(text, isErr))); err != nil {
 					return err
 				}
@@ -104,6 +118,84 @@ func ServeMCP(server, base string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	return nil
+}
+
+func allowedMCP(server string) bool {
+	switch server {
+	case "github", "digitalocean", "request_secret", agentskill.ServerName:
+		return true
+	default:
+		return false
+	}
+}
+
+func agentTools() []any {
+	return []any{
+		map[string]any{
+			"name":        agentskill.ToolCreate,
+			"description": "Create a new agent in this account from a description the person in this chat asked for.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"description": map[string]any{"type": "string", "description": "What the new agent should do, in the person's words."},
+					"name":        map[string]any{"type": "string", "description": "Optional name the person asked for."},
+				},
+				"required": []string{"description"},
+			},
+		},
+		map[string]any{
+			"name":        agentskill.ToolList,
+			"description": "List the agents in this account.",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+	}
+}
+
+func callAgents(base string, params json.RawMessage) (string, bool) {
+	var call struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(params, &call); err != nil {
+		return egresscontract.Rejected, true
+	}
+	var args struct {
+		Description string `json:"description"`
+		Name        string `json:"name"`
+	}
+	if len(call.Arguments) > 0 {
+		_ = json.Unmarshal(call.Arguments, &args)
+	}
+	var payload any
+	switch call.Name {
+	case agentskill.ToolCreate:
+		payload = map[string]any{
+			"name": call.Name,
+			"arguments": map[string]string{
+				"description": args.Description,
+				"name":        args.Name,
+			},
+		}
+	case agentskill.ToolList:
+		payload = map[string]any{"name": call.Name, "arguments": map[string]any{}}
+	default:
+		return egresscontract.Rejected, true
+	}
+	body, err := postJSON(base+"/agents", payload, 60*time.Second)
+	if err != nil {
+		return egresscontract.NotConnected, true
+	}
+	var result struct {
+		Text  string `json:"text"`
+		Error bool   `json:"error"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil || strings.TrimSpace(result.Text) == "" {
+		return egresscontract.Rejected, true
+	}
+	return result.Text, result.Error
 }
 
 func requestSecretTool() map[string]any {

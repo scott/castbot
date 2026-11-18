@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
 )
 
@@ -342,6 +343,55 @@ func TestMCPReturnsHostResultOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(msg.Result.Content) != 1 || msg.Result.Content[0].Text != "saved" {
+		t.Fatal(out.String())
+	}
+}
+
+func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
+	act := Plan("castbot-mcp", []string{agentskill.ServerName}, nil)
+	if act.Serve != agentskill.ServerName || act.Code != 0 {
+		t.Fatalf("%+v", act)
+	}
+	if Plan("castbot-mcp", []string{"other"}, nil).Code != 1 {
+		t.Fatal("unknown server was accepted")
+	}
+	var hits int
+	var posted string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		posted = string(raw)
+		if strings.Contains(posted, "user_id") || strings.Contains(posted, fixtureValue) {
+			t.Errorf("forwarded a user id or the env value")
+		}
+		_, _ = io.WriteString(w, `{"text":"Created Quill.","error":false}`)
+	}))
+	defer srv.Close()
+	var out strings.Builder
+	list := `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(list), &out); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 0 || !strings.Contains(out.String(), agentskill.ToolCreate) || !strings.Contains(out.String(), agentskill.ToolList) {
+		t.Fatalf("list hits %d %s", hits, out.String())
+	}
+	out.Reset()
+	call := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + agentskill.ToolCreate + `","arguments":{"description":"Sort the support inbox and draft replies.","name":"Quill","user_id":"other"}}}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 || !strings.Contains(out.String(), "Created Quill.") || strings.Contains(out.String(), fixtureValue) {
+		t.Fatalf("call hits %d %s", hits, out.String())
+	}
+	if !strings.Contains(posted, `"description"`) || strings.Contains(posted, "user_id") {
+		t.Fatal(posted)
+	}
+	out.Reset()
+	bad := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"delete_agent","arguments":{}}}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, "http://127.0.0.1:1", strings.NewReader(bad), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), egresscontract.Rejected) {
 		t.Fatal(out.String())
 	}
 }

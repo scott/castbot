@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/scott/castbot/internal/agentskill"
 )
 
 const (
@@ -28,8 +30,9 @@ func Archive(yaml, instructions string) ([]byte, string, error) {
 	return ArchiveFiles(yaml, instructions, nil)
 }
 
-// ArchiveFiles adds mcp shim files. Names must be mcp/<name>.yaml.
-// A nil or empty map matches Archive of the two main files.
+// ArchiveFiles adds mcp shim files and the create-agent skill file.
+// A shim name must be mcp/<name>.yaml. The skill path is the one file
+// agentskill.SkillFile. A nil or empty map matches Archive of the two main files.
 func ArchiveFiles(yaml, instructions string, extras map[string]string) ([]byte, string, error) {
 	if yaml == "" || instructions == "" {
 		return nil, "", errors.New("bundle is missing agent.yaml or instructions.md")
@@ -65,6 +68,9 @@ func ArchiveFiles(yaml, instructions string, extras map[string]string) ([]byte, 
 func safeExtra(name string) bool {
 	if strings.Contains(name, "..") || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") {
 		return false
+	}
+	if name == agentskill.SkillFile {
+		return true
 	}
 	rest, ok := strings.CutPrefix(name, "mcp/")
 	if !ok || rest == "" || strings.Contains(rest, "/") {

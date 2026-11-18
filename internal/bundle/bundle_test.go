@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/scott/castbot/internal/agentskill"
 )
 
 func TestArchiveRoundTrip(t *testing.T) {
@@ -42,5 +44,30 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "memory")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSkillFileRoundTrip(t *testing.T) {
+	extras := map[string]string{agentskill.SkillFile: "name: create-agent\n"}
+	raw, _, err := ArchiveFiles("name: Atlas\n", "Be brief.\n", extras)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := Install(dir, raw); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, agentskill.SkillFile))
+	if err != nil || string(got) != extras[agentskill.SkillFile] {
+		t.Fatalf("skill %q %v", got, err)
+	}
+	for _, name := range []string{
+		"skills/create-agent/../../secret.txt",
+		"skills/other/SKILL.md",
+		"mcp/nested/agents.yaml",
+	} {
+		if _, _, err := ArchiveFiles("name: Atlas\n", "Be brief.\n", map[string]string{name: "no"}); err == nil {
+			t.Fatalf("accepted %s", name)
+		}
 	}
 }
