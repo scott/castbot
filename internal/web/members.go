@@ -308,7 +308,7 @@ func (s *Server) groupShow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	if r.URL.Query().Get("panel") == "group" || panelPartial(r) {
+	if r.URL.Query().Get("panel") == "group" || panelPartial(r) || switchPartial(r) {
 		if err := s.attachGroupPanel(r, user, &p); err != nil {
 			if s.missing(w, err) {
 				return
@@ -319,6 +319,10 @@ func (s *Server) groupShow(w http.ResponseWriter, r *http.Request) {
 	}
 	if panelPartial(r) {
 		s.render(w, http.StatusOK, "groupPane", p)
+		return
+	}
+	if switchPartial(r) {
+		s.render(w, http.StatusOK, "stage", finish(p))
 		return
 	}
 	s.render(w, http.StatusOK, "app", finish(p))

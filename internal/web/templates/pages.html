@@ -493,14 +493,8 @@
 </div>
 {{end}}
 
-{{define "app"}}
-<!doctype html>
-<html lang="en" data-theme="{{.Theme}}"{{if eq .Theme "light"}} class="light"{{end}}>
-{{template "head" .}}
-<body class="{{.BodyClass}}"{{if .HasAgent}} data-agent="{{.Agent.ID}}"{{end}}{{if .CSRF}} hx-headers='{"X-CSRF-Token":"{{.CSRF}}"}'{{end}}>
-<div class="app{{if or .Pane .Routines.On}} with-pane{{end}}{{if .Routines.Wide}} wide-pane{{end}}">
-{{template "sidebar" .}}
-<main class="main">
+{{define "chatCol"}}
+<main class="main" id="chat-col">
 {{if eq .Page "create"}}{{template "createMain" .}}
 {{else if eq .Page "home"}}
 {{else if eq .Page "chat" "machine" "agent-routines" "agent-files"}}{{template "chatMain" .}}
@@ -514,8 +508,30 @@
 {{else if eq .Page "new" "edit"}}{{template "agentForm" .}}
 {{else}}{{template "stubMain" .}}{{end}}
 </main>
+{{end}}
+
+{{define "paneCol"}}
 {{if .Pane}}<a class="peek ph-only" href="{{if eq .Page "group"}}/groups/{{.Group.ID}}{{else}}/agents/{{.Agent.ID}}{{end}}" data-close-panel aria-label="Close panel and return to chat"></a>{{end}}
 {{if eq .Panel "group"}}{{template "groupPane" .}}{{else if eq .Panel "files"}}{{template "filesPane" .}}{{else if eq .Panel "routines"}}{{template "routinesPane" .}}{{else if or (eq .Panel "secrets") .Vault.Panel}}{{template "secretPanel" .}}{{else if eq .Panel "machine"}}{{template "machinePane" .}}{{else if eq .Panel "approvals"}}{{template "approvalsPane" .}}{{else if eq .Panel "agent"}}{{template "agentPane" .}}{{else if or .HasAgent (eq .Page "group")}}<aside id="agent-panel" hidden></aside>{{end}}
+{{end}}
+
+{{define "stage"}}
+{{template "chatCol" .}}
+{{template "paneCol" .}}
+<span id="stage-meta" hidden data-title="{{if gt .Approvals 0}}({{.Approvals}}) {{end}}{{.Title}} · castbot" data-body="{{.BodyClass}}"{{if .HasAgent}} data-agent="{{.Agent.ID}}"{{end}}></span>
+{{end}}
+
+{{define "app"}}
+<!doctype html>
+<html lang="en" data-theme="{{.Theme}}"{{if eq .Theme "light"}} class="light"{{end}}>
+{{template "head" .}}
+<body class="{{.BodyClass}}"{{if .HasAgent}} data-agent="{{.Agent.ID}}"{{end}}{{if .CSRF}} hx-headers='{"X-CSRF-Token":"{{.CSRF}}"}'{{end}}>
+<div class="app{{if or .Pane .Routines.On}} with-pane{{end}}{{if .Routines.Wide}} wide-pane{{end}}">
+{{template "sidebar" .}}
+<div id="stage">
+{{template "chatCol" .}}
+{{template "paneCol" .}}
+</div>
 </div>
 <div id="toasts">{{template "toastList" .}}</div>
 {{if .Vault.Drawer}}{{template "vaultDrawer" .}}{{end}}

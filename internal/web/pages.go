@@ -307,13 +307,17 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/machine/card") || strings.HasSuffix(r.URL.Path, "/machine/refresh"):
 		name = "machinePanel"
-	case panelPartial(r):
+	case panelPartial(r), switchPartial(r):
 		if outsidePanelChrome(p) {
 			w.Header().Set("HX-Redirect", panelRedirect(r))
 			w.WriteHeader(http.StatusNoContent)
 			return nil
 		}
-		name = panelTemplate(p)
+		if switchPartial(r) {
+			name = "stage"
+		} else {
+			name = panelTemplate(p)
+		}
 	default:
 		if p.HasAgent {
 			s.fillToasts(w, r, agent.ID, &p)
