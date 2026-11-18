@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/scott/castbot/internal/store"
 )
+
+// approvalHistoryPage is how many Earlier cards show before Show more.
+const approvalHistoryPage = 8
 
 const toastCookie = "castbot_toasted"
 
@@ -414,8 +418,10 @@ func (s *Server) fillApprovalsCtx(ctx context.Context, user store.User, agent st
 	if err != nil {
 		return
 	}
-	var earlier []cardView
-	for _, row := range rows {
+	loc := userLocation(user.Timezone)
+	now := s.store.Now()
+	var earlier []earlierCard
+	for i, row := range rows {
 		card := s.presentApproval(row, user, csrf)
 		if row.Status == "expired" {
 			card.Line = "No answer in 10 min, denied"
@@ -429,7 +435,7 @@ func (s *Server) fillApprovalsCtx(ctx context.Context, user store.User, agent st
 		}
 		card.Hist = true
 		card.Find = approvalFind(card)
-		earlier = append(earlier, card)
+		earlier = append(earlier, earlierCard{view: card, stamp: historyStamp(row), ord: i})
 	}
 	if connects, err := s.store.ListConnectApprovals(ctx, user.ID, agent.ID, time.Unix(0, 0)); err == nil {
 		for _, row := range connects {
@@ -439,12 +445,93 @@ func (s *Server) fillApprovalsCtx(ctx context.Context, user store.User, agent st
 			p.ApprovalsWaiting = append(p.ApprovalsWaiting, s.presentConnect(user, row, csrf))
 		}
 	}
-	// Oldest waiting first. Earlier is the full history, newest first,
-	// so the search box can find an approval older than the first screen.
-	for i, j := 0, len(earlier)-1; i < j; i, j = i+1, j-1 {
-		earlier[i], earlier[j] = earlier[j], earlier[i]
+	// Oldest waiting first. Earlier is newest decision first, grouped by
+	// the person's local date. The first page stays short. The rest stay
+	// in the page so search can still open an older approval.
+	sort.SliceStable(earlier, func(i, j int) bool {
+		if earlier[i].stamp != earlier[j].stamp {
+			return earlier[i].stamp > earlier[j].stamp
+		}
+		return earlier[i].ord > earlier[j].ord
+	})
+	p.ApprovalHistoryPage = approvalHistoryPage
+	p.ApprovalDays, p.ApprovalEarlierMore = groupApprovalDays(earlier, approvalHistoryPage, now, loc)
+	if p.ApprovalEarlierMore {
+		p.ApprovalEarlierNote = fmt.Sprintf("Showing %d of %d", approvalHistoryPage, len(earlier))
 	}
-	p.ApprovalsEarlier = earlier
+}
+
+// earlierCard is one settled approval before it is grouped by day.
+type earlierCard struct {
+	view  cardView
+	stamp string
+	ord   int
+}
+
+func historyStamp(row store.Approval) string {
+	if row.DecidedAt != "" && row.Status != "pending" {
+		return row.DecidedAt
+	}
+	return row.CreatedAt
+}
+
+// groupApprovalDays buckets history newest-first and hides cards past page.
+func groupApprovalDays(earlier []earlierCard, page int, now time.Time, loc *time.Location) ([]approvalDayGroup, bool) {
+	if page < 1 {
+		page = approvalHistoryPage
+	}
+	var days []approvalDayGroup
+	shown := 0
+	for _, item := range earlier {
+		key, label := approvalDayLabel(item.stamp, now, loc)
+		card := item.view
+		if shown >= page {
+			card.Hidden = true
+		} else {
+			shown++
+		}
+		if extra := strings.ToLower(label); extra != "" {
+			card.Find = strings.TrimSpace(card.Find + " " + extra)
+		}
+		if len(days) == 0 || days[len(days)-1].key != key {
+			days = append(days, approvalDayGroup{Label: label, key: key})
+		}
+		last := &days[len(days)-1]
+		last.Cards = append(last.Cards, card)
+	}
+	for i := range days {
+		visible := false
+		for _, card := range days[i].Cards {
+			if !card.Hidden {
+				visible = true
+				break
+			}
+		}
+		days[i].Hidden = !visible
+	}
+	return days, len(earlier) > page
+}
+
+func approvalDayLabel(stamp string, now time.Time, loc *time.Location) (key, label string) {
+	t, ok := inZone(stamp, loc)
+	if !ok {
+		return "", "Earlier"
+	}
+	if loc == nil {
+		loc = userLocation("")
+	}
+	now = now.In(loc)
+	key = t.Format("2006-01-02")
+	switch key {
+	case now.Format("2006-01-02"):
+		return key, "Today"
+	case now.AddDate(0, 0, -1).Format("2006-01-02"):
+		return key, "Yesterday"
+	}
+	if t.Year() == now.Year() {
+		return key, t.Format("Jan 2")
+	}
+	return key, t.Format("Jan 2, 2006")
 }
 
 func approvalFind(card cardView) string {

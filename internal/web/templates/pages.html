@@ -161,7 +161,7 @@
 {{end}}
 
 {{define "approvalCard"}}
-{{if .Fold}}<details class="appr appr-fold{{if .Approved}} done{{end}} settled" id="{{if .Hist}}hist-{{end}}appr-{{.ID}}"{{if .Find}} data-find="{{.Find}}"{{end}}{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>
+{{if .Fold}}<details class="appr appr-fold{{if .Approved}} done{{end}} settled" id="{{if .Hist}}hist-{{end}}appr-{{.ID}}"{{if .Find}} data-find="{{.Find}}"{{end}}{{if .Hidden}} hidden{{end}}{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>
 <summary class="appr-sum"><span class="ico" aria-hidden="true">{{if .Approved}}{{template "checksvg" .}}{{else if eq .Fold "Denied"}}{{template "xsvg" .}}{{else}}<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>{{end}}</span><span class="st">{{.Fold}}</span><span class="tn">{{.Tool}}</span>{{if .When}}<span class="stamp">{{.When}}</span>{{end}}<svg class="i sm chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></summary>
 <div class="appr-more">{{template "approvalCardBody" .}}</div>
 </details>{{else}}<div class="appr{{if .Approved}} done{{end}}{{if not .Pending}} settled{{end}}" id="appr-{{.ID}}"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>{{template "approvalCardBody" .}}</div>{{end}}
@@ -413,17 +413,18 @@
 <p class="fineprint" id="month-note">Running time at this size, plus disk while paused. An estimate, not a bill.</p>
 {{if .Replace.NoMachine}}<div class="nomach"><div><b>{{.Agent.Name}} has no machine right now.</b><p>Start one to chat. The agent, its chats and its settings are all here.</p></div></div>{{end}}
 {{if .Replace.Steps}}{{template "replaceProgress" .}}{{end}}
-<div class="acts racts">
-{{if or .Machine.CanStart .Machine.CanRetry}}<form method="post" action="/agents/{{.Agent.ID}}/machine"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn pri sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>{{if .Machine.CanRetry}}Try again{{else}}Start machine{{end}}</button></form>{{end}}
-{{if .Machine.CanPause}}<form method="post" action="/agents/{{.Agent.ID}}/machine/pause"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Pause</button></form>{{end}}
-{{if .Machine.CanWake}}<form method="post" action="/agents/{{.Agent.ID}}/machine/wake"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Wake</button></form>{{end}}
-{{if .Machine.CanDelete}}<form method="post" action="/agents/{{.Agent.ID}}/machine/refresh" hx-post="/agents/{{.Agent.ID}}/machine/refresh" hx-target="#machine-root" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit"{{if .Replace.Lock}} disabled{{end}}>Refresh</button></form>{{end}}
-{{if .Replace.CanReplace}}<a class="btn sm" id="replace-open" href="/agents/{{.Agent.ID}}/machine/replace?opener=replace-open">Replace machine</a>{{else if .Replace.ShowButton}}<button class="btn sm" type="button" disabled>Replace machine</button>{{end}}
-{{if .Replace.CanRollback}}<a class="btn sm" id="rollback-open" href="/agents/{{.Agent.ID}}/machine/rollback?opener=rollback-open">Roll back runtime</a>{{end}}
+{{if or .Machine.CanStart .Machine.CanRetry .Machine.CanPause .Machine.CanWake .Machine.CanDelete .Replace.ShowButton .Replace.CanReplace .Replace.CanRollback}}
+<div class="macts">
+{{if or .Machine.CanStart .Machine.CanRetry}}<form method="post" action="/agents/{{.Agent.ID}}/machine"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="mact pri" type="submit"{{if .Replace.Lock}} disabled{{end}}><span class="t1">{{if .Machine.CanRetry}}Try again{{else}}Start machine{{end}}</span><span class="t2">{{if .Machine.CanRetry}}Starts a new machine after the last attempt failed.{{else}}Starts a machine for this agent so you can chat.{{end}}</span></button></form>{{end}}
+{{if .Machine.CanPause}}<form method="post" action="/agents/{{.Agent.ID}}/machine/pause"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="mact" type="submit"{{if .Replace.Lock}} disabled{{end}}><span class="t1">Pause</span><span class="t2">Stops the machine until you wake it. A chat message wakes it too.</span></button></form>{{end}}
+{{if .Machine.CanWake}}<form method="post" action="/agents/{{.Agent.ID}}/machine/wake"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="mact" type="submit"{{if .Replace.Lock}} disabled{{end}}><span class="t1">Wake</span><span class="t2">Starts the paused machine so the agent can work. A chat message wakes it too.</span></button></form>{{end}}
+{{if .Machine.CanDelete}}<form method="post" action="/agents/{{.Agent.ID}}/machine/refresh" hx-post="/agents/{{.Agent.ID}}/machine/refresh" hx-target="#machine-root" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="mact" type="submit"{{if .Replace.Lock}} disabled{{end}}><span class="t1">Refresh</span><span class="t2">Checks the machine with the cloud API. This does not wake it.</span></button></form>{{end}}
+{{if .Replace.CanReplace}}<a class="mact" id="replace-open" href="/agents/{{.Agent.ID}}/machine/replace?opener=replace-open"><span class="t1">Replace machine</span><span class="t2">Starts a new machine on the current runtime and copies memory and workspace files. The agent and its chats stay.</span></a>{{else if .Replace.ShowButton}}<button class="mact" type="button" disabled><span class="t1">Replace machine</span><span class="t2">Starts a new machine on the current runtime and copies memory and workspace files. The agent and its chats stay.</span></button>{{end}}
+{{if .Replace.CanRollback}}<a class="mact" id="rollback-open" href="/agents/{{.Agent.ID}}/machine/rollback?opener=rollback-open"><span class="t1">Roll back runtime</span><span class="t2" id="rollback-note">Previous runtime {{.Replace.RollbackTag}} can be restored for {{.Replace.RollbackDays}} days. Memory and workspace files are copied again.</span></a>{{end}}
 </div>
-{{if .Replace.RollbackTag}}<p class="fineprint" id="rollback-note">Previous runtime {{.Replace.RollbackTag}} can be restored for {{.Replace.RollbackDays}} days. Memory and workspace files are copied again.</p>{{end}}
+{{end}}
+{{if and .Replace.RollbackTag (not .Replace.CanRollback)}}<p class="fineprint" id="rollback-note">Previous runtime {{.Replace.RollbackTag}} can be restored for {{.Replace.RollbackDays}} days. Memory and workspace files are copied again.</p>{{end}}
 {{if .Replace.LockLine}}<p class="lockline">This machine is being replaced. Pause, Wake, Delete and Add to Cast CLI are off until it is done.</p>{{end}}
-{{template "machineLogs" .}}
 {{if .Replace.Reason}}<p class="reason">{{.Replace.Reason}}{{if .Replace.ReasonHref}} <a class="link" href="{{.Replace.ReasonHref}}">{{.Replace.ReasonLabel}}</a>{{end}}</p>{{end}}
 {{if .Replace.HintBold}}<div class="rhint{{if .Replace.Same}} quiet{{end}}"><div><b>{{.Replace.HintBold}}</b> {{.Replace.HintRest}}</div>{{if and .Replace.Update .Replace.CanReplace}}<a class="btn sm pri" id="replace-hint" href="/agents/{{.Agent.ID}}/machine/replace?opener=replace-hint">Replace machine</a>{{end}}</div>{{end}}
 {{template "cliBox" .}}
@@ -435,16 +436,8 @@
 {{end}}
 
 {{define "machineHistoryMore"}}
-{{range .Replace.History}}<li hx-swap-oob="beforeend:#machine-history-list"><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}
+<ul hx-swap-oob="beforeend:#machine-history-list">{{range .Replace.History}}<li><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}</ul>
 <div id="machine-history-more">{{if .Replace.HistoryMore}}<button class="link" type="button" hx-get="/agents/{{.Agent.ID}}/machine/history?offset={{.Replace.HistoryNext}}" hx-target="#machine-history-more" hx-swap="outerHTML" hx-disabled-elt="this">Show more</button>{{end}}</div>
-{{end}}
-
-{{define "machineLogs"}}
-<section class="mlogs" id="machine-logs"{{if .Machine.LogLive}} hx-get="/agents/{{.Agent.ID}}/machine/logs" hx-trigger="every 5s" hx-swap="outerHTML"{{end}}>
-<h3>Logs</h3>
-{{if .Machine.LogText}}<pre class="logtail">{{.Machine.LogText}}</pre>{{end}}
-{{if .Machine.LogNote}}<p class="fineprint">{{.Machine.LogNote}}</p>{{end}}
-</section>
 {{end}}
 
 {{define "replaceProgress"}}

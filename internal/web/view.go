@@ -21,8 +21,6 @@ type machineView struct {
 	CanStart, CanPause, CanWake, CanRetry, CanDelete bool
 	State                                            string
 	Estimate                                         string
-	LogText, LogNote                                 string
-	LogLive                                          bool
 }
 
 type usageLine struct {
@@ -113,13 +111,13 @@ type liveView struct {
 }
 
 type cardView struct {
-	ID, RunID, Tool, Line, CSRF, When, At                 string
-	Extra, From, Reason                                   string
-	SubmitURL, DeclineURL, ApproveURL, DenyURL, AlwaysURL string
-	FieldLabel, SubmitLabel, Fold, Find                   string
-	Args                                                  []argView
-	Pending, ReadOnly, Approved, Secret, OOB, Hist        bool
-	NeedsValue                                            bool
+	ID, RunID, Tool, Line, CSRF, When, At                  string
+	Extra, From, Reason                                    string
+	SubmitURL, DeclineURL, ApproveURL, DenyURL, AlwaysURL  string
+	FieldLabel, SubmitLabel, Fold, Find                    string
+	Args                                                   []argView
+	Pending, ReadOnly, Approved, Secret, OOB, Hist, Hidden bool
+	NeedsValue                                             bool
 }
 
 type chromeView struct {
@@ -131,6 +129,14 @@ type chromeView struct {
 	Tail           string
 	Act            template.HTML
 	HideAct        bool
+}
+
+// approvalDayGroup is one date in the Earlier list, newest day first.
+type approvalDayGroup struct {
+	Label  string
+	Hidden bool
+	Cards  []cardView
+	key    string
 }
 
 type argView struct {
@@ -146,104 +152,107 @@ type sessView struct {
 }
 
 type page struct {
-	Title            string
-	Theme            string
-	CSRF             string
-	BodyClass        string
-	Page             string
-	Nav              string
-	ShowNav          bool
-	Pane             bool
-	Empty            bool
-	User             store.User
-	HasUser          bool
-	Initials         string
-	Sections         []sectionView
-	Approvals        int
-	OtherApprovals   int
-	AgentCount       int
-	Usage            string
-	UsageLines       []usageLine
-	Glance           []glanceRow
-	ModelTitle       string
-	ModelSub         string
-	ApprovalsWaiting []cardView
-	ApprovalsEarlier []cardView
-	Toasts           []toastView
-	Agent            agentView
-	HasAgent         bool
-	Messages         []msgView
-	Lives            []liveView
-	Tab              string
-	Notice           string
-	EditName         bool
-	Sessions         sessView
-	Email            string
-	Remember         bool
-	Code             string
-	Cells            []cellView
-	OTPBad           bool
-	Banner           bool
-	BannerLead       string
-	BannerRest       string
-	BannerIcon       string
-	Hint             string
-	Locked           bool
-	LockRFC          string
-	LockLabel        string
-	StubTitle        string
-	StubBody         string
-	FormError        string
-	AgentForm        agentForm
-	Machine          machineView
-	Replace          replaceView
-	StartMachine     bool
-	CLIBlob          string
-	CLINote          string
-	CLIName          string
-	CLITokens        []cliTokView
-	Threads          []threadView
-	ThreadID         string
-	RosterNote       string
-	Cards            []cardView
-	SecretCards      []cardView
-	Text             string
-	RoleLine         string
-	PasswordOn       string
-	Members          []memberView
-	Invites          []inviteView
-	CanInvite        bool
-	InviteLink       string
-	InviteEmail      string
-	InviteSecret     string
-	InviteURL        string
-	PathToken        string
-	QuotaMachines    string
-	QuotaUploads     string
-	Groups           []groupLink
-	GroupsFolded     bool
-	Group            groupPage
-	Routines         routinePanel
-	Run              runBar
-	PendingTool      string
-	Vault            vaultView
-	Connections      connPage
-	Panel            string
-	LowSpace         bool
-	Files            filesPanel
-	SearchQuery      string
-	SearchAgents     []agentView
-	FileHits         []fileHitView
-	Create           createView
-	Boot             bootView
-	AskJob           bool
-	AutoResume       bool
-	SwapOOB          bool
-	ResumeAct        template.HTML
-	ResumeErr        string
-	ResumePoll       bool
-	ResumeChrome     bool
-	ResumeClearAct   bool
+	Title               string
+	Theme               string
+	CSRF                string
+	BodyClass           string
+	Page                string
+	Nav                 string
+	ShowNav             bool
+	Pane                bool
+	Empty               bool
+	User                store.User
+	HasUser             bool
+	Initials            string
+	Sections            []sectionView
+	Approvals           int
+	OtherApprovals      int
+	AgentCount          int
+	Usage               string
+	UsageLines          []usageLine
+	Glance              []glanceRow
+	ModelTitle          string
+	ModelSub            string
+	ApprovalsWaiting    []cardView
+	ApprovalDays        []approvalDayGroup
+	ApprovalHistoryPage int
+	ApprovalEarlierMore bool
+	ApprovalEarlierNote string
+	Toasts              []toastView
+	Agent               agentView
+	HasAgent            bool
+	Messages            []msgView
+	Lives               []liveView
+	Tab                 string
+	Notice              string
+	EditName            bool
+	Sessions            sessView
+	Email               string
+	Remember            bool
+	Code                string
+	Cells               []cellView
+	OTPBad              bool
+	Banner              bool
+	BannerLead          string
+	BannerRest          string
+	BannerIcon          string
+	Hint                string
+	Locked              bool
+	LockRFC             string
+	LockLabel           string
+	StubTitle           string
+	StubBody            string
+	FormError           string
+	AgentForm           agentForm
+	Machine             machineView
+	Replace             replaceView
+	StartMachine        bool
+	CLIBlob             string
+	CLINote             string
+	CLIName             string
+	CLITokens           []cliTokView
+	Threads             []threadView
+	ThreadID            string
+	RosterNote          string
+	Cards               []cardView
+	SecretCards         []cardView
+	Text                string
+	RoleLine            string
+	PasswordOn          string
+	Members             []memberView
+	Invites             []inviteView
+	CanInvite           bool
+	InviteLink          string
+	InviteEmail         string
+	InviteSecret        string
+	InviteURL           string
+	PathToken           string
+	QuotaMachines       string
+	QuotaUploads        string
+	Groups              []groupLink
+	GroupsFolded        bool
+	Group               groupPage
+	Routines            routinePanel
+	Run                 runBar
+	PendingTool         string
+	Vault               vaultView
+	Connections         connPage
+	Panel               string
+	LowSpace            bool
+	Files               filesPanel
+	SearchQuery         string
+	SearchAgents        []agentView
+	FileHits            []fileHitView
+	Create              createView
+	Boot                bootView
+	AskJob              bool
+	AutoResume          bool
+	SwapOOB             bool
+	ResumeAct           template.HTML
+	ResumeErr           string
+	ResumePoll          bool
+	ResumeChrome        bool
+	ResumeClearAct      bool
 }
 
 func finish(p page) page {

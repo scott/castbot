@@ -34,17 +34,7 @@ func TestMachinePanelRunning(t *testing.T) {
 	h, fake, agent, _ := runningRig(t, ip, "s11-run@example.com")
 	anchor := h.st.Now()
 	h.st.SetNow(func() time.Time { return anchor.Add(time.Hour) })
-	token := machineToken(t, h, agent)
-	secret := "fixture-secret-value"
-	sec, err := h.st.PutSecret(context.Background(), agent.UserID, "NOTES_TOKEN", secret)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := h.st.GrantSecret(context.Background(), agent.UserID, agent.ID, sec.ID); err != nil {
-		t.Fatal(err)
-	}
-	shaped := "sk-" + "live-fixture-token-value"
-	fake.LogTail = "boot ok\n" + secret + "\n" + shaped + "\n" + token + "\n"
+	fake.LogTail = "boot ok\nsecret line\n"
 	fake.SeedDisk("https://vm.example", nil, map[string][]byte{"notes.md": []byte("hi")})
 
 	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID, "", ip, nil)
@@ -57,32 +47,31 @@ func TestMachinePanelRunning(t *testing.T) {
 	}
 	for _, line := range []string{
 		`id="month-est"`, "$0.04", "An estimate, not a bill.",
-		"boot ok", "[redacted]", "********",
-		"Latest lines from the machine.",
-		`/machine/logs`,
 	} {
 		if !strings.Contains(body, line) {
 			t.Fatalf("missing %q", line)
 		}
 	}
-	if strings.Contains(body, secret) || strings.Contains(body, shaped) || strings.Contains(body, token) {
-		t.Fatal("secret or token leaked into the machine panel")
+	for _, line := range []string{
+		"boot ok", "Latest lines from the machine.", `id="machine-logs"`, ">Logs<", `/machine/logs`,
+		"notes.md", "Open files", `id="machine-files"`,
+	} {
+		if strings.Contains(body, line) {
+			t.Fatalf("panel still shows %q", line)
+		}
 	}
-	if strings.Contains(body, "notes.md") || strings.Contains(body, "Open files") || strings.Contains(body, `id="machine-files"`) {
-		t.Fatal("machine panel still lists files")
-	}
-	if callCount(fake, "logs") != 1 || callCount(fake, "list-files") != 0 {
+	if callCount(fake, "logs") != 0 || callCount(fake, "list-files") != 0 {
 		t.Fatalf("logs %d list %d", callCount(fake, "logs"), callCount(fake, "list-files"))
+	}
+	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/machine/logs", "", ip, nil)
+	if code == http.StatusOK || strings.Contains(body, "boot ok") || strings.Contains(body, `id="machine-logs"`) {
+		t.Fatalf("logs route %d", code)
+	}
+	if callCount(fake, "logs") != 0 {
+		t.Fatalf("logs route called the guest %d", callCount(fake, "logs"))
 	}
 	if _, edge := fake.Snapshot(); edge != 0 {
 		t.Fatalf("edge %d", edge)
-	}
-	code, frag, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine/logs", "", ip, nil)
-	if code != 200 || !strings.Contains(frag, "boot ok") || !strings.Contains(frag, `id="machine-logs"`) || strings.Contains(frag, "<!doctype") {
-		t.Fatalf("fragment %d", code)
-	}
-	if strings.Contains(frag, secret) || strings.Contains(frag, token) {
-		t.Fatal("fragment leaked a secret")
 	}
 }
 
@@ -98,16 +87,8 @@ func TestMachinePanelDoesNotWake(t *testing.T) {
 	if code != 200 {
 		t.Fatal(code)
 	}
-	for _, line := range []string{
-		"The machine is paused.",
-		"Logs stay on the machine. Wake it to read the tail. This check does not wake it.",
-	} {
-		if !strings.Contains(body, line) {
-			t.Fatalf("missing %q", line)
-		}
-	}
-	if strings.Contains(body, "/machine/logs") {
-		t.Fatal("paused panel polls logs")
+	if !strings.Contains(body, "The machine is paused.") || strings.Contains(body, `id="machine-logs"`) || strings.Contains(body, "/machine/logs") {
+		t.Fatal("paused panel still offers logs")
 	}
 	if callCount(fake, "logs") != 0 || callCount(fake, "list-files") != 0 || wakeCount(fake) != 0 {
 		t.Fatalf("logs %d list %d wake %d", callCount(fake, "logs"), callCount(fake, "list-files"), wakeCount(fake))
@@ -119,13 +100,6 @@ func TestMachinePanelDoesNotWake(t *testing.T) {
 	if err != nil || vm.State != "paused" {
 		t.Fatalf("saved %+v %v", vm, err)
 	}
-	code, frag, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine/logs", "", ip, nil)
-	if code != 200 || !strings.Contains(frag, "This check does not wake it.") || strings.Contains(frag, "hx-get=") {
-		t.Fatalf("paused fragment %d", code)
-	}
-	if callCount(fake, "logs") != 0 || fake.Machines[id].State != "paused" {
-		t.Fatal("log fragment woke the machine")
-	}
 }
 
 func TestMachinePanelQuietStates(t *testing.T) {
@@ -135,14 +109,14 @@ func TestMachinePanelQuietStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
-	if code != 200 || !strings.Contains(body, "No log tail yet.") || callCount(fake, "logs") != 0 {
+	if code != 200 || strings.Contains(body, `id="machine-logs"`) || callCount(fake, "logs") != 0 {
 		t.Fatalf("failed %d logs %d", code, callCount(fake, "logs"))
 	}
 	if err := h.st.ApplyVMState(context.Background(), agent.UserID, agent.ID, "creating", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
-	if code != 200 || !strings.Contains(body, "No log tail yet.") || callCount(fake, "logs") != 0 || callCount(fake, "list-files") != 0 {
+	if code != 200 || strings.Contains(body, `id="machine-logs"`) || callCount(fake, "logs") != 0 || callCount(fake, "list-files") != 0 {
 		t.Fatalf("creating %d", code)
 	}
 	fake.SetMachineState("vm-"+agent.ID, "running")
@@ -151,11 +125,11 @@ func TestMachinePanelQuietStates(t *testing.T) {
 	}
 	fake.FailClass = "logs"
 	code, body, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
-	if code != 200 || !strings.Contains(body, "The log tail could not be read. The machine was not woken.") {
-		t.Fatalf("read error %d", code)
+	if code != 200 || strings.Contains(body, `id="machine-logs"`) || callCount(fake, "logs") != 0 {
+		t.Fatalf("running %d logs %d", code, callCount(fake, "logs"))
 	}
 	if _, edge := fake.Snapshot(); edge != 0 || wakeCount(fake) != 0 {
-		t.Fatal("log failure woke the machine")
+		t.Fatal("panel woke the machine")
 	}
 }
 
@@ -167,10 +141,6 @@ func TestMachinePanelAuthz(t *testing.T) {
 	code, _, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
 	if code != http.StatusNotFound {
 		t.Fatalf("panel %d", code)
-	}
-	code, _, _ = h.do(http.MethodGet, "/agents/"+agent.ID+"/machine/logs", "", ip, nil)
-	if code != http.StatusNotFound {
-		t.Fatalf("logs %d", code)
 	}
 	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"/machine/history?offset=5", "", ip, nil)
 	if code != http.StatusNotFound || strings.Contains(body, "Machine history") {
@@ -237,7 +207,7 @@ func TestMachineHistoryShowsFiveThenMore(t *testing.T) {
 	if code != 200 || strings.Contains(body, "<!doctype") || strings.Contains(body, "Show more") || strings.Contains(body, "Guest ready") || strings.Contains(body, "Woke for a message") {
 		t.Fatalf("next page %d", code)
 	}
-	if strings.Count(body, "Machine running") != 1 || strings.Count(body, "Machine create requested") != 2 || strings.Count(body, `hx-swap-oob="beforeend:#machine-history-list"`) != 3 {
+	if strings.Count(body, "Machine running") != 1 || strings.Count(body, "Machine create requested") != 2 || strings.Count(body, `hx-swap-oob="beforeend:#machine-history-list"`) != 1 || strings.Count(body, "<li>") != 3 {
 		t.Fatal("next page did not add the older rows")
 	}
 	if !strings.Contains(body, `id="machine-history-more"></div>`) {
@@ -305,13 +275,4 @@ func TestSettingsMachineEstimate(t *testing.T) {
 	if code != 200 || !strings.Contains(body, "$0.00") || strings.Contains(body, "$0.39") || strings.Contains(body, ">Atlas<") {
 		t.Fatalf("other settings %d", code)
 	}
-}
-
-func machineToken(t *testing.T, h *harness, agent store.Agent) string {
-	t.Helper()
-	_, token, err := h.st.VMCredentials(context.Background(), agent.UserID, agent.ID)
-	if err != nil || token == "" {
-		t.Fatal(err)
-	}
-	return token
 }

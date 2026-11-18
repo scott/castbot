@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -463,8 +464,14 @@ func namedAgent(t *testing.T, h *harness, userID, name string) store.Agent {
 
 func TestApprovalsPaneFoldsHistory(t *testing.T) {
 	h := newHarness(t)
+	// The scheduler reads this clock from another goroutine.
+	var clockMu sync.Mutex
 	clock := time.Date(2026, 11, 17, 15, 0, 0, 0, time.UTC)
-	h.st.SetNow(func() time.Time { return clock })
+	h.st.SetNow(func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return clock
+	})
 	user, secret := h.account("hist-s19@example.com", "Ada", "correct-horse-1")
 	ip := "203.0.113.41:9"
 	h.login("hist-s19@example.com", "correct-horse-1", secret, ip, false)
@@ -476,9 +483,12 @@ func TestApprovalsPaneFoldsHistory(t *testing.T) {
 	}
 	const n = 21
 	for i := 0; i < n; i++ {
-		clock = time.Date(2026, 11, 17, 15, i, 0, 0, time.UTC)
+		at := time.Date(2026, 11, 17, 15, i, 0, 0, time.UTC)
+		clockMu.Lock()
+		clock = at
+		clockMu.Unlock()
 		raw := fmt.Sprintf(`{"id":"req-hist-%02d","tool":"tool-%02d","arguments":{"command":"echo hist-%02d"}}`, i, i, i)
-		ap, err := h.st.RecordPermission(ctx, user.ID, runRow.ID, []byte(raw), clock.Add(time.Hour), i+1)
+		ap, err := h.st.RecordPermission(ctx, user.ID, runRow.ID, []byte(raw), at.Add(time.Hour), i+1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -518,11 +528,29 @@ func TestApprovalsPaneFoldsHistory(t *testing.T) {
 	if newest < 0 || oldest < newest {
 		t.Fatalf("order newest %d oldest %d", newest, oldest)
 	}
+	if strings.Count(earlier, ">Today<") != 1 || strings.Contains(earlier, ">Yesterday<") {
+		t.Fatal("same-day history was not one Today group")
+	}
+	if strings.Contains(detailsOpen(earlier, ">tool-20<"), " hidden") || !strings.Contains(detailsOpen(earlier, ">tool-00<"), " hidden") {
+		t.Fatal("first page did not keep the newest cards")
+	}
+	if strings.Count(earlier, ` hidden>`) != n-approvalHistoryPage {
+		t.Fatalf("hidden cards %d", strings.Count(earlier, ` hidden>`))
+	}
+	if !strings.Contains(earlier, "Showing 8 of 21") || !strings.Contains(earlier, ">Show more<") || strings.Contains(elementOpen(earlier, "approval-earlier-more"), " hidden") {
+		t.Fatal("show more missing")
+	}
 	if !strings.Contains(body, `id="approval-filter"`) || !strings.Contains(body, `aria-label="Search approvals"`) || !strings.Contains(body, "No approvals match.") || !strings.Contains(earlier, `data-find="`) {
 		t.Fatal("missing search")
 	}
 	if !strings.Contains(earlier, "echo hist-00") || !strings.Contains(strings.ToLower(earlier), "echo hist-20") {
 		t.Fatal("search text missing")
+	}
+	_, js, _ := h.do(http.MethodGet, "/static/app.js", "", ip, nil)
+	for _, needle := range []string{"approval-earlier-more", "approvalHistoryShown", "appr-day", "Showing "} {
+		if !strings.Contains(js, needle) {
+			t.Fatalf("app.js missing %s", needle)
+		}
 	}
 	_, otherSecret := h.account("other-hist@example.com", "Other", "correct-horse-1")
 	h.login("other-hist@example.com", "correct-horse-1", otherSecret, "203.0.113.42:9", false)
@@ -530,4 +558,139 @@ func TestApprovalsPaneFoldsHistory(t *testing.T) {
 	if code != http.StatusNotFound || strings.Contains(other, "echo hist-") || strings.Contains(other, "tool-20") {
 		t.Fatalf("other %d %s", code, other)
 	}
+}
+
+func TestApprovalsPaneGroupsByDay(t *testing.T) {
+	h := newHarness(t)
+	now := time.Date(2026, 11, 17, 18, 0, 0, 0, time.UTC)
+	h.st.SetNow(func() time.Time { return now })
+	user, secret := h.account("days-s19@example.com", "Ada", "correct-horse-1")
+	ip := "203.0.113.51:9"
+	h.login("days-s19@example.com", "correct-horse-1", secret, ip, false)
+	agent := makeAgent(t, h.st, user.ID, "Atlas")
+	ctx := context.Background()
+	runRow, err := h.st.CreateRun(ctx, user.ID, agentThread(t, h, user.ID, agent.ID), agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Denver is UTC-7 in November, so 06:00 UTC on the 17th is still the 16th there.
+	stamps := []struct {
+		at   time.Time
+		tool string
+	}{
+		{time.Date(2025, 11, 17, 18, 0, 0, 0, time.UTC), "year-ago"},
+		{time.Date(2026, 11, 15, 18, 0, 0, 0, time.UTC), "nov-15"},
+		{time.Date(2026, 11, 17, 6, 0, 0, 0, time.UTC), "yest"},
+	}
+	for i := 0; i < approvalHistoryPage; i++ {
+		stamps = append(stamps, struct {
+			at   time.Time
+			tool string
+		}{time.Date(2026, 11, 17, 17, i, 0, 0, time.UTC), fmt.Sprintf("today-%02d", i)})
+	}
+	for i, item := range stamps {
+		h.st.SetNow(func() time.Time { return item.at })
+		raw := fmt.Sprintf(`{"id":"req-day-%02d","tool":"%s","arguments":{"command":"echo %s"}}`, i, item.tool, item.tool)
+		ap, err := h.st.RecordPermission(ctx, user.ID, runRow.ID, []byte(raw), item.at.Add(time.Hour), i+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, err := h.st.ClaimDecision(ctx, user.ID, ap.ID, runRow.ID, "approved", user.ID); err != nil || !ok {
+			t.Fatalf("claim %s %v", item.tool, err)
+		}
+	}
+	h.st.SetNow(func() time.Time { return now })
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=approvals", "", ip, nil)
+	if code != http.StatusOK {
+		t.Fatal(code)
+	}
+	earlier := between(body, `id="approval-earlier"`, `id="approval-filter-empty"`)
+	today := strings.Index(earlier, ">Today<")
+	yesterday := strings.Index(earlier, ">Yesterday<")
+	nov15 := strings.Index(earlier, ">Nov 15<")
+	year := strings.Index(earlier, ">Nov 17, 2025<")
+	if today < 0 || yesterday < today || nov15 < yesterday || year < nov15 {
+		t.Fatalf("day order today %d yesterday %d nov15 %d year %d", today, yesterday, nov15, year)
+	}
+	newest := strings.Index(earlier, ">today-07<")
+	oldestToday := strings.Index(earlier, ">today-00<")
+	if newest < 0 || oldestToday < newest || yesterday < oldestToday {
+		t.Fatal("today cards are out of order")
+	}
+	if strings.Contains(detailsOpen(earlier, ">today-07<"), " hidden") || strings.Contains(detailsOpen(earlier, ">today-00<"), " hidden") {
+		t.Fatal("today page was hidden")
+	}
+	if !strings.Contains(sectionOpen(earlier, ">Yesterday<"), " hidden") || !strings.Contains(detailsOpen(earlier, ">yest<"), " hidden") {
+		t.Fatal("yesterday was on the first page")
+	}
+	if !strings.Contains(sectionOpen(earlier, ">Nov 15<"), " hidden") || !strings.Contains(sectionOpen(earlier, ">Nov 17, 2025<"), " hidden") {
+		t.Fatal("older days were on the first page")
+	}
+	if !strings.Contains(earlier, "Showing 8 of 11") || !strings.Contains(earlier, `data-find="`) || !strings.Contains(strings.ToLower(earlier), "yesterday") {
+		t.Fatal("clipped history lost its count or search text")
+	}
+	if strings.Contains(elementOpen(earlier, "approval-earlier-more"), " hidden") {
+		t.Fatal("show more hidden while older days remain")
+	}
+
+	short := makeAgent(t, h.st, user.ID, "Nova")
+	shortRun, err := h.st.CreateRun(ctx, user.ID, agentThread(t, h, user.ID, short.ID), short.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.st.SetNow(func() time.Time { return now })
+	raw := `{"id":"req-one","tool":"one-tool","arguments":{"command":"echo one"}}`
+	ap, err := h.st.RecordPermission(ctx, user.ID, shortRun.ID, []byte(raw), now.Add(time.Hour), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := h.st.ClaimDecision(ctx, user.ID, ap.ID, shortRun.ID, "approved", user.ID); err != nil || !ok {
+		t.Fatal(err)
+	}
+	code, body, _ = h.do(http.MethodGet, "/agents/"+short.ID+"?panel=approvals", "", ip, nil)
+	if code != http.StatusOK {
+		t.Fatal(code)
+	}
+	one := between(body, `id="approval-earlier"`, `id="approval-filter-empty"`)
+	if !strings.Contains(one, ">Today<") || !strings.Contains(one, ">one-tool<") || strings.Contains(one, "Showing ") || !strings.Contains(elementOpen(one, "approval-earlier-more"), " hidden") {
+		t.Fatalf("short history %s", one)
+	}
+}
+
+func elementOpen(html, id string) string {
+	needle := `id="` + id + `"`
+	idx := strings.Index(html, needle)
+	if idx < 0 {
+		return ""
+	}
+	start := strings.LastIndex(html[:idx], "<")
+	end := strings.Index(html[idx:], ">")
+	if start < 0 || end < 0 {
+		return ""
+	}
+	return html[start : idx+end+1]
+}
+
+func detailsOpen(html, marker string) string {
+	idx := strings.Index(html, marker)
+	if idx < 0 {
+		return ""
+	}
+	open := strings.LastIndex(html[:idx], "<details")
+	if open < 0 {
+		return ""
+	}
+	return html[open:idx]
+}
+
+func sectionOpen(html, marker string) string {
+	idx := strings.Index(html, marker)
+	if idx < 0 {
+		return ""
+	}
+	open := strings.LastIndex(html[:idx], "<section")
+	if open < 0 {
+		return ""
+	}
+	return html[open:idx]
 }

@@ -170,8 +170,6 @@ func (s *Server) replaceView(ctx context.Context, user store.User, agent store.A
 	out.HistoryNext = nextOff
 	if out.Banner == "ok" {
 		out.LogNote = "Machine logs from the new machine. Logs from the old machine were not kept."
-	} else if out.HasImage || out.NoMachine || out.Lock {
-		out.LogNote = "Machine logs from castlet are kept on the machine only."
 	}
 	return out
 }

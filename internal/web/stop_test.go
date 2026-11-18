@@ -79,7 +79,7 @@ func TestStopButtonOnWorkingRow(t *testing.T) {
 
 func TestStopButtonStaysMountedWhileWorking(t *testing.T) {
 	row := string(actRowHTML(activityOut{Label: "Working", HideThread: true}, "", "run1", "tok"))
-	if !strings.Contains(row, ">Stop<") || !strings.Contains(row, `value="tok"`) || !strings.Contains(row, `</span><form class="stop"`) {
+	if !strings.Contains(row, ">Stop<") || !strings.Contains(row, `class="link stop"`) || strings.Contains(row, `class="btn`) || !strings.Contains(row, `value="tok"`) || !strings.Contains(row, `</span><form class="stop"`) {
 		t.Fatal(row)
 	}
 	slot := actSlotHTML("run1", template.HTML(row), actHidden(activityOut{Label: "Working", HideThread: true}, "run1"))

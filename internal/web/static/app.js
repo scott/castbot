@@ -994,20 +994,69 @@ function trapPanelTab(ev) {
   }
 }
 
+var approvalHistoryShown = 0;
+var approvalHistoryAgent = "";
+
+function approvalPageSize(list) {
+  var n = parseInt(list.getAttribute("data-page") || "8", 10);
+  if (!n || n < 1) return 8;
+  return n;
+}
+
+function rememberApprovalAgent(list) {
+  var pane = document.getElementById("approvals-pane");
+  var agent = pane ? (pane.getAttribute("data-agent") || "") : "";
+  var page = approvalPageSize(list);
+  if (agent !== approvalHistoryAgent) {
+    approvalHistoryAgent = agent;
+    approvalHistoryShown = page;
+  }
+  if (approvalHistoryShown < page) approvalHistoryShown = page;
+  return page;
+}
+
 function filterApprovals() {
   var filter = document.getElementById("approval-filter");
   var list = document.getElementById("approval-earlier");
   if (!list) return;
+  rememberApprovalAgent(list);
   var q = filter ? (filter.value || "").trim().toLowerCase() : "";
   var rows = list.querySelectorAll("[data-find]");
-  var shown = 0;
+  var matched = 0;
+  var visible = 0;
   for (var i = 0; i < rows.length; i++) {
     var hit = q === "" || (rows[i].getAttribute("data-find") || "").indexOf(q) !== -1;
-    rows[i].hidden = !hit;
-    if (hit) shown++;
+    if (!hit) {
+      rows[i].hidden = true;
+      continue;
+    }
+    matched++;
+    if (q === "" && visible >= approvalHistoryShown) {
+      rows[i].hidden = true;
+      continue;
+    }
+    rows[i].hidden = false;
+    visible++;
+  }
+  var days = list.querySelectorAll(".appr-day");
+  for (var d = 0; d < days.length; d++) {
+    var cards = days[d].querySelectorAll("[data-find]");
+    var any = false;
+    for (var c = 0; c < cards.length; c++) {
+      if (!cards[c].hidden) any = true;
+    }
+    days[d].hidden = !any;
   }
   var empty = document.getElementById("approval-filter-empty");
-  if (empty) empty.hidden = q === "" || shown > 0;
+  if (empty) empty.hidden = q === "" || matched > 0;
+  var more = document.getElementById("approval-earlier-more");
+  var note = document.getElementById("approval-earlier-count");
+  var clipped = q === "" && matched > visible;
+  if (more) more.hidden = !clipped;
+  if (note) {
+    note.hidden = !clipped;
+    if (clipped) note.textContent = "Showing " + visible + " of " + matched;
+  }
 }
 
 document.addEventListener("input", function (ev) {
@@ -1022,6 +1071,17 @@ document.addEventListener("search", function (ev) {
 });
 
 document.addEventListener("htmx:afterSettle", function () {
+  filterApprovals();
+});
+
+document.addEventListener("click", function (ev) {
+  var more = ev.target && ev.target.closest && ev.target.closest("#approval-earlier-more");
+  if (!more) return;
+  var list = document.getElementById("approval-earlier");
+  if (!list) return;
+  ev.preventDefault();
+  var page = rememberApprovalAgent(list);
+  approvalHistoryShown += page;
   filterApprovals();
 });
 
@@ -1086,6 +1146,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
   armPanelLinks();
   armToasts();
+  filterApprovals();
   syncPanelChrome(document.getElementById("agent-panel"));
   bindGroupSetup(document);
   watchSettings();

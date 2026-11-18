@@ -66,7 +66,7 @@ func TestRollbackPageAndAuthz(t *testing.T) {
 	}
 
 	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
-	if code != 200 || !strings.Contains(body, "Roll back runtime") || !strings.Contains(body, "Previous runtime 7b5e414 can be restored for 7 days.") {
+	if code != 200 || !strings.Contains(body, "Roll back runtime") || strings.Count(body, "Previous runtime 7b5e414 can be restored for 7 days.") != 1 || !strings.Contains(body, `id="rollback-open"`) {
 		t.Fatalf("panel %d", code)
 	}
 	if strings.Contains(body, token) || strings.Contains(body, "now.example") || strings.Contains(body, previous) {
