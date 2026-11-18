@@ -27,6 +27,10 @@
   document.addEventListener("click", function (e) {
     var tab = e.target.closest && e.target.closest("[data-panel-tab]");
     if (tab) {
+      // htmx tabs swap the panel in place. A full load redraws the chat.
+      if (tab.hasAttribute("hx-get") || tab.hasAttribute("data-hx-get")) {
+        return;
+      }
       e.preventDefault();
       window.location.replace(tab.href);
       return;

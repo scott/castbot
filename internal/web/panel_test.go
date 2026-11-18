@@ -120,6 +120,84 @@ func TestPanelSwapKeepsComposer(t *testing.T) {
 	}
 }
 
+func TestPanelTabClickDoesNotReloadChat(t *testing.T) {
+	h, _, ip := panelSession(t, "tab-reload@example.com", "Alex Rivera")
+	_, js, _ := h.do(http.MethodGet, "/static/secrets.js", "", ip, nil)
+	guard := `tab.hasAttribute("hx-get")`
+	replace := `window.location.replace(tab.href)`
+	gi := strings.Index(js, guard)
+	ri := strings.Index(js, replace)
+	if gi < 0 || ri < 0 || gi > ri {
+		t.Fatal("panel tab click still forces a full page load")
+	}
+	if !strings.Contains(js[gi:ri], "return") {
+		t.Fatal("hx-get tabs still reach location.replace")
+	}
+}
+
+func TestAgentSwitchKeepsShell(t *testing.T) {
+	h, user, ip := panelSession(t, "switch-s19@example.com", "Alex Rivera")
+	atlas := makeAgent(t, h.st, user.ID, "Atlas")
+	pip := makeAgent(t, h.st, user.ID, "Pip")
+	code, full, _ := h.do(http.MethodGet, "/agents/"+atlas.ID+"?panel=machine", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(full, `id="stage"`) || !strings.Contains(full, `id="chat-col"`) || !strings.Contains(full, `class="sb"`) {
+		t.Fatal("agent page is missing the stage shell")
+	}
+	if strings.Index(full, `class="sb"`) > strings.Index(full, `id="stage"`) {
+		t.Fatal("sidebar is inside the swapped stage")
+	}
+	hx := map[string]string{"HX-Request": "true", "HX-Target": "stage"}
+	code, body, hdr := h.do(http.MethodGet, "/agents/"+pip.ID+"?panel=machine", "", ip, hx)
+	if code != http.StatusOK || hdr.Get("HX-Redirect") != "" {
+		t.Fatalf("switch %d %q", code, hdr.Get("HX-Redirect"))
+	}
+	if strings.Contains(body, "<!doctype") || strings.Contains(body, `class="sb"`) || strings.Contains(body, "<html") {
+		t.Fatal("agent switch redrew the shell")
+	}
+	for _, needle := range []string{
+		`id="chat-col"`,
+		`id="agent-panel"`,
+		`id="stage-meta"`,
+		`data-agent-id="` + pip.ID + `"`,
+		`data-agent="` + pip.ID + `"`,
+		"State from the cloud API. Checking it does not wake the machine.",
+		">Pip<",
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("switch missing %s", needle)
+		}
+	}
+	if strings.Contains(body, `data-agent-id="`+atlas.ID+`"`) || strings.Contains(body, ">Atlas<") {
+		t.Fatal("switch included the agent that was left")
+	}
+	group, err := h.st.CreateGroup(context.Background(), user.ID, "Standup", []string{atlas.ID, pip.ID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body, hdr = h.do(http.MethodGet, "/groups/"+group.ID+"?panel=group", "", ip, hx)
+	if code != http.StatusOK || hdr.Get("HX-Redirect") != "" {
+		t.Fatalf("group switch %d %q", code, hdr.Get("HX-Redirect"))
+	}
+	if strings.Contains(body, "<!doctype") || strings.Contains(body, `class="sb"`) || strings.Contains(body, "<html") {
+		t.Fatal("group switch redrew the shell")
+	}
+	if !strings.Contains(body, `id="chat-col"`) || !strings.Contains(body, `id="agent-panel"`) || !strings.Contains(body, ">Standup<") {
+		t.Fatal("group switch dropped the chat or the panel")
+	}
+	_, js, _ := h.do(http.MethodGet, "/static/app.js", "", ip, nil)
+	for _, needle := range []string{
+		"function switchChat",
+		"function agentSwitchURL",
+		`target: "#stage"`,
+		`target.id !== "stage"`,
+		"__castbotShown",
+	} {
+		if !strings.Contains(js, needle) {
+			t.Fatalf("app.js missing %s", needle)
+		}
+	}
+}
+
 func TestPanelCloseAndHistoryHooks(t *testing.T) {
 	h, user, ip := panelSession(t, "close-s19@example.com", "Alex Rivera")
 	agent := makeAgent(t, h.st, user.ID, "Atlas")
@@ -343,6 +421,10 @@ func TestPanelAuthz(t *testing.T) {
 			t.Fatalf("user B %s -> %d %s", path, code, body)
 		}
 	}
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, map[string]string{"HX-Request": "true", "HX-Target": "stage"})
+	if code != http.StatusNotFound || strings.Contains(body, "ls demo") || strings.Contains(body, "Atlas") || strings.Contains(body, `id="chat-col"`) {
+		t.Fatalf("user B switch -> %d %s", code, body)
+	}
 }
 
 func TestPanelPartialRedirectsOutsideChrome(t *testing.T) {
@@ -365,6 +447,7 @@ func TestPanelPartialRedirectsOutsideChrome(t *testing.T) {
 		t.Fatal(err)
 	}
 	hx := map[string]string{"HX-Request": "true", "HX-Target": "agent-panel"}
+	stage := map[string]string{"HX-Request": "true", "HX-Target": "stage"}
 	list := "/agents/" + agent.ID + "?panel=secrets"
 	code, body, hdr := h.do(http.MethodGet, list, "", ip, hx)
 	if code != http.StatusOK || hdr.Get("HX-Redirect") != "" || !strings.Contains(body, "NOTES_TOKEN") || strings.Contains(body, "Give Atlas a secret") {
@@ -381,6 +464,10 @@ func TestPanelPartialRedirectsOutsideChrome(t *testing.T) {
 		}
 		if body != "" || strings.Contains(body, "demo-only-value") {
 			t.Fatal("panel swap included chrome that lives outside the panel")
+		}
+		code, body, hdr = h.do(http.MethodGet, path, "", ip, stage)
+		if code != http.StatusNoContent || hdr.Get("HX-Redirect") != path || body != "" {
+			t.Fatalf("switch %s -> %d %q", path, code, hdr.Get("HX-Redirect"))
 		}
 	}
 	code, body, hdr = h.do(http.MethodGet, list+"&give=1", "", ip, nil)

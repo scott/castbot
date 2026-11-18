@@ -50,6 +50,20 @@ func panelPartial(r *http.Request) bool {
 	}
 }
 
+// switchPartial is the chat column and the open panel, without the sidebar.
+// A sidebar click uses it so the document does not reload.
+func switchPartial(r *http.Request) bool {
+	if r.Header.Get("HX-Request") != "true" {
+		return false
+	}
+	switch r.Header.Get("HX-Target") {
+	case "stage", "#stage":
+		return true
+	default:
+		return false
+	}
+}
+
 // outsidePanelChrome is true when this response also paints a drawer or modal
 // that lives outside #agent-panel. A panel swap cannot show that chrome.
 func outsidePanelChrome(p page) bool {

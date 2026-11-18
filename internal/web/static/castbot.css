@@ -105,6 +105,8 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 /* ---------- shell ---------- */
 .app { display: grid; grid-template-columns: 284px minmax(0,1fr); min-height: 100vh; }
 .app.with-pane { grid-template-columns: 284px minmax(0,1fr) 400px; }
+/* The stage holds the chat and the panel. Its children stay grid items of .app. */
+#stage { display: contents; }
 .sb { background: var(--bg2); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
 .sb-top { display: flex; align-items: center; gap: 8px; padding: 18px 16px 12px 18px; }
 .sb-top .brand { flex: 1; }
