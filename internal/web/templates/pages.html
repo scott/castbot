@@ -425,7 +425,6 @@
 {{end}}
 {{if and .Replace.RollbackTag (not .Replace.CanRollback)}}<p class="fineprint" id="rollback-note">Previous runtime {{.Replace.RollbackTag}} can be restored for {{.Replace.RollbackDays}} days. Memory and workspace files are copied again.</p>{{end}}
 {{if .Replace.LockLine}}<p class="lockline">This machine is being replaced. Pause, Wake, Delete and Add to Cast CLI are off until it is done.</p>{{end}}
-{{template "machineLogs" .}}
 {{if .Replace.Reason}}<p class="reason">{{.Replace.Reason}}{{if .Replace.ReasonHref}} <a class="link" href="{{.Replace.ReasonHref}}">{{.Replace.ReasonLabel}}</a>{{end}}</p>{{end}}
 {{if .Replace.HintBold}}<div class="rhint{{if .Replace.Same}} quiet{{end}}"><div><b>{{.Replace.HintBold}}</b> {{.Replace.HintRest}}</div>{{if and .Replace.Update .Replace.CanReplace}}<a class="btn sm pri" id="replace-hint" href="/agents/{{.Agent.ID}}/machine/replace?opener=replace-hint">Replace machine</a>{{end}}</div>{{end}}
 {{template "cliBox" .}}
@@ -439,14 +438,6 @@
 {{define "machineHistoryMore"}}
 <ul hx-swap-oob="beforeend:#machine-history-list">{{range .Replace.History}}<li><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}</ul>
 <div id="machine-history-more">{{if .Replace.HistoryMore}}<button class="link" type="button" hx-get="/agents/{{.Agent.ID}}/machine/history?offset={{.Replace.HistoryNext}}" hx-target="#machine-history-more" hx-swap="outerHTML" hx-disabled-elt="this">Show more</button>{{end}}</div>
-{{end}}
-
-{{define "machineLogs"}}
-<section class="mlogs" id="machine-logs"{{if .Machine.LogLive}} hx-get="/agents/{{.Agent.ID}}/machine/logs" hx-trigger="every 5s" hx-swap="outerHTML"{{end}}>
-<h3>Logs</h3>
-{{if .Machine.LogText}}<pre class="logtail">{{.Machine.LogText}}</pre>{{end}}
-{{if .Machine.LogNote}}<p class="fineprint">{{.Machine.LogNote}}</p>{{end}}
-</section>
 {{end}}
 
 {{define "replaceProgress"}}

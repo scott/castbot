@@ -79,7 +79,7 @@ func shootS11(t *testing.T, browser context.Context, dir string, width, height i
 	agent := seedAgent(t, h.st, user.ID, "Atlas")
 	readyMachine(t, h, fake, agent, "vm-s11", "running")
 	page := "/agents/" + agent.ID + "?panel=machine"
-	needle := `(function(){var t=document.body.innerText||'';return t.indexOf('This month')>=0&&t.indexOf('$0.04')>=0&&t.indexOf('machine ready')>=0&&t.indexOf('notes.md')<0&&t.indexOf('An estimate, not a bill.')>=0&&t.indexOf('\u2014')<0;})()`
+	needle := `(function(){var t=document.body.innerText||'';return t.indexOf('This month')>=0&&t.indexOf('$0.04')>=0&&t.indexOf('machine ready')<0&&t.indexOf('Latest lines from the machine.')<0&&t.indexOf('notes.md')<0&&t.indexOf('An estimate, not a bill.')>=0&&t.indexOf('\u2014')<0;})()`
 	switch kind {
 	case "running":
 		h.st.SetNow(func() time.Time { return when.Add(time.Hour) })
@@ -92,7 +92,7 @@ func shootS11(t *testing.T, browser context.Context, dir string, width, height i
 		if err := h.st.ApplyVMState(context.Background(), user.ID, agent.ID, "paused", "", ""); err != nil {
 			t.Fatal(err)
 		}
-		needle = `(function(){var t=document.body.innerText||'';return t.indexOf('The machine is paused.')>=0&&t.indexOf('This check does not wake it.')>=0&&t.indexOf('Opening this panel does not wake')<0&&t.indexOf('Wake')>=0&&t.indexOf('\u2014')<0;})()`
+		needle = `(function(){var t=document.body.innerText||'';return t.indexOf('The machine is paused.')>=0&&t.indexOf('This check does not wake it.')<0&&t.indexOf('Latest lines from the machine.')<0&&t.indexOf('Opening this panel does not wake')<0&&t.indexOf('Wake')>=0&&t.indexOf('\u2014')<0;})()`
 	case "usage":
 		h.st.SetNow(func() time.Time { return when.Add(10 * time.Hour) })
 		page = "/settings#usage"

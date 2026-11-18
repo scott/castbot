@@ -21,8 +21,6 @@ type machineView struct {
 	CanStart, CanPause, CanWake, CanRetry, CanDelete bool
 	State                                            string
 	Estimate                                         string
-	LogText, LogNote                                 string
-	LogLive                                          bool
 }
 
 type usageLine struct {

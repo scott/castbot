@@ -11,12 +11,6 @@ import (
 	"github.com/scott/castbot/internal/store"
 )
 
-const (
-	guestReadLimit = 2 * time.Second
-	logLineCap     = 80
-	logLineRunes   = 500
-)
-
 // Microdollars per hour while running, and per day while paused.
 // One dollar is 1,000,000. Display rounds half up to cents.
 func hourlyMicro(size string) int64 {
@@ -130,111 +124,6 @@ func machinePanelShown(r *http.Request, p page) bool {
 
 func (s *Server) fillMachineExtras(r *http.Request, user store.User, agent store.Agent, view *machineView) {
 	view.Estimate = s.monthEstimate(r.Context(), user, agent.ID)
-	if s.replacing(r.Context(), user.ID, agent.ID) {
-		view.LogText = ""
-		view.LogLive = false
-		view.LogNote = "Logs and files wait until the replace is done."
-		return
-	}
-	s.fillMachineLogs(r.Context(), user.ID, agent.ID, view)
-}
-
-func (s *Server) fillMachineLogs(ctx context.Context, userID, agentID string, view *machineView) {
-	view.LogLive = false
-	view.LogText = ""
-	switch view.State {
-	case "running":
-		text, note, live := s.readLogTail(ctx, userID, agentID)
-		view.LogText = text
-		view.LogNote = note
-		view.LogLive = live
-	case "paused":
-		view.LogNote = "Logs stay on the machine. Wake it to read the tail. This check does not wake it."
-	default:
-		view.LogNote = "No log tail yet."
-	}
-}
-
-func (s *Server) readLogTail(ctx context.Context, userID, agentID string) (text, note string, live bool) {
-	h, _, _ := s.hostConfig()
-	if h == nil {
-		return "", "No log tail yet.", false
-	}
-	endpoint, token, err := s.store.VMCredentials(ctx, userID, agentID)
-	if err != nil || endpoint == "" || token == "" {
-		return "", "No log tail yet.", false
-	}
-	cctx, cancel := context.WithTimeout(ctx, guestReadLimit)
-	raw, err := h.Logs(cctx, endpoint, token)
-	cancel()
-	if err != nil {
-		return "", "The log tail could not be read. The machine was not woken.", true
-	}
-	secrets := []string{token}
-	if granted, gerr := s.store.GrantedSecrets(ctx, userID, agentID); gerr == nil {
-		for _, sec := range granted {
-			if len(sec.Value) >= 8 {
-				secrets = append(secrets, sec.Value)
-			}
-		}
-	}
-	text = scrubLog(raw, secrets)
-	if strings.TrimSpace(text) == "" {
-		return "", "No log lines yet.", true
-	}
-	return text, "Latest lines from the machine. A secret is shown as [redacted].", true
-}
-
-func scrubLog(raw string, secrets []string) string {
-	raw = strings.ReplaceAll(raw, "\r\n", "\n")
-	raw = strings.ReplaceAll(raw, "\r", "\n")
-	var cleaned strings.Builder
-	for _, r := range raw {
-		if r == '\n' || r == '\t' || r >= 0x20 {
-			cleaned.WriteRune(r)
-		}
-	}
-	lines := strings.Split(cleaned.String(), "\n")
-	if len(lines) > logLineCap {
-		lines = lines[len(lines)-logLineCap:]
-	}
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		for _, sec := range secrets {
-			if len(sec) >= 8 && sec != "" {
-				line = strings.ReplaceAll(line, sec, "[redacted]")
-			}
-		}
-		if len(line) > logLineRunes {
-			line = line[:logLineRunes]
-		}
-		line, _ = redactSecrets(line)
-		out = append(out, line)
-	}
-	return strings.TrimRight(strings.Join(out, "\n"), "\n")
-}
-
-func (s *Server) machineLogs(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
-	agent, err := s.store.GetAgent(r.Context(), user.ID, r.PathValue("id"))
-	if s.missing(w, err) {
-		return
-	}
-	view := s.machineFromStore(r.Context(), user.ID, &agent, false)
-	if s.replacing(r.Context(), user.ID, agent.ID) {
-		view.LogText = ""
-		view.LogLive = false
-		view.LogNote = "Logs and files wait until the replace is done."
-	} else {
-		s.fillMachineLogs(r.Context(), user.ID, agent.ID, &view)
-	}
-	s.render(w, http.StatusOK, "machineLogs", page{
-		Agent:   agentView{ID: agent.ID},
-		Machine: view,
-	})
 }
 
 func (s *Server) machineHistory(w http.ResponseWriter, r *http.Request) {
