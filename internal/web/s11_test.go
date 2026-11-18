@@ -237,7 +237,7 @@ func TestMachineHistoryShowsFiveThenMore(t *testing.T) {
 	if code != 200 || strings.Contains(body, "<!doctype") || strings.Contains(body, "Show more") || strings.Contains(body, "Guest ready") || strings.Contains(body, "Woke for a message") {
 		t.Fatalf("next page %d", code)
 	}
-	if strings.Count(body, "Machine running") != 1 || strings.Count(body, "Machine create requested") != 2 || strings.Count(body, `hx-swap-oob="beforeend:#machine-history-list"`) != 3 {
+	if strings.Count(body, "Machine running") != 1 || strings.Count(body, "Machine create requested") != 2 || strings.Count(body, `hx-swap-oob="beforeend:#machine-history-list"`) != 1 || strings.Count(body, "<li>") != 3 {
 		t.Fatal("next page did not add the older rows")
 	}
 	if !strings.Contains(body, `id="machine-history-more"></div>`) {

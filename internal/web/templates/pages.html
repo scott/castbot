@@ -435,7 +435,7 @@
 {{end}}
 
 {{define "machineHistoryMore"}}
-{{range .Replace.History}}<li hx-swap-oob="beforeend:#machine-history-list"><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}
+<ul hx-swap-oob="beforeend:#machine-history-list">{{range .Replace.History}}<li><span class="t">{{.When}}</span>{{.Text}}</li>{{end}}</ul>
 <div id="machine-history-more">{{if .Replace.HistoryMore}}<button class="link" type="button" hx-get="/agents/{{.Agent.ID}}/machine/history?offset={{.Replace.HistoryNext}}" hx-target="#machine-history-more" hx-swap="outerHTML" hx-disabled-elt="this">Show more</button>{{end}}</div>
 {{end}}
 

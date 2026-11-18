@@ -252,6 +252,8 @@ func (s *Server) machineHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	shown, more, next := pageHistory(s.replaceHistory(r.Context(), user, agent.ID, userLocation(user.Timezone)), offset)
+	// beforeend inserts the children of the swapped element. The rows are
+	// wrapped in a list so each one lands in the history as its own item.
 	s.render(w, http.StatusOK, "machineHistoryMore", page{
 		Agent:   agentView{ID: agent.ID},
 		Replace: replaceView{History: shown, HistoryMore: more, HistoryNext: next},
