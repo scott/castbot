@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/scott/castbot/internal/agentskill"
+	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/store"
 )
@@ -53,6 +54,8 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		text, failed, _ := s.createRequestedAgent(r.Context(), user, caller, args.Description, args.Name, "")
 		writeAgentResult(w, text, failed)
+	case routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete:
+		s.machineRoutine(w, r, userID, call.Name, call.Arguments)
 	default:
 		writeAgentResult(w, "That request was rejected.", true)
 	}

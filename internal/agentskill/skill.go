@@ -9,7 +9,7 @@ import "strings"
 const (
 	// SkillName is the skill the runtime loads from the agent directory.
 	SkillName = "create-agent"
-	// SkillFile is the only extra skill path a bundle may carry.
+	// SkillFile is the create-agent skill path a bundle may carry.
 	SkillFile = "skills/create-agent/SKILL.md"
 	// SkillDir is the directory named by the skill path in agent.yaml.
 	SkillDir = "skills/create-agent"

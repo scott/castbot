@@ -12,6 +12,7 @@ import (
 
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
+	"github.com/scott/castbot/internal/routinetool"
 )
 
 const fixtureValue = "fixture-should-not-appear"
@@ -375,6 +376,11 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 	if hits != 0 || !strings.Contains(out.String(), agentskill.ToolCreate) || !strings.Contains(out.String(), agentskill.ToolList) {
 		t.Fatalf("list hits %d %s", hits, out.String())
 	}
+	for _, name := range []string{routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete} {
+		if !strings.Contains(out.String(), name) {
+			t.Fatalf("list missing %s in %s", name, out.String())
+		}
+	}
 	out.Reset()
 	call := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + agentskill.ToolCreate + `","arguments":{"description":"Sort the support inbox and draft replies.","name":"Quill","user_id":"other"}}}` + "\n"
 	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
@@ -388,6 +394,35 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 	}
 	out.Reset()
 	bad := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"delete_agent","arguments":{}}}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, "http://127.0.0.1:1", strings.NewReader(bad), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), egresscontract.Rejected) {
+		t.Fatal(out.String())
+	}
+}
+
+func TestAgentsMCPForwardsRoutineTools(t *testing.T) {
+	var posted string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		posted = string(raw)
+		if strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") || strings.Contains(posted, fixtureValue) {
+			t.Errorf("forwarded a scoped id or the env value")
+		}
+		_, _ = io.WriteString(w, `{"text":"Morning digest. Every weekday at 8:00 AM.","error":false}`)
+	}))
+	defer srv.Close()
+	call := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + routinetool.ToolCreate + `","arguments":{"name":"Morning digest","cron":"0 8 * * 1-5","prompt":"Check the inbox.","user_id":"other","agent_id":"other-agent"}}}` + "\n"
+	var out strings.Builder
+	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Morning digest") || !strings.Contains(posted, `"cron"`) || strings.Contains(posted, "user_id") {
+		t.Fatalf("posted %s out %s", posted, out.String())
+	}
+	out.Reset()
+	bad := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"` + routinetool.ToolUpdate + `","arguments":["nope"]}}` + "\n"
 	if err := ServeMCP(agentskill.ServerName, "http://127.0.0.1:1", strings.NewReader(bad), &out); err != nil {
 		t.Fatal(err)
 	}

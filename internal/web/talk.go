@@ -21,6 +21,7 @@ func (s *Server) settleTalk(job run.Job, status string) {
 	if status == "done" {
 		s.maybeDelegate(job)
 		s.maybeCreate(job)
+		s.maybeRoutine(job)
 		s.appendDeliveryLinks(job)
 	}
 	s.finishDispatch(job, status)
