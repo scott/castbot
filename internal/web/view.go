@@ -43,6 +43,13 @@ type sectionView struct {
 	Groups         []groupLink
 }
 
+// sectionWrap is one sidebar section plus the page fields its forms need.
+type sectionWrap struct {
+	Section sectionView
+	CSRF    string
+	OOB     bool
+}
+
 type chipView struct {
 	Name string
 }

@@ -85,6 +85,11 @@ type Server struct {
 	deferLogged map[string]string
 	vaultMu     sync.Mutex
 	vaultReload map[string]vaultNote
+
+	sideMu      sync.Mutex
+	sideNew     map[string][]string
+	createMu    sync.Mutex
+	createAt    map[string]*sync.Mutex
 	busyMu      sync.Mutex
 	busy        map[string]struct{}
 	denyMu      sync.Mutex
