@@ -195,6 +195,7 @@ func (s *Server) pendingStopHTML(ctx context.Context, user store.User, row store
 		return "", err
 	}
 	view.Cards = append(cards, s.connectCardViews(ctx, user, row.AgentID, csrf)...)
+	view.Cards = append(view.Cards, s.secretDeleteViews(ctx, user, row.AgentID, csrf)...)
 	view.SecretCards = s.secretCardViews(ctx, user, row.AgentID, csrf)
 	return execTemplate("pending", view)
 }

@@ -457,6 +457,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{id}/secrets/revoke", s.vaultRevoke)
 	mux.HandleFunc("POST /agents/{id}/secret-requests/{req}/submit", s.submitSecret)
 	mux.HandleFunc("POST /agents/{id}/secret-requests/{req}/decline", s.declineSecret)
+	mux.HandleFunc("POST /agents/{id}/secret-deletes/{req}/approve", s.approveSecretDelete)
+	mux.HandleFunc("POST /agents/{id}/secret-deletes/{req}/deny", s.denySecretDelete)
 	mux.HandleFunc("POST /agents/{id}/connect-approvals/{approval}/approve", s.approveConnectCard)
 	mux.HandleFunc("POST /agents/{id}/connect-approvals/{approval}/deny", s.denyConnectCard)
 	mux.HandleFunc("POST /agents/{id}/connect-approvals/{approval}/always", s.alwaysApproveConnect)

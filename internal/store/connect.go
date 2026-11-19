@@ -36,10 +36,12 @@ type SecretRequest struct {
 	RunID       string
 	Connection  string
 	Reason      string
-	Status      string
-	ExpiresAt   string
-	CreatedAt   string
-	ResolvedAt  string
+	// Label is a short title for a named API key. Connection cards leave it empty.
+	Label      string
+	Status     string
+	ExpiresAt  string
+	CreatedAt  string
+	ResolvedAt string
 }
 
 // ConnectApproval is a host check for a mutating proxy call.
@@ -734,11 +736,11 @@ func clipPath(path string) string {
 	return path
 }
 
-const secretSelect = `SELECT id, workspace_id, user_id, agent_id, thread_id, run_id, connection, reason, status, expires_at, created_at, COALESCE(resolved_at, '') FROM secret_requests`
+const secretSelect = `SELECT id, workspace_id, user_id, agent_id, thread_id, run_id, connection, reason, COALESCE(label, ''), status, expires_at, created_at, COALESCE(resolved_at, '') FROM secret_requests`
 
 func scanSecretRequest(row rowScanner) (SecretRequest, error) {
 	var out SecretRequest
-	err := row.Scan(&out.ID, &out.WorkspaceID, &out.UserID, &out.AgentID, &out.ThreadID, &out.RunID, &out.Connection, &out.Reason, &out.Status, &out.ExpiresAt, &out.CreatedAt, &out.ResolvedAt)
+	err := row.Scan(&out.ID, &out.WorkspaceID, &out.UserID, &out.AgentID, &out.ThreadID, &out.RunID, &out.Connection, &out.Reason, &out.Label, &out.Status, &out.ExpiresAt, &out.CreatedAt, &out.ResolvedAt)
 	if err != nil {
 		return SecretRequest{}, scanErr(err)
 	}

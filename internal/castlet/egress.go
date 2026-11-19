@@ -260,14 +260,38 @@ func (s *Supervisor) egressSecret(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusBadRequest, "bad_request")
 		return
 	}
-	call.Connection = strings.ToLower(strings.TrimSpace(call.Connection))
-	if !egresscontract.KnownProvider(call.Connection) {
+	call.Reason = scrubReason(call.Reason)
+	call.Label = scrubReason(call.Label)
+	action := strings.ToLower(strings.TrimSpace(call.Action))
+	if action == "" {
+		action = "save"
+	}
+	if action != "save" && action != "delete" {
 		writeFailure(w, http.StatusBadRequest, "bad_request")
 		return
 	}
-	call.Reason = scrubReason(call.Reason)
-	if !validSecretName(call.Name) {
-		call.Name = ""
+	call.Action = action
+	name := strings.ToUpper(strings.TrimSpace(call.Name))
+	connection := strings.ToLower(strings.TrimSpace(call.Connection))
+	switch {
+	case action == "delete":
+		if !egresscontract.EnvName(name) {
+			writeFailure(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		call.Connection = ""
+		call.Name = name
+	case egresscontract.KnownProvider(connection):
+		call.Connection = connection
+		if !validSecretName(call.Name) {
+			call.Name = ""
+		}
+	case connection == "" && egresscontract.EnvName(name):
+		call.Connection = ""
+		call.Name = name
+	default:
+		writeFailure(w, http.StatusBadRequest, "bad_request")
+		return
 	}
 	// The card is how a provider becomes connected, so it is forwarded
 	// whenever the proxy is enabled, including an empty provider list

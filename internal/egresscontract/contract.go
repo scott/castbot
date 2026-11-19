@@ -52,14 +52,33 @@ func KnownProvider(id string) bool {
 	}
 }
 
-// KnownSecretResult reports whether result is one of the four card outcomes.
+// KnownSecretResult reports whether result is a card outcome the guest may keep.
+// saved, declined, expired, and already_configured are connection cards.
+// rejected, deleted, and not_found are named API keys.
 func KnownSecretResult(result string) bool {
 	switch result {
-	case "saved", "declined", "expired", "already_configured":
+	case "saved", "declined", "expired", "already_configured", "rejected", "deleted", "not_found":
 		return true
 	default:
 		return false
 	}
+}
+
+// EnvName reports an environment variable name a named API key may use.
+// The host still rejects blocked names such as connection vault rows.
+func EnvName(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'A' && r <= 'Z':
+		case i > 0 && (r >= '0' && r <= '9' || r == '_'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Status is the liveness document from GET /egress and from the local
@@ -142,15 +161,19 @@ type MCPResult struct {
 	Message json.RawMessage `json:"message"`
 }
 
-// SecretCall is request_secret. Name is optional and may be ignored.
+// SecretCall is request_secret or delete_secret.
+// Connection is github or digitalocean. Name is an environment variable
+// for any other API key. Action is save or delete. An empty action is save.
 type SecretCall struct {
 	Connection string `json:"connection"`
 	Reason     string `json:"reason"`
 	Name       string `json:"name"`
+	Label      string `json:"label"`
+	Action     string `json:"action"`
 }
 
-// SecretResult is a finished card. Result is saved, declined, expired,
-// or already_configured. Error is set when the call did not finish.
+// SecretResult is a finished card. Result is a KnownSecretResult.
+// Error is set when the call did not finish.
 type SecretResult struct {
 	Result  string `json:"result"`
 	Error   string `json:"error"`

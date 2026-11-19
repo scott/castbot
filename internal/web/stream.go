@@ -456,6 +456,7 @@ func (s *Server) writeRunEvent(ctx context.Context, w io.Writer, user store.User
 
 func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User, runRow store.Run, messageID, csrf string) error {
 	s.maybeCreate(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
+	s.maybeSecret(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	msg, err := s.store.GetMessage(ctx, user.ID, messageID)
 	if err != nil {
 		return err
@@ -476,6 +477,7 @@ func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User
 	}
 	secrets := s.secretCardViews(ctx, user, runRow.AgentID, csrf)
 	cards = append(cards, s.connectCardViews(ctx, user, runRow.AgentID, csrf)...)
+	cards = append(cards, s.secretDeleteViews(ctx, user, runRow.AgentID, csrf)...)
 	body, err := execTemplate("doneTurn", page{Messages: views, Cards: cards, SecretCards: secrets})
 	if err != nil {
 		return err
@@ -653,6 +655,7 @@ func (s *Server) loadLives(r *http.Request, user store.User, threadID string, ag
 	last := runs[len(runs)-1]
 	secrets := s.secretCardViews(r.Context(), user, agent.ID, from(r).CSRF)
 	connects := s.connectCardViews(r.Context(), user, agent.ID, from(r).CSRF)
+	deletes := s.secretDeleteViews(r.Context(), user, agent.ID, from(r).CSRF)
 	attached := false
 	var out []liveView
 	for _, row := range runs {
@@ -662,6 +665,7 @@ func (s *Server) loadLives(r *http.Request, user store.User, threadID string, ag
 		cards, _ := s.cardsFor(r.Context(), user, row.ID, from(r).CSRF)
 		if !attached {
 			cards = append(cards, connects...)
+			cards = append(cards, deletes...)
 		}
 		switch row.Status {
 		case "queued", "streaming", "waiting_approval":

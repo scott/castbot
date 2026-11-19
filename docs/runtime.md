@@ -46,7 +46,7 @@ The image carries the guest side of Connections so a later control-plane change 
 | `gh` | Runs the real `gh` with an empty config directory and no token. `gh auth login`, `gh auth token`, `gh auth setup-git`, `gh auth refresh`, and `gh --with-token` are refused, including when flags or `--` come first. |
 | `doctl` | Runs the real `doctl` with an empty config and no token. `doctl auth` is refused, including when flags or `--` come first. `--access-token` and `-t` are removed, including after `--`. |
 | `castbot-mcp github` and `castbot-mcp digitalocean` | Speak MCP over stdio. `initialize` succeeds. `tools/list` and `tools/call` return the fixed not-connected sentence and do not wait. |
-| `castbot-mcp request_secret` | Lists `request_secret`. A call returns the not-connected sentence, or rejects a connection id other than `github` or `digitalocean`. |
+| `castbot-mcp request_secret` | Lists `request_secret` and `delete_secret`. A GitHub or DigitalOcean call returns the not-connected sentence, or rejects a connection id other than those two. A named key is `request_secret` with `name` and an empty `connection`. `delete_secret` takes that name. An older image lists only `request_secret` for `github` and `digitalocean` until Replace machine. The served instructions still describe a `castbot-secret` fence for that image. |
 | `castbot-mcp agents` | Lists `create_agent`, `list_agents`, `list_routines`, `create_routine`, `update_routine`, and `delete_routine`. A call is posted to local `POST /agents`. It is not a connection and does not check whether a provider is connected. An older image lists only `create_agent` and `list_agents` until Replace machine. The served instructions still describe the same steps. A `castbot-create` fence at the end of a reply creates the agent, and a `castbot-routine` fence creates, updates, or deletes a routine, until the machine is replaced. |
 
 When the host reports a provider as live, git rewrites `https://github.com/` and `https://www.github.com/` to the local git egress, doctl sends its API client at the local upstream prefix with the placeholder `castbot-local` (the egress strips that header), and `gh api` (flags `--method`, `--header`, `--input`, `--silent`, `--verbose`, `--hostname`) is posted to the local HTTP egress. Other `gh` commands stay unauthenticated, because `gh` has no plain HTTP API base URL that preserves the GitHub API without a guest token. The MCP shims are the GitHub and DigitalOcean tool path. `request_secret` is forwarded when the proxy is enabled, including when that provider is not connected yet. HTTP, git, and MCP are not.
@@ -60,7 +60,7 @@ The fixed sentences are:
 - `The connection proxy refused a redirect.`
 - `The connection request was rejected.`
 
-A host body is not copied into the guest unless it is one of those sentences, a known card result (`saved`, `declined`, `expired`, `already_configured`), or an upstream response the host already accepted.
+A host body is not copied into the guest unless it is one of those sentences, a known card result (`saved`, `declined`, `expired`, `already_configured`, `rejected`, `deleted`, `not_found`), or an upstream response the host already accepted. Connection cards still use the first four.
 
 ## Guest and host contract
 
@@ -75,7 +75,7 @@ Local routes:
 | `GET /status` | `{"enabled":false,"providers":[]}` |
 | `POST /http` | JSON forward below. `200` with a forward result, or `403` with a failure. |
 | `POST /mcp` | `{"server":"github","message":{...json-rpc...}}`. `200` is `{"message":{...}}`. |
-| `POST /secret-request` | `{"connection":"github","reason":"...","name":""}`. `200` is `{"result":"saved"}`. |
+| `POST /secret-request` | `{"connection":"github","reason":"...","name":""}`, `{"action":"save","connection":"","name":"SERVICE_API_KEY","label":"...","reason":"..."}`, or `{"action":"delete","name":"SERVICE_API_KEY","reason":"..."}`. `200` is `{"result":"saved"}` or another known card result. A connection id other than `github` or `digitalocean` is refused locally and is not forwarded. A `value` field is ignored. |
 | `POST /agents` | `{"name":"create_agent","arguments":{"description":"...","name":""}}`, `{"name":"list_agents","arguments":{}}`, or the same shape for `list_routines`, `create_routine`, `update_routine`, and `delete_routine`. `200` is `{"text":"...","error":false}`. Not gated on provider status. |
 | `GET` or `POST /git/{provider}/...` | Raw git smart HTTP. The path after the provider is the path on `github.com`. |
 | `GET` or `POST /upstream/{provider}/...` | Raw API HTTP. doctl uses base `http://127.0.0.1:8090/upstream/digitalocean/`. |
@@ -118,12 +118,12 @@ Control-plane routes, all under `{CASTBOT_URL}/api/castlet/agents/{agentID}` wit
 | `POST /egress/http` | API forward. Host maps `github` to `api.github.com` and `digitalocean` to `api.digitalocean.com`. |
 | `POST /egress/git` | Git smart HTTP. Host maps `github` to `https://github.com` plus `path`. |
 | `POST /egress/mcp` | One JSON-RPC message for `server`. `digitalocean` is forwarded only to `https://mcp.digitalocean.com/mcp`. |
-| `POST /egress/secret-request` | Card. Forwarded when liveness is enabled, including `{enabled:true, providers:[]}` and when only the other provider is listed. A disabled proxy, including `404` and a timeout, is refused at once and does not wait. When it is forwarded, the card may take up to 60 minutes. The result is only `saved`, `declined`, `expired`, or `already_configured`. |
+| `POST /egress/secret-request` | Card. Forwarded when liveness is enabled, including `{enabled:true, providers:[]}` and when only the other provider is listed. A disabled proxy, including `404` and a timeout, is refused at once and does not wait. A connection card may take up to 60 minutes. A delete card expires in 10 minutes. The guest HTTP wait stays 61 minutes. Connection results are `saved`, `declined`, `expired`, or `already_configured`. A named key may also return `rejected`, `deleted`, or `not_found`. |
 | `POST /agents` | Create or list agents, and list, create, update, or delete routines, for the machine's account and the agent in the path. `create_agent` takes `description` and an optional `name`. `list_agents` and `list_routines` take no arguments. `create_routine` takes `name`, `cron`, and `prompt`, plus optional `timezone`, `missed`, and `approval`. `update_routine` takes `id` and any fields to change, including `enabled`. `delete_routine` takes `id`. A `user_id` or `agent_id` argument is ignored. The response is `{"text":"...","error":false}`. This is not gated on a connected provider. |
 
 Castlet caches liveness for 5 seconds. A forward still goes to the host, which is the place that checks the grant, the allowlist, TLS, private addresses, redirects, and approval. The guest client does not follow a redirect and does not use `HTTP_PROXY` for these calls. `request_secret` reasons are trimmed to 500 characters and token-shaped fragments are replaced with `[redacted]` before they are sent.
 
-Example MCP config, with no environment entries, is shipped at `/opt/castbot/mcp/github.yaml`, `/opt/castbot/mcp/digitalocean.yaml`, `/opt/castbot/mcp/request_secret.yaml`, and `/opt/castbot/mcp/agents.yaml`. This repository does not retag `CASTBOT_IMAGE`. A running machine keeps the image it was created with until Replace machine. The control plane still serves the create-agent and routine instructions to that machine.
+Example MCP config, with no environment entries, is shipped at `/opt/castbot/mcp/github.yaml`, `/opt/castbot/mcp/digitalocean.yaml`, `/opt/castbot/mcp/request_secret.yaml`, and `/opt/castbot/mcp/agents.yaml`. This repository does not retag `CASTBOT_IMAGE`. A running machine keeps the image it was created with until Replace machine. The control plane still serves the create-agent, routine, and API key instructions to that machine. A `castbot-secret` fence at the end of a reply opens the save card or the delete card until the machine is replaced.
 
 ## Size and boot
 

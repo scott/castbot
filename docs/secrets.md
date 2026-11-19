@@ -11,3 +11,15 @@ Replacing, granting, revoking, or deleting reloads each running agent that has t
 `CASTBOT_PROVIDER_KEY_*` is still the fallback when the vault has no row for that provider. The newest vault row wins. A deploy that already sets the process environment keeps working until someone saves a key in Settings.
 
 The first start that copies old `secret_fixtures` rows into the vault also runs a WAL checkpoint and VACUUM, so the old plaintext is not left in free pages or the WAL. A later deploy has to set `CASTBOT_SECRETS_KEY` on the host before that start. This slice does not deploy.
+
+## Named API keys in chat
+
+An agent can ask for a new API key in the chat. The person types it on a masked card. The key is saved in the vault and granted to that agent only. The agent does not see the value. The result is `saved`, `declined`, `expired`, `already_configured`, or `rejected`. After `saved`, that agent receives the key on the next turn.
+
+If this agent already has the key, the result is `already_configured` and no card is shown. If the vault already has that name and this agent does not, the card can grant the saved key without typing it again. A typed value replaces the saved key. The page never shows the saved value.
+
+Asking to remove that key opens an approval card. Approving deletes the vault row. Every agent that had the key loses it on the next turn. Denying leaves the key. The card is denied automatically after 10 minutes. The result is `deleted`, `declined`, `expired`, or `not_found`.
+
+The guest tool is `request_secret` with `name`, `reason`, and an optional `label`, and `connection` left empty. `delete_secret` takes the same name. A machine image built before those arguments still works: the control plane reads one `castbot-secret` fence at the end of the reply. That fence carries the name and the reason, never the key. A running machine sees the new instructions on the next bundle pull. The tool call itself waits for Replace machine.
+
+Model keys, connection tokens, and names such as `GITHUB_TOKEN` are not saved or deleted this way. Connection tokens stay on the host. See [connections.md](connections.md). More than five cards an hour for one name return `declined`. One pending card for that name is reused.

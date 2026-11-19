@@ -817,6 +817,7 @@ func (s *Server) cardsHTML(ctx context.Context, user store.User, runID, csrf str
 	if runRow, err := s.store.GetRun(ctx, user.ID, runID); err == nil {
 		secrets = s.secretCardViews(ctx, user, runRow.AgentID, csrf)
 		cards = append(cards, s.connectCardViews(ctx, user, runRow.AgentID, csrf)...)
+		cards = append(cards, s.secretDeleteViews(ctx, user, runRow.AgentID, csrf)...)
 	}
 	if len(cards) == 0 && len(secrets) == 0 {
 		return "", nil
