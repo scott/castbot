@@ -463,7 +463,7 @@ func (s *Server) postReplace(w http.ResponseWriter, r *http.Request) {
 	s.prov.Add(1)
 	go func() {
 		defer s.prov.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), replace.RunLimit)
 		defer cancel()
 		_, err := replace.Run(ctx, s.store, h, replace.Options{
 			UserID: user.ID, AgentID: agent.ID,

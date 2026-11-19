@@ -50,6 +50,9 @@ type Config struct {
 	Bootstrap  string
 	CAFile     string
 	AgentDir   string
+	// LocalDir is the package prefix copied with the archive.
+	// Empty uses /app/.local when AgentDir is /app/agent.
+	LocalDir   string
 	RuntimeURL string
 	RuntimeCmd []string
 	Token      string

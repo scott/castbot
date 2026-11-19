@@ -3,6 +3,8 @@ package host
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -723,6 +725,96 @@ func (m *MicroVM) ReadWorkspace(ctx context.Context, endpoint, agentToken, name 
 		return nil, ErrGuest
 	}
 	return m.streamOpen(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/castlet/files/"+path, agentToken, nil)
+}
+
+// ExportState streams GET /castlet/archive. The caller closes the body.
+// A guest without the endpoint returns ErrNoArchive.
+func (m *MicroVM) ExportState(ctx context.Context, endpoint, agentToken string) (io.ReadCloser, error) {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/castlet/archive", nil)
+	if err != nil {
+		return nil, err
+	}
+	m.edgeAuth(req, agentToken)
+	resp, err := m.longClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		resp.Body.Close()
+		return nil, ErrGuest
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		resp.Body.Close()
+		return nil, ErrNoArchive
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, ErrGuest
+	}
+	return resp.Body, nil
+}
+
+// ImportState streams PUT /castlet/archive. limit is the destination disk.
+func (m *MicroVM) ImportState(ctx context.Context, endpoint, agentToken string, body io.Reader, limit int64) (StateReceipt, error) {
+	if err := m.checkEdge(endpoint, agentToken); err != nil {
+		return StateReceipt{}, err
+	}
+	if limit <= 0 {
+		limit = DefaultDisk
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, strings.TrimRight(endpoint, "/")+"/castlet/archive", body)
+	if err != nil {
+		return StateReceipt{}, err
+	}
+	m.edgeAuth(req, agentToken)
+	req.Header.Set(archiveLimitHeader, strconv.FormatInt(limit, 10))
+	resp, err := m.longClient().Do(req)
+	if err != nil {
+		return StateReceipt{}, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return StateReceipt{}, ErrGuest
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return StateReceipt{}, ErrNoArchive
+	}
+	if resp.StatusCode == http.StatusRequestEntityTooLarge {
+		return StateReceipt{}, ErrArchiveTooBig
+	}
+	if resp.StatusCode != http.StatusOK {
+		return StateReceipt{}, ErrGuest
+	}
+	var parsed struct {
+		SHA256 string `json:"sha256"`
+		Files  int    `json:"files"`
+		Memory int64  `json:"memory"`
+		Bytes  int64  `json:"bytes"`
+	}
+	if json.Unmarshal(raw, &parsed) != nil || len(parsed.SHA256) != sha256.Size*2 {
+		return StateReceipt{}, ErrGuest
+	}
+	decoded, err := hex.DecodeString(parsed.SHA256)
+	if err != nil || len(decoded) != sha256.Size {
+		return StateReceipt{}, ErrGuest
+	}
+	var sum [32]byte
+	copy(sum[:], decoded)
+	return StateReceipt{Sum: sum, Files: parsed.Files, Memory: parsed.Memory, Bytes: parsed.Bytes}, nil
+}
+
+const archiveLimitHeader = "X-Castbot-Archive-Limit"
+
+func (m *MicroVM) longClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 // WriteWorkspace streams PUT /castlet/files/<name>.

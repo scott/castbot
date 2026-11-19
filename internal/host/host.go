@@ -19,8 +19,10 @@ const (
 	// DefaultCPU and DefaultMemoryMiB are the only size this slice provisions.
 	DefaultCPU       = 1
 	DefaultMemoryMiB = 2048
-	DefaultHTTPPort  = 8080
-	DefaultRegion    = "mkc1"
+	// DefaultDisk is the disk on that size. An archive copy stops there.
+	DefaultDisk     = 50 << 30
+	DefaultHTTPPort = 8080
+	DefaultRegion   = "mkc1"
 )
 
 var (
@@ -33,6 +35,10 @@ var (
 	ErrCancel = errors.New("the runtime cannot cancel a turn yet")
 	// ErrNotSupported is returned for a call this host cannot make.
 	ErrNotSupported = errors.New("not supported")
+	// ErrNoArchive means the guest has no archive export or import.
+	ErrNoArchive = errors.New("guest has no archive")
+	// ErrArchiveTooBig means the archive is larger than the destination disk.
+	ErrArchiveTooBig = errors.New("archive is too big")
 	// ErrNoRequest means the agent has no matching permission prompt.
 	ErrNoRequest = errors.New("no pending permission request")
 )
@@ -136,6 +142,21 @@ type AgentHost interface {
 type WorkspaceFile struct {
 	Name string
 	Size int64
+}
+
+// StateReceipt is the new guest's report of one archive import.
+type StateReceipt struct {
+	Sum    [32]byte
+	Files  int
+	Memory int64
+	Bytes  int64
+}
+
+// StateCopier moves one guest archive. Hosts that do not implement it keep
+// the per-file copy. ErrNoArchive means this guest has no archive endpoint.
+type StateCopier interface {
+	ExportState(ctx context.Context, endpoint, agentToken string) (io.ReadCloser, error)
+	ImportState(ctx context.Context, endpoint, agentToken string, body io.Reader, limit int64) (StateReceipt, error)
 }
 
 var (

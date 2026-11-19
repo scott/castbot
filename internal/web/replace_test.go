@@ -284,6 +284,39 @@ func TestReplaceFailureCopy(t *testing.T) {
 	}
 }
 
+func TestReplaceDiskFailureCopy(t *testing.T) {
+	ip := "203.0.113.82:9"
+	h := newHarness(t)
+	h.srv.SetHost(host.NewFake(), "example.invalid/castbot-runtime:ff6d7ea", "https://castbot.example")
+	user, secret := h.account("disk-replace@example.com", "Ada", "correct-horse-1")
+	h.login("disk-replace@example.com", "correct-horse-1", secret, ip, false)
+	sec, err := h.st.SystemSection(context.Background(), user.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := h.st.CreateAgent(context.Background(), user.ID, store.AgentInput{SectionID: sec.ID, Name: "Atlas", Title: "Docs helper", Status: "ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.BeginVM(context.Background(), user.ID, agent.ID, "castbot-old", "example.invalid/castbot-runtime:7b5e414"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.FinishVM(context.Background(), user.ID, agent.ID, "vm-old", "https://old.example", "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	row, _, err := h.st.BeginReplacement(context.Background(), user.ID, agent.ID, "web:"+user.Email, "example.invalid/castbot-runtime:ff6d7ea", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.FailReplacement(context.Background(), user.ID, row.ID, "copy", "disk"); err != nil {
+		t.Fatal(err)
+	}
+	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=machine", "", ip, nil)
+	if code != 200 || !strings.Contains(body, "The machine was not replaced.") || !strings.Contains(body, "The checkout does not fit on the new machine.") || !strings.Contains(body, "Try again") {
+		t.Fatalf("disk failure page %d", code)
+	}
+}
+
 func waitReplace(t *testing.T, h *harness, agent store.Agent, ip, needle string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

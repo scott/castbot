@@ -711,6 +711,83 @@ func TestStatusIsCachedBriefly(t *testing.T) {
 	}
 }
 
+func TestArchiveUsesEdgeAuth(t *testing.T) {
+	const machine = "do-token"
+	const agent = "agent-token"
+	t.Run("missing", func(t *testing.T) {
+		edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer "+machine || r.Header.Get("X-Cast-Authorization") != "Bearer "+agent {
+				t.Errorf("Authorization %q X-Cast-Authorization %q", r.Header.Get("Authorization"), r.Header.Get("X-Cast-Authorization"))
+			}
+			http.NotFound(w, r)
+		}))
+		t.Cleanup(edge.Close)
+		m := newTestClient(t, newScriptAPI(t, ""), machine)
+		if _, err := m.ExportState(context.Background(), edge.URL, agent); !errors.Is(err, ErrNoArchive) {
+			t.Fatal(err)
+		}
+		if _, err := m.ImportState(context.Background(), edge.URL, agent, strings.NewReader("x"), 32); !errors.Is(err, ErrNoArchive) {
+			t.Fatal(err)
+		}
+	})
+	t.Run("import", func(t *testing.T) {
+		sum := strings.Repeat("ab", 32)
+		var mu sync.Mutex
+		var limit string
+		edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer "+machine || r.Header.Get("X-Cast-Authorization") != "Bearer "+agent {
+				t.Errorf("Authorization %q X-Cast-Authorization %q", r.Header.Get("Authorization"), r.Header.Get("X-Cast-Authorization"))
+			}
+			if r.Method == http.MethodGet {
+				io.WriteString(w, "archive")
+				return
+			}
+			mu.Lock()
+			limit = r.Header.Get("X-Castbot-Archive-Limit")
+			mu.Unlock()
+			io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"sha256":"`+sum+`","files":2,"memory":3,"bytes":4}`)
+		}))
+		t.Cleanup(edge.Close)
+		m := newTestClient(t, newScriptAPI(t, ""), machine)
+		body, err := m.ExportState(context.Background(), edge.URL, agent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotBody, err := io.ReadAll(body)
+		body.Close()
+		if err != nil || string(gotBody) != "archive" {
+			t.Fatalf("body %q %v", gotBody, err)
+		}
+		got, err := m.ImportState(context.Background(), edge.URL, agent, strings.NewReader("hello"), 99)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		gotLimit := limit
+		mu.Unlock()
+		if gotLimit != "99" || got.Files != 2 || got.Memory != 3 || got.Bytes != 4 {
+			t.Fatalf("limit %s receipt %+v", gotLimit, got)
+		}
+		want := strings.Repeat("\xab", 32)
+		if string(got.Sum[:]) != want {
+			t.Fatalf("sum %x", got.Sum)
+		}
+	})
+	t.Run("too big", func(t *testing.T) {
+		edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.Copy(io.Discard, r.Body)
+			http.Error(w, "too big", http.StatusRequestEntityTooLarge)
+		}))
+		t.Cleanup(edge.Close)
+		m := newTestClient(t, newScriptAPI(t, ""), machine)
+		if _, err := m.ImportState(context.Background(), edge.URL, agent, strings.NewReader("x"), 10); !errors.Is(err, ErrArchiveTooBig) {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestGuestCallsUseEdgeAuth(t *testing.T) {
 	const machine = "do-token"
 	const agent = "agent-token"

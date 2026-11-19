@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -442,6 +444,95 @@ func TestReplaceTagFallbackDeletesTheNewMachine(t *testing.T) {
 	}
 	if _, ok := r.fake.Machines["vm-old"]; !ok {
 		t.Fatal("tag fallback deleted the old machine")
+	}
+}
+
+type holdCopy struct {
+	*host.Fake
+	ready chan struct{}
+	hold  chan struct{}
+	once  sync.Once
+}
+
+func (h *holdCopy) ExportState(context.Context, string, string) (io.ReadCloser, error) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(buf.Bytes())), nil
+}
+
+func (h *holdCopy) ImportState(_ context.Context, _, _ string, body io.Reader, _ int64) (host.StateReceipt, error) {
+	h.once.Do(func() { close(h.ready) })
+	<-h.hold
+	sum := sha256.New()
+	n, err := io.Copy(sum, body)
+	if err != nil {
+		return host.StateReceipt{}, err
+	}
+	var out [32]byte
+	copy(out[:], sum.Sum(nil))
+	return host.StateReceipt{Sum: out, Bytes: n}, nil
+}
+
+func TestReplaceArchiveHeartbeatOutlivesStale(t *testing.T) {
+	r := newRig(t, "running")
+	ctx := context.Background()
+	gate := &holdCopy{Fake: r.fake, ready: make(chan struct{}), hold: make(chan struct{})}
+	opt := r.opt(t.TempDir())
+	opt.BeatEvery = 20 * time.Millisecond
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, r.st, gate, opt)
+		done <- err
+	}()
+	select {
+	case <-gate.ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("import did not start")
+	}
+	future := time.Now().Add(StaleAfter + time.Minute)
+	r.st.SetNow(func() time.Time { return future })
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		row, err := r.st.LatestReplacement(ctx, r.user.ID, r.agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		updated, err := time.Parse(time.RFC3339, row.UpdatedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !updated.Before(future.Add(-time.Second)) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("heartbeat did not catch the clock")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := RecoverStale(ctx, r.st, gate, StaleAfter); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.st.ActiveReplacement(ctx, r.user.ID, r.agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.fake.Machines["vm-test"]; !ok {
+		t.Fatal("stale recovery deleted the new machine")
+	}
+	if _, ok := r.fake.Machines["vm-old"]; !ok {
+		t.Fatal("stale recovery deleted the old machine")
+	}
+	close(gate.hold)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.st.ActiveReplacement(ctx, r.user.ID, r.agent.ID); err == nil {
+		t.Fatal("replace still running")
+	}
+	if _, ok := r.fake.Machines["vm-old"]; ok {
+		t.Fatal("old machine was kept")
 	}
 }
 
