@@ -51,7 +51,7 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 			writeAgentResult(w, "That request was rejected.", true)
 			return
 		}
-		text, failed := s.createRequestedAgent(r.Context(), user, caller, args.Description, args.Name)
+		text, failed, _ := s.createRequestedAgent(r.Context(), user, caller, args.Description, args.Name, "")
 		writeAgentResult(w, text, failed)
 	default:
 		writeAgentResult(w, "That request was rejected.", true)
@@ -97,6 +97,8 @@ func (s *Server) maybeCreate(job run.Job) {
 	if job.UserID == "" || job.RunID == "" || job.AgentID == "" {
 		return
 	}
+	unlock := s.lockCreate(job.RunID)
+	defer unlock()
 	reply, err := s.store.LatestAgentReply(ctx, job.UserID, job.RunID)
 	if err != nil {
 		return
@@ -121,7 +123,10 @@ func (s *Server) maybeCreate(job run.Job) {
 		s.replaceReply(ctx, job.UserID, reply.ID, body)
 		return
 	}
-	text, failed := s.createRequestedAgent(ctx, user, caller, req.Description, req.Name)
+	text, failed, createdID := s.createRequestedAgent(ctx, user, caller, req.Description, req.Name, job.RunID)
+	if createdID != "" {
+		s.rememberSidebar(job.RunID, createdID)
+	}
 	body := strings.TrimSpace(visible)
 	if body == "" {
 		body = text
@@ -165,19 +170,19 @@ func (s *Server) replaceReply(ctx context.Context, userID, id, body string) {
 // createRequestedAgent saves one agent for user. The bool is true when no
 // row should be treated as created. The caller is the agent that asked.
 // A user id in the tool arguments is ignored.
-func (s *Server) createRequestedAgent(ctx context.Context, user store.User, caller store.Agent, description, rawName string) (string, bool) {
+func (s *Server) createRequestedAgent(ctx context.Context, user store.User, caller store.Agent, description, rawName, runID string) (string, bool, string) {
 	desc, name, job, ok := preparedRequest(description, rawName)
 	if !ok {
-		return "No agent was created. The description was not clear enough.", true
+		return "No agent was created. The description was not clear enough.", true, ""
 	}
 	model, ok := s.modelForNewAgent(ctx, user.ID, caller.Model)
 	if !ok {
-		return "No agent was created. Add a model key first.", true
+		return "No agent was created. Add a model key first.", true, ""
 	}
 	used := s.usedNames(ctx, user.ID)
 	explicit := name != ""
 	if explicit && used[strings.ToLower(name)] {
-		return "That name is already used. No agent was created.", true
+		return "That name is already used. No agent was created.", true, ""
 	}
 	chosen := name
 	if !explicit {
@@ -197,30 +202,34 @@ func (s *Server) createRequestedAgent(ctx context.Context, user store.User, call
 	pending := h != nil && image != "" && publicURL != ""
 	agent, err := s.materialize(ctx, user, card, pending)
 	if errors.Is(err, store.ErrConflict) && explicit {
-		return "That name is already used. No agent was created.", true
+		return "That name is already used. No agent was created.", true, ""
 	}
 	if errors.Is(err, store.ErrConflict) {
 		alt := freeAlt(card.Name, s.usedNames(ctx, user.ID))
 		if strings.EqualFold(alt, card.Name) || s.usedNames(ctx, user.ID)[strings.ToLower(alt)] {
-			return "That name is already used. No agent was created.", true
+			return "That name is already used. No agent was created.", true, ""
 		}
 		card.Name = alt
 		card.Instructions = instructionsFor(alt, job, desc)
 		agent, err = s.materialize(ctx, user, card, pending)
 	}
 	if err != nil {
-		return "No agent was created.", true
+		return "No agent was created.", true, ""
 	}
 	if err := s.launchNewAgent(ctx, user.ID, agent); err != nil {
 		if errors.Is(err, store.ErrQuota) {
 			_ = s.store.DeleteAgent(ctx, user.ID, agent.ID)
-			return "This account has reached its machine limit.", true
+			return "This account has reached its machine limit.", true, ""
 		}
 		if errors.Is(err, errNoHost) {
-			return "Created " + agent.Name + ". It is in the sidebar at /agents/" + agent.ID + ". It does not have a machine yet.", false
+			s.noteChatAgent(ctx, user.ID, caller.ID, agent)
+			s.rememberSidebar(runID, agent.ID)
+			return "Created " + agent.Name + ". It is in the sidebar at /agents/" + agent.ID + ". It does not have a machine yet.", false, agent.ID
 		}
 	}
-	return "Created " + agent.Name + ". It is in the sidebar at /agents/" + agent.ID + ".", false
+	s.noteChatAgent(ctx, user.ID, caller.ID, agent)
+	s.rememberSidebar(runID, agent.ID)
+	return "Created " + agent.Name + ". It is in the sidebar at /agents/" + agent.ID + ".", false, agent.ID
 }
 
 func preparedRequest(description, rawName string) (desc, name, job string, ok bool) {

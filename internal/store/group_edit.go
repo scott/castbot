@@ -174,6 +174,24 @@ func (s *Store) ToggleFold(ctx context.Context, userID, sectionKey string) (bool
 	return true, err
 }
 
+// ExpandSection opens a sidebar section that this person had collapsed.
+// A section that is already open stays open. sectionKey is a section id.
+// A section the caller does not own is ErrNotFound.
+func (s *Store) ExpandSection(ctx context.Context, userID, sectionKey string) error {
+	if _, err := s.GetUser(ctx, userID); err != nil {
+		return err
+	}
+	sectionKey = strings.TrimSpace(sectionKey)
+	if sectionKey == "" || sectionKey == "groups" {
+		return ErrNotFound
+	}
+	if _, err := s.GetSection(ctx, userID, sectionKey); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM section_folds WHERE user_id = ? AND section_key = ?`, userID, sectionKey)
+	return err
+}
+
 // FoldedSections returns the section keys this person has collapsed.
 func (s *Store) FoldedSections(ctx context.Context, userID string) (map[string]bool, error) {
 	if _, err := s.GetUser(ctx, userID); err != nil {

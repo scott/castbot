@@ -175,6 +175,11 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		delivered := false
 		for _, ev := range events {
+			if ev.Kind != "done" && ev.Kind != "error" {
+				if err := s.writeSidebar(r.Context(), w, user, runRow, from(r).CSRF); err != nil {
+					return
+				}
+			}
 			n, err := s.writeRunEvent(r.Context(), w, user, runRow, ev, from(r).CSRF, cur.skip(ev.Seq), st)
 			if err != nil {
 				return
@@ -450,6 +455,7 @@ func (s *Server) writeRunEvent(ctx context.Context, w io.Writer, user store.User
 }
 
 func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User, runRow store.Run, messageID, csrf string) error {
+	s.maybeCreate(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	msg, err := s.store.GetMessage(ctx, user.ID, messageID)
 	if err != nil {
 		return err
@@ -478,6 +484,7 @@ func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User
 		body += chrome
 	}
 	body += s.sideOOB(ctx, user, runRow.AgentID)
+	body += s.sidebarFrame(ctx, user, runRow, csrf)
 	clearDwell(runRow.ID)
 	return fw.write("done", body)
 }

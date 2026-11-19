@@ -23,6 +23,9 @@ var views = template.Must(template.New("root").Funcs(template.FuncMap{
 	},
 	"modelLabel": modelLabel,
 	"static":     staticHref,
+	"sectionArgs": func(sec sectionView, csrf string, oob bool) sectionWrap {
+		return sectionWrap{Section: sec, CSRF: csrf, OOB: oob}
+	},
 }).ParseFS(templateFS, "templates/*.html"))
 
 func execTemplate(name string, data any) (string, error) {
