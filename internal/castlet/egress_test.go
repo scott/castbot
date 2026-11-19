@@ -13,6 +13,7 @@ import (
 
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
+	"github.com/scott/castbot/internal/routinetool"
 )
 
 const fixtureValue = "fixture-should-not-appear"
@@ -371,6 +372,30 @@ func TestAgentsForwardIgnoresProviderStatus(t *testing.T) {
 	sup.ServeEgress(rec, off)
 	if rec.Code != http.StatusNotFound || hit.count("/agents") != 1 {
 		t.Fatalf("off loopback %d forwards %d", rec.Code, hit.count("/agents"))
+	}
+}
+
+func TestAgentsForwardRoutines(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/agents") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"text":"Morning digest. Every weekday at 8:00 AM.","error":false}`)
+	})
+	for _, name := range []string{routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete} {
+		rec := httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+name+`","arguments":{}}`))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Morning digest") || strings.Contains(rec.Body.String(), fixtureValue) {
+			t.Fatalf("%s %d %s", name, rec.Code, rec.Body.String())
+		}
+	}
+	if hit.count("/agents") != 4 {
+		t.Fatalf("forwards %d", hit.count("/agents"))
+	}
+	rec := httptest.NewRecorder()
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
+	if hit.count("/agents") != 4 || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
+		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
 	}
 }
 

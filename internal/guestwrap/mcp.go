@@ -13,6 +13,7 @@ import (
 
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
+	"github.com/scott/castbot/internal/routinetool"
 )
 
 // ServeMCP speaks newline-delimited JSON-RPC on stdin and stdout.
@@ -151,6 +152,59 @@ func agentTools() []any {
 				"properties": map[string]any{},
 			},
 		},
+		map[string]any{
+			"name":        routinetool.ToolList,
+			"description": "List this agent's routines.",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		map[string]any{
+			"name":        routinetool.ToolCreate,
+			"description": "Create a routine for this agent when the person asked for one.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name":     map[string]any{"type": "string", "description": "Name the person asked for."},
+					"cron":     map[string]any{"type": "string", "description": "5 fields: minute hour day month weekday."},
+					"prompt":   map[string]any{"type": "string", "description": "What the agent should do."},
+					"timezone": map[string]any{"type": "string", "description": "IANA time zone, only when the person named one."},
+					"missed":   map[string]any{"type": "string", "enum": []string{"once", "skip"}, "description": "What happens when a run is missed, only when the person named it."},
+					"approval": map[string]any{"type": "string", "enum": []string{"wait", "deny"}, "description": "What happens when a step needs approval, only when the person named it."},
+				},
+				"required": []string{"name", "cron", "prompt"},
+			},
+		},
+		map[string]any{
+			"name":        routinetool.ToolUpdate,
+			"description": "Change one of this agent's routines. Set enabled to false to pause and true to resume.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id":       map[string]any{"type": "string", "description": "Routine id from list_routines."},
+					"name":     map[string]any{"type": "string"},
+					"cron":     map[string]any{"type": "string", "description": "5 fields: minute hour day month weekday."},
+					"prompt":   map[string]any{"type": "string"},
+					"timezone": map[string]any{"type": "string", "description": "IANA time zone."},
+					"missed":   map[string]any{"type": "string", "enum": []string{"once", "skip"}},
+					"approval": map[string]any{"type": "string", "enum": []string{"wait", "deny"}},
+					"enabled":  map[string]any{"type": "boolean", "description": "False pauses the routine. True resumes it."},
+				},
+				"required": []string{"id"},
+			},
+		},
+		map[string]any{
+			"name":        routinetool.ToolDelete,
+			"description": "Delete one of this agent's routines.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id": map[string]any{"type": "string", "description": "Routine id from list_routines."},
+				},
+				"required": []string{"id"},
+			},
+		},
 	}
 }
 
@@ -179,8 +233,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 				"name":        args.Name,
 			},
 		}
-	case agentskill.ToolList:
+	case agentskill.ToolList, routinetool.ToolList:
 		payload = map[string]any{"name": call.Name, "arguments": map[string]any{}}
+	case routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete:
+		forwarded, ok := routineForwardArgs(call.Arguments)
+		if !ok {
+			return egresscontract.Rejected, true
+		}
+		payload = map[string]any{"name": call.Name, "arguments": forwarded}
 	default:
 		return egresscontract.Rejected, true
 	}
@@ -196,6 +256,19 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 		return egresscontract.Rejected, true
 	}
 	return result.Text, result.Error
+}
+
+func routineForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	delete(args, "user_id")
+	delete(args, "agent_id")
+	return args, true
 }
 
 func requestSecretTool() map[string]any {
