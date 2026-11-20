@@ -21,6 +21,7 @@ import (
 	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
+	"github.com/scott/castbot/internal/secretstool"
 	"github.com/scott/castbot/internal/selftool"
 	"github.com/scott/castbot/internal/settingstool"
 )
@@ -250,6 +251,9 @@ func agentTools() []any {
 	for _, spec := range connectiontool.Specs() {
 		tools = append(tools, connectionSchema(spec))
 	}
+	for _, spec := range secretstool.Specs() {
+		tools = append(tools, vaultSchema(spec))
+	}
 	return tools
 }
 
@@ -429,6 +433,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 			payload = map[string]any{"name": call.Name, "arguments": forwarded}
 			break
 		}
+		if secretstool.Known(call.Name) {
+			forwarded, ok := vaultForwardArgs(call.Arguments)
+			if !ok {
+				return egresscontract.Rejected, true
+			}
+			payload = map[string]any{"name": call.Name, "arguments": forwarded}
+			break
+		}
 		if !grouptool.Known(call.Name) {
 			return egresscontract.Rejected, true
 		}
@@ -559,6 +571,52 @@ func connectionSchema(spec connectiontool.Spec) map[string]any {
 		"description": spec.Description,
 		"inputSchema": schema,
 	}
+}
+
+func vaultSchema(spec secretstool.Spec) map[string]any {
+	props := map[string]any{}
+	var required []string
+	for _, arg := range spec.Args {
+		props[arg.Name] = map[string]any{"type": "string", "description": arg.Description}
+		if arg.Required {
+			required = append(required, arg.Name)
+		}
+	}
+	schema := map[string]any{
+		"type":       "object",
+		"properties": props,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": schema,
+	}
+}
+
+func vaultForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	out := map[string]any{}
+	for _, key := range []string{"secret", "agent"} {
+		value, ok := args[key]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			return nil, false
+		}
+		out[key] = text
+	}
+	return out, true
 }
 
 func connectionForwardArgs(raw json.RawMessage) (map[string]any, bool) {
