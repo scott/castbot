@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/agentskill"
+	"github.com/scott/castbot/internal/chattool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
@@ -399,6 +400,25 @@ func TestAgentsForwardRoutines(t *testing.T) {
 	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
 	if hit.count("/agents") != 5 || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
 		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
+	}
+}
+
+func TestAgentsForwardChat(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/agents") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"text":"Stopped the reply.","error":false}`)
+	})
+	for _, spec := range chattool.Specs() {
+		rec := httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+spec.Name+`","arguments":{}}`))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Stopped the reply.") || strings.Contains(rec.Body.String(), fixtureValue) {
+			t.Fatalf("%s %d %s", spec.Name, rec.Code, rec.Body.String())
+		}
+	}
+	if hit.count("/agents") != len(chattool.Specs()) {
+		t.Fatalf("forwards %d", hit.count("/agents"))
 	}
 }
 
