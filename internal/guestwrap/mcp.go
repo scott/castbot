@@ -211,6 +211,17 @@ func agentTools() []any {
 				"required": []string{"id"},
 			},
 		},
+		map[string]any{
+			"name":        routinetool.ToolRun,
+			"description": "Start one of this agent's routines now, in its own thread. Only when the person asked.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id": map[string]any{"type": "string", "description": "Routine id from list_routines."},
+				},
+				"required": []string{"id"},
+			},
+		},
 	}
 	for _, spec := range grouptool.Specs() {
 		tools = append(tools, organizeSchema(spec))
@@ -343,7 +354,7 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 		}
 	case agentskill.ToolList, routinetool.ToolList:
 		payload = map[string]any{"name": call.Name, "arguments": map[string]any{}}
-	case routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete:
+	case routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolRun:
 		forwarded, ok := routineForwardArgs(call.Arguments)
 		if !ok {
 			return egresscontract.Rejected, true
