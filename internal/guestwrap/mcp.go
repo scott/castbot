@@ -15,6 +15,7 @@ import (
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
+	"github.com/scott/castbot/internal/selftool"
 )
 
 // ServeMCP speaks newline-delimited JSON-RPC on stdin and stdout.
@@ -132,7 +133,7 @@ func allowedMCP(server string) bool {
 }
 
 func agentTools() []any {
-	return []any{
+	tools := []any{
 		map[string]any{
 			"name":        agentskill.ToolCreate,
 			"description": "Create a new agent in this account from a description the person in this chat asked for.",
@@ -207,6 +208,35 @@ func agentTools() []any {
 			},
 		},
 	}
+	for _, spec := range selftool.Specs() {
+		tools = append(tools, selfSchema(spec))
+	}
+	return tools
+}
+
+func selfSchema(spec selftool.Spec) map[string]any {
+	props := map[string]any{}
+	var required []string
+	if spec.Query {
+		queryDesc := "Words to match. Omit unless the person asked to look for a word."
+		if spec.QueryRequired {
+			queryDesc = "Words to match."
+			required = []string{"query"}
+		}
+		props["query"] = map[string]any{"type": "string", "description": queryDesc}
+	}
+	if spec.ID {
+		props["id"] = map[string]any{"type": "string", "description": "Routine id from list_routines. Omit to list recent runs."}
+	}
+	schema := map[string]any{"type": "object", "properties": props}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": schema,
+	}
 }
 
 func callAgents(base string, params json.RawMessage) (string, bool) {
@@ -243,7 +273,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 		}
 		payload = map[string]any{"name": call.Name, "arguments": forwarded}
 	default:
-		return egresscontract.Rejected, true
+		if !selftool.Known(call.Name) {
+			return egresscontract.Rejected, true
+		}
+		forwarded, ok := selfForwardArgs(call.Arguments)
+		if !ok {
+			return egresscontract.Rejected, true
+		}
+		payload = map[string]any{"name": call.Name, "arguments": forwarded}
 	}
 	body, err := postJSON(base+"/agents", payload, 60*time.Second)
 	if err != nil {
@@ -257,6 +294,24 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 		return egresscontract.Rejected, true
 	}
 	return result.Text, result.Error
+}
+
+func selfForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	out := map[string]any{}
+	if q, ok := args["query"].(string); ok {
+		out["query"] = q
+	}
+	if id, ok := args["id"].(string); ok {
+		out["id"] = id
+	}
+	return out, true
 }
 
 func routineForwardArgs(raw json.RawMessage) (map[string]any, bool) {

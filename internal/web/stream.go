@@ -457,6 +457,7 @@ func (s *Server) writeRunEvent(ctx context.Context, w io.Writer, user store.User
 func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User, runRow store.Run, messageID, csrf string) error {
 	s.maybeCreate(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	s.maybeSecret(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
+	s.maybeSelf(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	msg, err := s.store.GetMessage(ctx, user.ID, messageID)
 	if err != nil {
 		return err

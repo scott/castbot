@@ -18,6 +18,7 @@ import (
 	"github.com/scott/castbot/internal/cron"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/run"
+	"github.com/scott/castbot/internal/selftool"
 	"github.com/scott/castbot/internal/store"
 )
 
@@ -271,8 +272,12 @@ func TestServedBundleCarriesRoutineSkill(t *testing.T) {
 	if err != nil || !strings.Contains(string(skill), routinetool.SkillName) || !strings.Contains(string(skill), "I can set that up as a routine for you") {
 		t.Fatal("routine skill was not installed")
 	}
+	account, err := os.ReadFile(filepath.Join(dir, selftool.SkillFile))
+	if err != nil || !strings.Contains(string(account), selftool.SkillName) || !strings.Contains(string(account), selftool.Fence) {
+		t.Fatal("account skill was not installed")
+	}
 	notes, err := os.ReadFile(filepath.Join(dir, "instructions.md"))
-	if err != nil || !strings.Contains(string(notes), routinetool.Heading) || !strings.Contains(string(notes), agentskill.Heading) || !strings.Contains(string(notes), "Be brief.") {
+	if err != nil || !strings.Contains(string(notes), routinetool.Heading) || !strings.Contains(string(notes), agentskill.Heading) || !strings.Contains(string(notes), selftool.Heading) || !strings.Contains(string(notes), "Be brief.") {
 		t.Fatal("guides missing")
 	}
 	tr := tar.NewReader(bytes.NewReader([]byte(packed)))
@@ -288,7 +293,7 @@ func TestServedBundleCarriesRoutineSkill(t *testing.T) {
 		if hdr.Name == "agent.yaml" {
 			body, _ := io.ReadAll(tr)
 			text := string(body)
-			for _, name := range []string{routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolList, agentskill.ToolCreate} {
+			for _, name := range []string{routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolList, agentskill.ToolCreate, selftool.ToolUsage} {
 				if !strings.Contains(text, name+": always-allow") && !strings.Contains(text, name+":always-allow") {
 					if !strings.Contains(text, name) || !strings.Contains(text, "always-allow") {
 						t.Fatalf("served yaml missing %s\n%s", name, text)
