@@ -22,6 +22,7 @@ import (
 	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/chattool"
 	"github.com/scott/castbot/internal/connectiontool"
+	"github.com/scott/castbot/internal/deletetool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
@@ -332,7 +333,7 @@ func (s *Supervisor) egressSecret(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(egresscontract.SecretResult{Result: result.Result})
 }
 
-// egressAgents forwards the agent, routine, account read, group, machine, edit, approval, chat, settings, connection, secret, and replace tools.
+// egressAgents forwards the agent, routine, account read, group, machine, edit, approval, chat, settings, connection, secret, replace, and delete tools.
 // It is not a connection, so it does not check whether a provider is connected.
 func (s *Supervisor) egressAgents(w http.ResponseWriter, r *http.Request) {
 	var call struct {
@@ -346,7 +347,7 @@ func (s *Supervisor) egressAgents(w http.ResponseWriter, r *http.Request) {
 	switch call.Name {
 	case agentskill.ToolCreate, agentskill.ToolList, routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolRun:
 	default:
-		if !selftool.Known(call.Name) && !grouptool.Known(call.Name) && !machinetool.Known(call.Name) && !edittool.Known(call.Name) && !approvetool.Known(call.Name) && !chattool.Known(call.Name) && !settingstool.Known(call.Name) && !connectiontool.Known(call.Name) && !secretstool.Known(call.Name) && !replacetool.Known(call.Name) {
+		if !selftool.Known(call.Name) && !grouptool.Known(call.Name) && !machinetool.Known(call.Name) && !edittool.Known(call.Name) && !approvetool.Known(call.Name) && !chattool.Known(call.Name) && !settingstool.Known(call.Name) && !connectiontool.Known(call.Name) && !secretstool.Known(call.Name) && !replacetool.Known(call.Name) && !deletetool.Known(call.Name) {
 			writeAgentReply(w, egresscontract.Rejected, true)
 			return
 		}

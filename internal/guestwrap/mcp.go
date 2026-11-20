@@ -15,6 +15,7 @@ import (
 	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/chattool"
 	"github.com/scott/castbot/internal/connectiontool"
+	"github.com/scott/castbot/internal/deletetool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
@@ -258,6 +259,9 @@ func agentTools() []any {
 	for _, spec := range replacetool.Specs() {
 		tools = append(tools, replaceSchema(spec))
 	}
+	for _, spec := range deletetool.Specs() {
+		tools = append(tools, deleteSchema(spec))
+	}
 	return tools
 }
 
@@ -453,6 +457,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 			payload = map[string]any{"name": call.Name, "arguments": forwarded}
 			break
 		}
+		if deletetool.Known(call.Name) {
+			forwarded, ok := deleteForwardArgs(call.Arguments)
+			if !ok {
+				return egresscontract.Rejected, true
+			}
+			payload = map[string]any{"name": call.Name, "arguments": forwarded}
+			break
+		}
 		if !grouptool.Known(call.Name) {
 			return egresscontract.Rejected, true
 		}
@@ -629,6 +641,48 @@ func replaceSchema(spec replacetool.Spec) map[string]any {
 		"description": spec.Description,
 		"inputSchema": schema,
 	}
+}
+
+func deleteSchema(spec deletetool.Spec) map[string]any {
+	props := map[string]any{}
+	var required []string
+	for _, arg := range spec.Args {
+		props[arg.Name] = map[string]any{"type": "string", "description": arg.Description}
+		if arg.Required {
+			required = append(required, arg.Name)
+		}
+	}
+	schema := map[string]any{
+		"type":       "object",
+		"properties": props,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": schema,
+	}
+}
+
+func deleteForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	out := map[string]any{}
+	if value, ok := args["confirm"]; ok {
+		text, ok := value.(string)
+		if !ok {
+			return nil, false
+		}
+		out["confirm"] = text
+	}
+	return out, true
 }
 
 func replaceForwardArgs(raw json.RawMessage) (map[string]any, bool) {

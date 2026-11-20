@@ -33,6 +33,7 @@ func (s *Server) settleTalk(job run.Job, status string) {
 		s.maybeConnection(job)
 		s.maybeVault(job)
 		s.maybeReplace(job)
+		s.maybeDelete(job)
 		s.appendDeliveryLinks(job)
 	}
 	s.finishDispatch(job, status)
