@@ -20,6 +20,7 @@ import (
 	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
+	"github.com/scott/castbot/internal/secretstool"
 	"github.com/scott/castbot/internal/selftool"
 	"github.com/scott/castbot/internal/settingstool"
 )
@@ -430,6 +431,11 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 			t.Fatalf("list missing %s in %s", spec.Name, out.String())
 		}
 	}
+	for _, spec := range secretstool.Specs() {
+		if !strings.Contains(out.String(), spec.Name) {
+			t.Fatalf("list missing %s in %s", spec.Name, out.String())
+		}
+	}
 	out.Reset()
 	call := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + agentskill.ToolCreate + `","arguments":{"description":"Sort the support inbox and draft replies.","name":"Quill","user_id":"other"}}}` + "\n"
 	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
@@ -464,6 +470,14 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 	}
 	if !strings.Contains(posted, `"connection":"shell"`) || !strings.Contains(posted, `"tool":"bash"`) || !strings.Contains(posted, `"level":"deny"`) || strings.Contains(posted, "token") || strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") {
 		t.Fatalf("level posted %s", posted)
+	}
+	out.Reset()
+	grantCall := `{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"` + secretstool.ToolGrant + `","arguments":{"secret":"NOTES_TOKEN","agent":"Pip","value":"secret-token","user_id":"other","agent_id":"other-agent"}}}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(grantCall), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(posted, `"secret":"NOTES_TOKEN"`) || !strings.Contains(posted, `"agent":"Pip"`) || strings.Contains(posted, "value") || strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") {
+		t.Fatalf("grant posted %s", posted)
 	}
 	out.Reset()
 	bad := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"delete_agent","arguments":{}}}` + "\n"

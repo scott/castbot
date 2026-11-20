@@ -258,7 +258,7 @@ func (s *Server) vaultMove(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		extra, err := s.moveAliasToConnection(r, user, id, connection, vaultName, value)
+		extra, err := s.moveAliasToConnection(r.Context(), user, id, connection, vaultName, value)
 		if s.missing(w, err) {
 			return
 		}
@@ -273,30 +273,30 @@ func (s *Server) vaultMove(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings/secrets", http.StatusSeeOther)
 }
 
-func (s *Server) moveAliasToConnection(r *http.Request, user store.User, id, connection, vaultName, value string) ([]string, error) {
-	_, err := s.store.SaveConnectionSecret(r.Context(), user.ID, connection, value)
+func (s *Server) moveAliasToConnection(ctx context.Context, user store.User, id, connection, vaultName, value string) ([]string, error) {
+	_, err := s.store.SaveConnectionSecret(ctx, user.ID, connection, value)
 	var extra []string
 	if errors.Is(err, store.ErrConflict) {
-		occupant, lookErr := s.store.SecretByName(r.Context(), user.ID, vaultName)
+		occupant, lookErr := s.store.SecretByName(ctx, user.ID, vaultName)
 		if lookErr != nil {
 			return nil, lookErr
 		}
 		if occupant.ID != id {
-			extra, err = s.store.GrantAgentIDs(r.Context(), user.ID, occupant.ID)
+			extra, err = s.store.GrantAgentIDs(ctx, user.ID, occupant.ID)
 			if err != nil {
 				return nil, err
 			}
-			if err := s.store.DeleteSecret(r.Context(), user.ID, occupant.ID); err != nil {
+			if err := s.store.DeleteSecret(ctx, user.ID, occupant.ID); err != nil {
 				return nil, err
 			}
 		}
-		if _, err := s.store.SaveConnectionSecret(r.Context(), user.ID, connection, value); err != nil {
+		if _, err := s.store.SaveConnectionSecret(ctx, user.ID, connection, value); err != nil {
 			return nil, err
 		}
 	} else if err != nil {
 		return nil, err
 	}
-	if err := s.store.DeleteSecret(r.Context(), user.ID, id); err != nil {
+	if err := s.store.DeleteSecret(ctx, user.ID, id); err != nil {
 		return nil, err
 	}
 	return extra, nil
