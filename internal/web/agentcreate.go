@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/scott/castbot/internal/deletetool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/grouptool"
+	"github.com/scott/castbot/internal/importtool"
 	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/replacetool"
 	"github.com/scott/castbot/internal/routinetool"
@@ -37,8 +39,12 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-	if err := dec.Decode(&call); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, (4<<20)+(64<<10)))
+	if err != nil || json.Unmarshal(body, &call) != nil {
+		writeAgentResult(w, "That request was rejected.", true)
+		return
+	}
+	if len(body) > 64<<10 && !importtool.Known(call.Name) {
 		writeAgentResult(w, "That request was rejected.", true)
 		return
 	}
@@ -110,6 +116,10 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if deletetool.Known(call.Name) {
 			s.machineDelete(w, r, userID, call.Name, call.Arguments)
+			return
+		}
+		if importtool.Known(call.Name) {
+			s.machineImport(w, r, userID, call.Name, call.Arguments)
 			return
 		}
 		writeAgentResult(w, "That request was rejected.", true)

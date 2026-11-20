@@ -34,6 +34,7 @@ func (s *Server) settleTalk(job run.Job, status string) {
 		s.maybeVault(job)
 		s.maybeReplace(job)
 		s.maybeDelete(job)
+		s.maybeImport(job)
 		s.appendDeliveryLinks(job)
 	}
 	s.finishDispatch(job, status)
