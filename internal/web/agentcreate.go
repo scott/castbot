@@ -11,6 +11,7 @@ import (
 
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/grouptool"
+	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/selftool"
@@ -65,6 +66,10 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if grouptool.Known(call.Name) {
 			s.machineGroup(w, r, userID, call.Name, call.Arguments)
+			return
+		}
+		if machinetool.Known(call.Name) {
+			s.machinePower(w, r, userID, call.Name, call.Arguments)
 			return
 		}
 		writeAgentResult(w, "That request was rejected.", true)
