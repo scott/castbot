@@ -14,6 +14,7 @@ import (
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
+	"github.com/scott/castbot/internal/selftool"
 )
 
 const fixtureValue = "fixture-should-not-appear"
@@ -382,6 +383,11 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 			t.Fatalf("list missing %s in %s", name, out.String())
 		}
 	}
+	for _, spec := range selftool.Specs() {
+		if !strings.Contains(out.String(), spec.Name) {
+			t.Fatalf("list missing %s in %s", spec.Name, out.String())
+		}
+	}
 	out.Reset()
 	call := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + agentskill.ToolCreate + `","arguments":{"description":"Sort the support inbox and draft replies.","name":"Quill","user_id":"other"}}}` + "\n"
 	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
@@ -421,6 +427,14 @@ func TestAgentsMCPForwardsRoutineTools(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Morning digest") || !strings.Contains(posted, `"cron"`) || strings.Contains(posted, "user_id") {
 		t.Fatalf("posted %s out %s", posted, out.String())
+	}
+	out.Reset()
+	selfCall := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"` + selftool.ToolUsage + `","arguments":{"user_id":"other","agent_id":"other-agent","query":"notes"}}}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(selfCall), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Morning digest") || strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") || !strings.Contains(posted, `"query":"notes"`) {
+		t.Fatalf("self posted %s out %s", posted, out.String())
 	}
 	out.Reset()
 	bad := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"` + routinetool.ToolUpdate + `","arguments":["nope"]}}` + "\n"

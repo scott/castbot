@@ -23,6 +23,7 @@ func (s *Server) settleTalk(job run.Job, status string) {
 		s.maybeCreate(job)
 		s.maybeRoutine(job)
 		s.maybeSecret(job)
+		s.maybeSelf(job)
 		s.appendDeliveryLinks(job)
 	}
 	s.finishDispatch(job, status)

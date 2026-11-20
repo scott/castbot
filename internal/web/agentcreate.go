@@ -12,6 +12,7 @@ import (
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/run"
+	"github.com/scott/castbot/internal/selftool"
 	"github.com/scott/castbot/internal/store"
 )
 
@@ -57,6 +58,10 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 	case routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete:
 		s.machineRoutine(w, r, userID, call.Name, call.Arguments)
 	default:
+		if selftool.Known(call.Name) {
+			s.machineSelf(w, r, userID, call.Name, call.Arguments)
+			return
+		}
 		writeAgentResult(w, "That request was rejected.", true)
 	}
 }

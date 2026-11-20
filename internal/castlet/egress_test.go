@@ -14,6 +14,7 @@ import (
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/routinetool"
+	"github.com/scott/castbot/internal/selftool"
 )
 
 const fixtureValue = "fixture-should-not-appear"
@@ -395,6 +396,28 @@ func TestAgentsForwardRoutines(t *testing.T) {
 	rec := httptest.NewRecorder()
 	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
 	if hit.count("/agents") != 4 || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
+		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
+	}
+}
+
+func TestAgentsForwardSelf(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/agents") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"text":"This month for Ada: $0.00","error":false}`)
+	})
+	rec := httptest.NewRecorder()
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+selftool.ToolUsage+`","arguments":{}}`))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "$0.00") || strings.Contains(rec.Body.String(), fixtureValue) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if hit.count("/agents") != 1 {
+		t.Fatalf("forwards %d", hit.count("/agents"))
+	}
+	rec = httptest.NewRecorder()
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
+	if hit.count("/agents") != 1 || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
 		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
 	}
 }
