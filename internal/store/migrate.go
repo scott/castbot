@@ -525,6 +525,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV32(); err != nil {
 		return err
 	}
+	// Version 33 is a label on a secret card and a delete approval for a named key.
+	if err := s.migrateV33(); err != nil {
+		return err
+	}
 	return nil
 }
 

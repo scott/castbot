@@ -14,6 +14,7 @@ import (
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/routinetool"
+	"github.com/scott/castbot/internal/secretask"
 )
 
 // ServeMCP speaks newline-delimited JSON-RPC on stdin and stdout.
@@ -63,7 +64,7 @@ func ServeMCP(server, base string, in io.Reader, out io.Writer) error {
 			}
 		case "tools/list":
 			if server == "request_secret" {
-				if err := writeJSON(out, rpcResult(msg.ID, map[string]any{"tools": []any{requestSecretTool()}})); err != nil {
+				if err := writeJSON(out, rpcResult(msg.ID, map[string]any{"tools": []any{requestSecretTool(), deleteSecretTool()}})); err != nil {
 					return err
 				}
 				continue
@@ -273,16 +274,31 @@ func routineForwardArgs(raw json.RawMessage) (map[string]any, bool) {
 
 func requestSecretTool() map[string]any {
 	return map[string]any{
-		"name":        "request_secret",
-		"description": "Ask to connect GitHub or DigitalOcean. The value is saved on the host and is not returned to the agent. A successful connect is available on the next turn. The result is saved, declined, expired, or already_configured.",
+		"name":        secretask.ToolSave,
+		"description": "Ask to connect GitHub or DigitalOcean, or to save a new API key. For GitHub or DigitalOcean pass connection. For any other API pass name, an environment variable such as SERVICE_API_KEY, plus reason and an optional label. Leave connection empty for a named key. The value is saved on the host and is not returned. A successful save is available on the next turn. The result is saved, declined, expired, already_configured, or rejected.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"connection": map[string]any{"type": "string", "enum": []string{"github", "digitalocean"}},
+				"name":       map[string]any{"type": "string", "description": "Environment name for a new API key. Capital letters, digits, and underscores."},
 				"reason":     map[string]any{"type": "string"},
-				"name":       map[string]any{"type": "string"},
+				"label":      map[string]any{"type": "string", "description": "Short title for the card."},
 			},
-			"required": []string{"connection"},
+		},
+	}
+}
+
+func deleteSecretTool() map[string]any {
+	return map[string]any{
+		"name":        secretask.ToolDelete,
+		"description": "Ask to delete a saved API key. Pass the same name used to save it, and a reason. The person approves on a card before the key is deleted. The result is deleted, declined, expired, or not_found.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":   map[string]any{"type": "string"},
+				"reason": map[string]any{"type": "string"},
+			},
+			"required": []string{"name"},
 		},
 	}
 }
@@ -293,23 +309,39 @@ func callSecret(base string, params json.RawMessage) (string, bool) {
 		Arguments json.RawMessage `json:"arguments"`
 	}
 	_ = json.Unmarshal(params, &call)
-	if call.Name != "request_secret" {
-		return egresscontract.Rejected, true
-	}
 	var args struct {
 		Connection string `json:"connection"`
 		Reason     string `json:"reason"`
 		Name       string `json:"name"`
+		Label      string `json:"label"`
 	}
 	_ = json.Unmarshal(call.Arguments, &args)
-	if !egresscontract.KnownProvider(args.Connection) {
+	req := egresscontract.SecretCall{Reason: args.Reason, Name: args.Name, Label: args.Label}
+	switch call.Name {
+	case secretask.ToolDelete:
+		if !egresscontract.EnvName(strings.ToUpper(strings.TrimSpace(args.Name))) {
+			return egresscontract.Rejected, true
+		}
+		req.Action = "delete"
+		req.Name = strings.ToUpper(strings.TrimSpace(args.Name))
+	case secretask.ToolSave:
+		if strings.TrimSpace(args.Connection) == "" && strings.TrimSpace(args.Name) != "" {
+			if !egresscontract.EnvName(strings.ToUpper(strings.TrimSpace(args.Name))) {
+				return egresscontract.Rejected, true
+			}
+			req.Action = "save"
+			req.Name = strings.ToUpper(strings.TrimSpace(args.Name))
+			break
+		}
+		if !egresscontract.KnownProvider(args.Connection) {
+			return egresscontract.Rejected, true
+		}
+		req.Action = "save"
+		req.Connection = args.Connection
+	default:
 		return egresscontract.Rejected, true
 	}
-	body, err := postJSON(base+"/secret-request", egresscontract.SecretCall{
-		Connection: args.Connection,
-		Reason:     args.Reason,
-		Name:       args.Name,
-	}, 61*time.Minute)
+	body, err := postJSON(base+"/secret-request", req, 61*time.Minute)
 	if err != nil {
 		return egresscontract.NotConnected, true
 	}

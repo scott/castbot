@@ -7,6 +7,7 @@ import (
 
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/routinetool"
+	"github.com/scott/castbot/internal/secretask"
 )
 
 func TestArchiveRoundTrip(t *testing.T) {
@@ -52,6 +53,7 @@ func TestSkillFileRoundTrip(t *testing.T) {
 	extras := map[string]string{
 		agentskill.SkillFile:  "name: create-agent\n",
 		routinetool.SkillFile: "name: routines\n",
+		secretask.SkillFile:   "name: api-keys\n",
 	}
 	raw, _, err := ArchiveFiles("name: Atlas\n", "Be brief.\n", extras)
 	if err != nil {
@@ -68,6 +70,10 @@ func TestSkillFileRoundTrip(t *testing.T) {
 	routine, err := os.ReadFile(filepath.Join(dir, routinetool.SkillFile))
 	if err != nil || string(routine) != extras[routinetool.SkillFile] {
 		t.Fatalf("routine skill %q %v", routine, err)
+	}
+	keys, err := os.ReadFile(filepath.Join(dir, secretask.SkillFile))
+	if err != nil || string(keys) != extras[secretask.SkillFile] {
+		t.Fatalf("api key skill %q %v", keys, err)
 	}
 	for _, name := range []string{
 		"skills/create-agent/../../secret.txt",

@@ -13,6 +13,7 @@ import (
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/routinetool"
+	"github.com/scott/castbot/internal/secretask"
 )
 
 const fixtureValue = "fixture-should-not-appear"
@@ -428,5 +429,60 @@ func TestAgentsMCPForwardsRoutineTools(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), egresscontract.Rejected) {
 		t.Fatal(out.String())
+	}
+}
+
+func TestNamedSecretToolPassesHostWords(t *testing.T) {
+	var posted []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		posted = append(posted, string(raw))
+		if strings.Contains(string(raw), fixtureValue) {
+			t.Errorf("shim forwarded the env value")
+		}
+		if strings.Contains(string(raw), `"action":"delete"`) {
+			_, _ = io.WriteString(w, `{"result":"not_found","leak":"`+fixtureValue+`"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"result":"rejected","leak":"`+fixtureValue+`"}`)
+	}))
+	defer srv.Close()
+	var out strings.Builder
+	list := `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
+	if err := ServeMCP(secretask.ToolSave, srv.URL, strings.NewReader(list), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), secretask.ToolSave) || !strings.Contains(out.String(), secretask.ToolDelete) || !strings.Contains(out.String(), `"name"`) {
+		t.Fatal(out.String())
+	}
+	out.Reset()
+	save := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"request_secret","arguments":{"name":"x_api_key","reason":"Watch posts","value":"` + fixtureValue + `"}}}` + "\n"
+	if err := ServeMCP(secretask.ToolSave, srv.URL, strings.NewReader(save), &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), fixtureValue) || !strings.Contains(out.String(), `"text":"rejected"`) || strings.Contains(out.String(), `"isError":true`) {
+		t.Fatal(out.String())
+	}
+	if len(posted) != 1 || !strings.Contains(posted[0], `"name":"X_API_KEY"`) || !strings.Contains(posted[0], `"action":"save"`) || strings.Contains(posted[0], fixtureValue) {
+		t.Fatalf("posted %#v", posted)
+	}
+	out.Reset()
+	del := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"delete_secret","arguments":{"name":"x_api_key","reason":"Stop"}}}` + "\n"
+	if err := ServeMCP(secretask.ToolSave, srv.URL, strings.NewReader(del), &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), fixtureValue) || !strings.Contains(out.String(), `"text":"not_found"`) {
+		t.Fatal(out.String())
+	}
+	if len(posted) != 2 || !strings.Contains(posted[1], `"action":"delete"`) || !strings.Contains(posted[1], `"name":"X_API_KEY"`) {
+		t.Fatalf("posted %#v", posted)
+	}
+	out.Reset()
+	aws := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"request_secret","arguments":{"connection":"aws","reason":"` + fixtureValue + `"}}}` + "\n"
+	if err := ServeMCP(secretask.ToolSave, srv.URL, strings.NewReader(aws), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) != 2 || !strings.Contains(out.String(), egresscontract.Rejected) || strings.Contains(out.String(), fixtureValue) {
+		t.Fatalf("aws forwarded %d %s", len(posted), out.String())
 	}
 }

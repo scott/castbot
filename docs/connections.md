@@ -66,7 +66,7 @@ A mutating call (POST, PUT, PATCH, DELETE) needs a host approval card. A git fet
 
 The card shows a short summary of the request. Secret-shaped text in that summary is removed. The approval is stored with a hash of the exact call (method, path, query, and body; for a tool call, the tool name and canonical arguments). A later call is forwarded only when that hash matches, and the approval is consumed once. A different body or different arguments is rejected and does not reach the upstream. An approved card that is not used expires on the same clock as a pending card. The handler returns the approval sentence as soon as the card exists. It does not hold the request open: the guest's forward budget for HTTP, git, and MCP is 60 seconds. When Always approve for this prompt is already on, that card is approved and consumed in the same request and the call is forwarded. A denied, expired, or mismatched card does not reach the upstream. The card lasts 10 minutes. A runtime approval for a tool name does not authorize a connection write on its own.
 
-`/egress/secret-request` may stay open for the 60 minute card. Its result is only `saved`, `declined`, `expired`, or `already_configured`.
+`/egress/secret-request` may stay open for the 60 minute card. A connection card's result is only `saved`, `declined`, `expired`, or `already_configured`. A named API key uses the same route. See [secrets.md](secrets.md).
 
 Audit rows store the connection, method, path, and outcome. They do not store the token, the request body, or the response body.
 
@@ -86,7 +86,9 @@ If that binary is not in the image yet, the agent cannot start the shim. The tok
 
 ## request_secret
 
-`request_secret(connection, reason)` renders a masked card in the chat. The typed value is posted to the control plane and stored in the vault. The tool's result is only `saved`, `declined`, `expired`, or `already_configured`. The card expires after 60 minutes. One pending card per connection is reused. More than five cards an hour return `declined`.
+`request_secret(connection, reason)` renders a masked card in the chat for GitHub or DigitalOcean. The typed value is posted to the control plane and stored in the vault. The tool's result is only `saved`, `declined`, `expired`, or `already_configured`. The card expires after 60 minutes. One pending card per connection is reused. More than five cards an hour return `declined`.
+
+A named API key is not a connection token. `request_secret` can take `name`, `reason`, and an optional `label` with an empty `connection`. `delete_secret` asks before that key is removed. An image that only accepts `github` and `digitalocean` uses a `castbot-secret` fence until Replace machine. See [secrets.md](secrets.md).
 
 If a vault row already exists, the card asks for confirmation and does not require typing the token again. An optional field can replace it. The page never shows the saved value. Saving the card turns that connection on for every agent you own.
 

@@ -417,3 +417,44 @@ func TestEgressRejectsBadPaths(t *testing.T) {
 		t.Fatal("bad path was forwarded")
 	}
 }
+
+func TestNamedSecretForwardsWhenProxyEnabled(t *testing.T) {
+	var cards int
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/egress"):
+			_, _ = io.WriteString(w, `{"enabled":true,"providers":[]}`)
+		case strings.HasSuffix(r.URL.Path, "/egress/secret-request"):
+			cards++
+			if cards == 1 {
+				_, _ = io.WriteString(w, `{"result":"rejected","leak":"`+fixtureValue+`"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"result":"not_found","leak":"`+fixtureValue+`"}`)
+		default:
+			t.Errorf("forwarded %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	})
+	rec := httptest.NewRecorder()
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"action":"save","name":"x_api_key","label":"Monitor","reason":"Watch posts","value":"`+fixtureValue+`"}`))
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), fixtureValue) || !strings.Contains(rec.Body.String(), `"result":"rejected"`) {
+		t.Fatalf("save %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"action":"delete","name":"x_api_key","reason":"Stop","value":"`+fixtureValue+`"}`))
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), fixtureValue) || !strings.Contains(rec.Body.String(), `"result":"not_found"`) {
+		t.Fatalf("delete %d %s", rec.Code, rec.Body.String())
+	}
+	hit.mu.Lock()
+	posted := strings.Join(hit.body, "\n")
+	hit.mu.Unlock()
+	if !strings.Contains(posted, `"name":"X_API_KEY"`) || !strings.Contains(posted, `"action":"save"`) || !strings.Contains(posted, `"action":"delete"`) || strings.Contains(posted, fixtureValue) || strings.Contains(posted, `"connection":"github"`) {
+		t.Fatalf("posted %s", posted)
+	}
+	rec = httptest.NewRecorder()
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"connection":"aws","reason":"phish"}`))
+	if rec.Code != http.StatusBadRequest || hit.count("/egress/secret-request") != 2 {
+		t.Fatalf("aws %d forwards %d", rec.Code, hit.count("/egress/secret-request"))
+	}
+}

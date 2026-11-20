@@ -11,6 +11,7 @@ import (
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/bundle"
 	"github.com/scott/castbot/internal/routinetool"
+	"github.com/scott/castbot/internal/secretask"
 )
 
 func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
@@ -107,9 +108,9 @@ func (s *Server) writeBundle(w http.ResponseWriter, r *http.Request, userID stri
 // The header sum is the served bytes. A later pull is stable because the
 // additions are deterministic.
 func serveBundle(yaml, instructions string, extras map[string]string, stored []byte, storedSum string) ([]byte, string) {
-	yaml = routinetool.Apply(agentskill.Apply(yaml))
-	notes := routinetool.Instructions(agentskill.Instructions(instructions))
-	extras = routinetool.MergeExtras(agentskill.MergeExtras(extras))
+	yaml = secretask.Apply(routinetool.Apply(agentskill.Apply(yaml)))
+	notes := secretask.Instructions(routinetool.Instructions(agentskill.Instructions(instructions)))
+	extras = secretask.MergeExtras(routinetool.MergeExtras(agentskill.MergeExtras(extras)))
 	raw, sum, err := bundle.ArchiveFiles(yaml, notes, extras)
 	if err != nil || sum == "" {
 		return stored, storedSum

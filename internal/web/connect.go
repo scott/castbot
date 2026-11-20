@@ -523,12 +523,37 @@ func (s *Server) machineSecretRequest(w http.ResponseWriter, r *http.Request) {
 		Connection string `json:"connection"`
 		Reason     string `json:"reason"`
 		Name       string `json:"name"`
+		Label      string `json:"label"`
+		Action     string `json:"action"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
 		writeEgressFail(w, "bad_request")
 		return
 	}
+	action := strings.ToLower(strings.TrimSpace(body.Action))
+	if action == "" {
+		action = "save"
+	}
+	name := strings.ToUpper(strings.TrimSpace(body.Name))
 	connection := strings.ToLower(strings.TrimSpace(body.Connection))
+	switch action {
+	case "delete":
+		s.machineDeleteSecret(w, r, userID, name, body.Reason)
+		return
+	case "save":
+		if _, known := connect.Lookup(connection); known {
+			break
+		}
+		if connection == "" && name != "" {
+			s.machineEnvSecret(w, r, userID, name, body.Label, body.Reason)
+			return
+		}
+		writeEgressFail(w, "bad_request")
+		return
+	default:
+		writeEgressFail(w, "bad_request")
+		return
+	}
 	if _, known := connect.Lookup(connection); !known {
 		writeEgressFail(w, "bad_request")
 		return
@@ -730,6 +755,10 @@ func (s *Server) submitSecret(w http.ResponseWriter, r *http.Request) {
 		s.writeSecretCard(w, r, user, row)
 		return
 	}
+	if _, catalog := connect.Lookup(row.Connection); !catalog {
+		s.submitEnvSecret(w, r, user, row)
+		return
+	}
 	value := trimSecretInput(r.FormValue("value"))
 	_, secretErr := s.store.ConnectionSecret(r.Context(), user.ID, row.Connection)
 	has := secretErr == nil
@@ -897,6 +926,9 @@ func (s *Server) connectCardViews(ctx context.Context, user store.User, agentID,
 }
 
 func (s *Server) presentSecret(user store.User, row store.SecretRequest, csrf string) cardView {
+	if _, ok := connect.Lookup(row.Connection); !ok {
+		return s.presentEnvSecret(user, row, csrf)
+	}
 	entry, _ := connect.Lookup(row.Connection)
 	title := "Connection"
 	label := "Token"
