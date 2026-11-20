@@ -99,10 +99,75 @@ func (s *Server) sidebarFrame(ctx context.Context, user store.User, runRow store
 
 func (s *Server) writeSidebar(ctx context.Context, w io.Writer, user store.User, runRow store.Run, csrf string) error {
 	frame := s.sidebarFrame(ctx, user, runRow, csrf)
-	if frame == "" {
+	if frame != "" {
+		if err := writeSSE(w, "", "approvals", frame); err != nil {
+			return err
+		}
+	}
+	sections := s.sectionsFrame(ctx, user, runRow, csrf)
+	if sections == "" {
 		return nil
 	}
-	return writeSSE(w, "", "approvals", frame)
+	return writeSSE(w, "", "approvals", sections)
+}
+
+// noteSections asks the open chats to refresh the sidebar sections.
+// A tool call during a turn has no run id, so every open run is marked.
+func (s *Server) noteSections(ctx context.Context, userID, runID string) {
+	if runID != "" {
+		s.markSections(runID)
+		return
+	}
+	rows, err := s.store.ListOpenRuns(ctx, userID)
+	if err != nil {
+		return
+	}
+	for _, row := range rows {
+		s.markSections(row.ID)
+	}
+}
+
+func (s *Server) markSections(runID string) {
+	if runID == "" {
+		return
+	}
+	s.sideMu.Lock()
+	defer s.sideMu.Unlock()
+	if s.sideRefresh == nil {
+		s.sideRefresh = map[string]struct{}{}
+	}
+	s.sideRefresh[runID] = struct{}{}
+}
+
+func (s *Server) takeSections(runID string) bool {
+	s.sideMu.Lock()
+	defer s.sideMu.Unlock()
+	if _, ok := s.sideRefresh[runID]; !ok {
+		return false
+	}
+	delete(s.sideRefresh, runID)
+	return true
+}
+
+// sectionsFrame is the sidebar sections, ready to swap into the open page.
+// It is empty when this run has not changed a group or section since the last frame.
+func (s *Server) sectionsFrame(ctx context.Context, user store.User, runRow store.Run, csrf string) string {
+	if !s.takeSections(runRow.ID) {
+		return ""
+	}
+	p, err := s.fillSidebar(ctx, user, csrf)
+	if err != nil {
+		s.markSections(runRow.ID)
+		return ""
+	}
+	p.markOn(runRow.AgentID)
+	p.SideOOB = true
+	html, err := execTemplate("sidebarSections", p)
+	if err != nil || html == "" {
+		s.markSections(runRow.ID)
+		return ""
+	}
+	return html
 }
 
 func (s *Server) agentsSectionHTML(ctx context.Context, user store.User, currentID, csrf string) (string, error) {

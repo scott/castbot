@@ -13,6 +13,7 @@ import (
 
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
+	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
 	"github.com/scott/castbot/internal/selftool"
@@ -208,10 +209,63 @@ func agentTools() []any {
 			},
 		},
 	}
+	for _, spec := range grouptool.Specs() {
+		tools = append(tools, organizeSchema(spec))
+	}
 	for _, spec := range selftool.Specs() {
 		tools = append(tools, selfSchema(spec))
 	}
 	return tools
+}
+
+func organizeSchema(spec grouptool.Spec) map[string]any {
+	props := map[string]any{}
+	var required []string
+	group := map[string]any{"type": "string", "description": "Group title or id."}
+	people := map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "People on this account, by name or email."}
+	switch spec.Name {
+	case grouptool.ToolCreateGroup:
+		props["title"] = map[string]any{"type": "string", "description": "Title the person asked for."}
+		props["agents"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "At least two of this person's agents, by name or id."}
+		props["people"] = people
+		required = []string{"title", "agents"}
+	case grouptool.ToolUpdateGroup:
+		props["group"] = group
+		props["title"] = map[string]any{"type": "string", "description": "New title."}
+		required = []string{"group", "title"}
+	case grouptool.ToolAddMembers, grouptool.ToolRemoveMembers:
+		props["group"] = group
+		props["agents"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Agent names or ids."}
+		props["people"] = people
+		required = []string{"group"}
+	case grouptool.ToolDeleteGroup, grouptool.ToolPinGroup, grouptool.ToolUnpinGroup:
+		props["group"] = group
+		required = []string{"group"}
+	case grouptool.ToolCreateSection:
+		props["name"] = map[string]any{"type": "string", "description": "Section name."}
+		required = []string{"name"}
+	case grouptool.ToolRenameSection:
+		props["section"] = map[string]any{"type": "string", "description": "Section name or id."}
+		props["name"] = map[string]any{"type": "string", "description": "New name."}
+		required = []string{"section", "name"}
+	case grouptool.ToolDeleteSection:
+		props["section"] = map[string]any{"type": "string", "description": "Section name or id."}
+		required = []string{"section"}
+	case grouptool.ToolMoveAgents:
+		props["agents"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Agents to move, by name or id."}
+		props["section"] = map[string]any{"type": "string", "description": "Section name or id. Omit when out is true."}
+		props["out"] = map[string]any{"type": "boolean", "description": "True puts the agents back in Agents."}
+		required = []string{"agents"}
+	}
+	schema := map[string]any{"type": "object", "properties": props}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": schema,
+	}
 }
 
 func selfSchema(spec selftool.Spec) map[string]any {
@@ -273,10 +327,18 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 		}
 		payload = map[string]any{"name": call.Name, "arguments": forwarded}
 	default:
-		if !selftool.Known(call.Name) {
+		if selftool.Known(call.Name) {
+			forwarded, ok := selfForwardArgs(call.Arguments)
+			if !ok {
+				return egresscontract.Rejected, true
+			}
+			payload = map[string]any{"name": call.Name, "arguments": forwarded}
+			break
+		}
+		if !grouptool.Known(call.Name) {
 			return egresscontract.Rejected, true
 		}
-		forwarded, ok := selfForwardArgs(call.Arguments)
+		forwarded, ok := groupForwardArgs(call.Arguments)
 		if !ok {
 			return egresscontract.Rejected, true
 		}
@@ -312,6 +374,19 @@ func selfForwardArgs(raw json.RawMessage) (map[string]any, bool) {
 		out["id"] = id
 	}
 	return out, true
+}
+
+func groupForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	delete(args, "user_id")
+	delete(args, "agent_id")
+	return args, true
 }
 
 func routineForwardArgs(raw json.RawMessage) (map[string]any, bool) {

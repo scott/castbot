@@ -88,6 +88,7 @@ type Server struct {
 
 	sideMu      sync.Mutex
 	sideNew     map[string][]string
+	sideRefresh map[string]struct{}
 	createMu    sync.Mutex
 	createAt    map[string]*sync.Mutex
 	busyMu      sync.Mutex
