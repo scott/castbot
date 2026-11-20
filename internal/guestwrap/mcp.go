@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/agentskill"
+	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
@@ -219,6 +220,9 @@ func agentTools() []any {
 	for _, spec := range machinetool.Specs() {
 		tools = append(tools, machineSchema(spec))
 	}
+	for _, spec := range edittool.Specs() {
+		tools = append(tools, editSchema(spec))
+	}
 	return tools
 }
 
@@ -358,6 +362,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 			payload = map[string]any{"name": call.Name, "arguments": forwarded}
 			break
 		}
+		if edittool.Known(call.Name) {
+			forwarded, ok := editForwardArgs(call.Arguments)
+			if !ok {
+				return egresscontract.Rejected, true
+			}
+			payload = map[string]any{"name": call.Name, "arguments": forwarded}
+			break
+		}
 		if !grouptool.Known(call.Name) {
 			return egresscontract.Rejected, true
 		}
@@ -399,6 +411,25 @@ func selfForwardArgs(raw json.RawMessage) (map[string]any, bool) {
 	return out, true
 }
 
+func editSchema(spec edittool.Spec) map[string]any {
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":         map[string]any{"type": "string", "description": "Sidebar name, up to 40 characters."},
+				"title":        map[string]any{"type": "string", "description": "Title, up to 80 characters. An empty string clears it."},
+				"job":          map[string]any{"type": "string", "description": "What other agents see, up to 160 characters. An empty string clears it."},
+				"instructions": map[string]any{"type": "string", "description": "Replacement for instructions.md."},
+				"color":        map[string]any{"type": "string", "description": "Coral, Mint, Violet, Gold, Sky, Rose, Lime, Sand, or Aqua."},
+				"model":        map[string]any{"type": "string", "description": "Model id from the provider list."},
+				"delegate":     map[string]any{"type": "boolean", "description": "True lets this agent message the other agents on this account."},
+			},
+		},
+	}
+}
+
 func machineForwardArgs(raw json.RawMessage) (map[string]any, bool) {
 	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
 		return map[string]any{}, true
@@ -408,6 +439,36 @@ func machineForwardArgs(raw json.RawMessage) (map[string]any, bool) {
 		return nil, false
 	}
 	return map[string]any{}, true
+}
+
+func editForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	out := map[string]any{}
+	for _, key := range []string{"name", "title", "job", "instructions", "color", "model"} {
+		value, ok := args[key]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			return nil, false
+		}
+		out[key] = text
+	}
+	if value, ok := args["delegate"]; ok {
+		flag, ok := value.(bool)
+		if !ok {
+			return nil, false
+		}
+		out["delegate"] = flag
+	}
+	return out, true
 }
 
 func groupForwardArgs(raw json.RawMessage) (map[string]any, bool) {

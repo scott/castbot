@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/agentskill"
+	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
@@ -400,6 +401,11 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 			t.Fatalf("list missing %s in %s", spec.Name, out.String())
 		}
 	}
+	for _, spec := range edittool.Specs() {
+		if !strings.Contains(out.String(), spec.Name) {
+			t.Fatalf("list missing %s in %s", spec.Name, out.String())
+		}
+	}
 	out.Reset()
 	call := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + agentskill.ToolCreate + `","arguments":{"description":"Sort the support inbox and draft replies.","name":"Quill","user_id":"other"}}}` + "\n"
 	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
@@ -513,6 +519,37 @@ func TestAgentsMCPForwardsMachineTools(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), egresscontract.Rejected) {
 		t.Fatal(out.String())
+	}
+}
+
+func TestAgentsMCPForwardsEdit(t *testing.T) {
+	var hits int
+	var posted string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		posted = string(raw)
+		if strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") || strings.Contains(posted, "avatar") || strings.Contains(posted, "section") || strings.Contains(posted, fixtureValue) {
+			t.Errorf("forwarded a dropped field or the env value")
+		}
+		_, _ = io.WriteString(w, `{"text":"Saved. Name is Quill.","error":false}`)
+	}))
+	defer srv.Close()
+	call := `{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"` + edittool.ToolUpdate + `","arguments":{"name":"Quill","delegate":true,"user_id":"other","agent_id":"other-agent","avatar":"abc","section":"Work"}}}` + "\n"
+	var out strings.Builder
+	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 || !strings.Contains(out.String(), "Name is Quill.") || !strings.Contains(posted, `"name":"Quill"`) || !strings.Contains(posted, `"delegate":true`) {
+		t.Fatalf("posted %s out %s", posted, out.String())
+	}
+	out.Reset()
+	bad := `{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"` + edittool.ToolUpdate + `","arguments":{"name":1,"delegate":"yes"}}}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, "http://127.0.0.1:1", strings.NewReader(bad), &out); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 || !strings.Contains(out.String(), egresscontract.Rejected) {
+		t.Fatalf("bad args hits %d %s", hits, out.String())
 	}
 }
 

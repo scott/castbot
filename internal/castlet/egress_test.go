@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/agentskill"
+	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
@@ -464,6 +465,27 @@ func TestAgentsForwardMachine(t *testing.T) {
 	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"replace_machine","arguments":{}}`))
 	if hit.count("/agents") != len(machinetool.Specs()) || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
 		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
+	}
+}
+
+func TestAgentsForwardEdit(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/agents") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if strings.Contains(string(raw), fixtureValue) {
+			t.Errorf("forwarded the env value")
+		}
+		_, _ = io.WriteString(w, `{"text":"Saved. Name is Quill.","error":false}`)
+	})
+	rec := httptest.NewRecorder()
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+edittool.ToolUpdate+`","arguments":{"name":"Quill"}}`))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Quill") || strings.Contains(rec.Body.String(), fixtureValue) {
+		t.Fatalf("edit %d %s", rec.Code, rec.Body.String())
+	}
+	if hit.count("/agents") != 1 {
+		t.Fatalf("forwards %d", hit.count("/agents"))
 	}
 }
 
