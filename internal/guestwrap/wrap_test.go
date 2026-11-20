@@ -18,6 +18,7 @@ import (
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
+	"github.com/scott/castbot/internal/importtool"
 	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/replacetool"
 	"github.com/scott/castbot/internal/routinetool"
@@ -448,6 +449,11 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 			t.Fatalf("list missing %s in %s", spec.Name, out.String())
 		}
 	}
+	for _, spec := range importtool.Specs() {
+		if !strings.Contains(out.String(), spec.Name) {
+			t.Fatalf("list missing %s in %s", spec.Name, out.String())
+		}
+	}
 	out.Reset()
 	call := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + agentskill.ToolCreate + `","arguments":{"description":"Sort the support inbox and draft replies.","name":"Quill","user_id":"other"}}}` + "\n"
 	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
@@ -506,6 +512,14 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 	}
 	if !strings.Contains(posted, `"confirm":"Ada"`) || strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") || strings.Contains(posted, "value") {
 		t.Fatalf("delete posted %s", posted)
+	}
+	out.Reset()
+	importCall := `{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"` + importtool.ToolImport + `","arguments":{"url":"https://github.com/acme/helper","user_id":"other","agent_id":"other-agent","value":"secret-token"}}}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(importCall), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(posted, `"url":"https://github.com/acme/helper"`) || strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") || strings.Contains(posted, "value") {
+		t.Fatalf("import posted %s", posted)
 	}
 	out.Reset()
 	bad := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"sign_out","arguments":{}}}` + "\n"

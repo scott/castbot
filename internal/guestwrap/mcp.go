@@ -19,6 +19,7 @@ import (
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
+	"github.com/scott/castbot/internal/importtool"
 	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/replacetool"
 	"github.com/scott/castbot/internal/routinetool"
@@ -262,6 +263,9 @@ func agentTools() []any {
 	for _, spec := range deletetool.Specs() {
 		tools = append(tools, deleteSchema(spec))
 	}
+	for _, spec := range importtool.Specs() {
+		tools = append(tools, importSchema(spec))
+	}
 	return tools
 }
 
@@ -459,6 +463,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 		}
 		if deletetool.Known(call.Name) {
 			forwarded, ok := deleteForwardArgs(call.Arguments)
+			if !ok {
+				return egresscontract.Rejected, true
+			}
+			payload = map[string]any{"name": call.Name, "arguments": forwarded}
+			break
+		}
+		if importtool.Known(call.Name) {
+			forwarded, ok := importForwardArgs(call.Arguments)
 			if !ok {
 				return egresscontract.Rejected, true
 			}
@@ -664,6 +676,52 @@ func deleteSchema(spec deletetool.Spec) map[string]any {
 		"description": spec.Description,
 		"inputSchema": schema,
 	}
+}
+
+func importSchema(spec importtool.Spec) map[string]any {
+	props := map[string]any{}
+	var required []string
+	for _, arg := range spec.Args {
+		props[arg.Name] = map[string]any{"type": "string", "description": arg.Description}
+		if arg.Required {
+			required = append(required, arg.Name)
+		}
+	}
+	schema := map[string]any{
+		"type":       "object",
+		"properties": props,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": schema,
+	}
+}
+
+func importForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	out := map[string]any{}
+	for _, key := range []string{"url", "archive_b64"} {
+		value, ok := args[key]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			return nil, false
+		}
+		out[key] = text
+	}
+	return out, true
 }
 
 func deleteForwardArgs(raw json.RawMessage) (map[string]any, bool) {

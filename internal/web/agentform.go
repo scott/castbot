@@ -502,54 +502,9 @@ func (s *Server) reviewImport(w http.ResponseWriter, r *http.Request, user store
 		s.showForm(w, r, user, f, http.StatusBadRequest)
 		return
 	}
-	var folder agentfile.Folder
-	var err error
-	if kind == "github" {
-		repo, perr := agentfile.ParseGitHub(github)
-		if perr != nil {
-			f.ImportErr = "Use a public https github.com URL. Private repositories are out of scope."
-			f.keepModel()
-			s.showForm(w, r, user, f, http.StatusBadRequest)
-			return
-		}
-		s.mu.Lock()
-		baseURL, client := s.gitBase, s.gitHTTP
-		s.mu.Unlock()
-		var resolved agentfile.Repo
-		raw, resolved, err = agentfile.Fetch(r.Context(), client, baseURL, repo)
-		if err != nil {
-			if agentfile.IsPrivate(err) {
-				f.ImportErr = "Private repositories are out of scope. Use a public github.com URL."
-			} else if agentfile.IsOversize(err) {
-				f.ImportErr = "That archive is too large."
-			} else if agentfile.IsRateLimit(err) {
-				f.ImportErr = "GitHub is rate limiting imports, try again later or add ?ref="
-			} else if strings.Contains(err.Error(), "slash") {
-				f.ImportErr = "A branch name with a slash needs ?ref= on the URL."
-			} else {
-				f.ImportErr = "The repository archive could not be downloaded."
-			}
-			f.keepModel()
-			s.showForm(w, r, user, f, http.StatusBadRequest)
-			return
-		}
-		repo = resolved
-		folder, err = agentfile.ReadArchive(raw, repo.Subpath)
-	} else {
-		folder, err = agentfile.ReadArchive(raw, "")
-	}
-	if err != nil {
-		f.ImportErr = importMessage(err)
-		f.keepModel()
-		s.showForm(w, r, user, f, http.StatusBadRequest)
-		return
-	}
-	spec, err := castcfg.ParseYAML(folder.YAML)
-	if err != nil {
-		f.ImportErr = "agent.yaml could not be read."
-		if msg := yamlErr(err); msg != "" {
-			f.ImportErr = msg
-		}
+	folder, spec, msg := s.openImport(r.Context(), raw, github, kind)
+	if msg != "" {
+		f.ImportErr = msg
 		f.keepModel()
 		s.showForm(w, r, user, f, http.StatusBadRequest)
 		return
@@ -596,6 +551,59 @@ func (s *Server) reviewImport(w http.ResponseWriter, r *http.Request, user store
 	}
 	f.keepModel()
 	s.showForm(w, r, user, f, http.StatusOK)
+}
+
+// openImport reads a zip, a tar, or a public repository URL the same way the form does.
+// A non-empty string is the form's error and the folder is not usable.
+func (s *Server) openImport(ctx context.Context, raw []byte, github, kind string) (agentfile.Folder, castcfg.Spec, string) {
+	if kind == "github" {
+		repo, err := agentfile.ParseGitHub(github)
+		if err != nil {
+			return agentfile.Folder{}, castcfg.Spec{}, "Use a public https github.com URL. Private repositories are out of scope."
+		}
+		s.mu.Lock()
+		baseURL, client := s.gitBase, s.gitHTTP
+		s.mu.Unlock()
+		var resolved agentfile.Repo
+		raw, resolved, err = agentfile.Fetch(ctx, client, baseURL, repo)
+		if err != nil {
+			if agentfile.IsPrivate(err) {
+				return agentfile.Folder{}, castcfg.Spec{}, "Private repositories are out of scope. Use a public github.com URL."
+			}
+			if agentfile.IsOversize(err) {
+				return agentfile.Folder{}, castcfg.Spec{}, "That archive is too large."
+			}
+			if agentfile.IsRateLimit(err) {
+				return agentfile.Folder{}, castcfg.Spec{}, "GitHub is rate limiting imports, try again later or add ?ref="
+			}
+			if strings.Contains(err.Error(), "slash") {
+				return agentfile.Folder{}, castcfg.Spec{}, "A branch name with a slash needs ?ref= on the URL."
+			}
+			return agentfile.Folder{}, castcfg.Spec{}, "The repository archive could not be downloaded."
+		}
+		folder, err := agentfile.ReadArchive(raw, resolved.Subpath)
+		if err != nil {
+			return agentfile.Folder{}, castcfg.Spec{}, importMessage(err)
+		}
+		return parsedImport(folder)
+	}
+	folder, err := agentfile.ReadArchive(raw, "")
+	if err != nil {
+		return agentfile.Folder{}, castcfg.Spec{}, importMessage(err)
+	}
+	return parsedImport(folder)
+}
+
+func parsedImport(folder agentfile.Folder) (agentfile.Folder, castcfg.Spec, string) {
+	spec, err := castcfg.ParseYAML(folder.YAML)
+	if err != nil {
+		msg := "agent.yaml could not be read."
+		if extra := yamlErr(err); extra != "" {
+			msg = extra
+		}
+		return folder, castcfg.Spec{}, msg
+	}
+	return folder, spec, ""
 }
 
 func (s *Server) importBytes(r *http.Request) (raw []byte, github, kind, msg string) {
