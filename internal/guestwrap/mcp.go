@@ -307,6 +307,10 @@ func organizeSchema(spec grouptool.Spec) map[string]any {
 		props["section"] = map[string]any{"type": "string", "description": "Section name or id. Omit when out is true."}
 		props["out"] = map[string]any{"type": "boolean", "description": "True puts the agents back in Agents."}
 		required = []string{"agents"}
+	case grouptool.ToolPlaceGroup:
+		props["group"] = group
+		props["section"] = map[string]any{"type": "string", "description": "Section name or id. Empty, or groups, puts the group back in Groups."}
+		required = []string{"group"}
 	}
 	schema := map[string]any{"type": "object", "properties": props}
 	if len(required) > 0 {

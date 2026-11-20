@@ -112,6 +112,10 @@ func decodeFence(raw string) (Request, bool) {
 		if len(req.Agents) == 0 {
 			return Request{}, false
 		}
+	case ToolPlaceGroup:
+		if req.Group == "" {
+			return Request{}, false
+		}
 	default:
 		return Request{}, false
 	}
