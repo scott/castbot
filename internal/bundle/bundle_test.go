@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/scott/castbot/internal/agentskill"
+	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
@@ -62,6 +63,7 @@ func TestSkillFileRoundTrip(t *testing.T) {
 		grouptool.SkillFile:   "name: groups\n",
 		machinetool.SkillFile: "name: machine\n",
 		edittool.SkillFile:    "name: edit\n",
+		approvetool.SkillFile: "name: approvals\n",
 	}
 	raw, _, err := ArchiveFiles("name: Atlas\n", "Be brief.\n", extras)
 	if err != nil {
@@ -98,6 +100,10 @@ func TestSkillFileRoundTrip(t *testing.T) {
 	edit, err := os.ReadFile(filepath.Join(dir, edittool.SkillFile))
 	if err != nil || string(edit) != extras[edittool.SkillFile] {
 		t.Fatalf("edit skill %q %v", edit, err)
+	}
+	approve, err := os.ReadFile(filepath.Join(dir, approvetool.SkillFile))
+	if err != nil || string(approve) != extras[approvetool.SkillFile] {
+		t.Fatalf("approvals skill %q %v", approve, err)
 	}
 	for _, name := range []string{
 		"skills/create-agent/../../secret.txt",

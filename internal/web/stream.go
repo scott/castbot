@@ -461,6 +461,7 @@ func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User
 	s.maybeGroup(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	s.maybeMachine(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	s.maybeEdit(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
+	s.maybeApprove(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	msg, err := s.store.GetMessage(ctx, user.ID, messageID)
 	if err != nil {
 		return err
@@ -489,6 +490,7 @@ func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User
 	if chrome, cerr := s.approvalChrome(ctx, user, runRow.AgentID, runRow.ID, csrf); cerr == nil {
 		body += chrome
 	}
+	body += s.takeApprovalHTML(runRow.ID)
 	body += s.sideOOB(ctx, user, runRow.AgentID)
 	body += s.machineChromeFrame(ctx, user, runRow)
 	body += s.sidebarFrame(ctx, user, runRow, csrf)

@@ -91,6 +91,8 @@ type Server struct {
 	sideRefresh map[string]struct{}
 	// chromeRefresh marks open runs whose machine chip should update.
 	chromeRefresh map[string]struct{}
+	// approvalHTML is decided-card markup for the open turn to swap in.
+	approvalHTML map[string]string
 
 	createMu    sync.Mutex
 	createAt    map[string]*sync.Mutex

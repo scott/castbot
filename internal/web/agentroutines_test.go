@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/agentskill"
+	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/bundle"
 	"github.com/scott/castbot/internal/cron"
 	"github.com/scott/castbot/internal/edittool"
@@ -291,8 +292,12 @@ func TestServedBundleCarriesRoutineSkill(t *testing.T) {
 	if err != nil || !strings.Contains(string(edit), edittool.SkillName) || !strings.Contains(string(edit), edittool.Fence) {
 		t.Fatal("edit skill was not installed")
 	}
+	approve, err := os.ReadFile(filepath.Join(dir, approvetool.SkillFile))
+	if err != nil || !strings.Contains(string(approve), approvetool.SkillName) || !strings.Contains(string(approve), approvetool.Fence) {
+		t.Fatal("approvals skill was not installed")
+	}
 	notes, err := os.ReadFile(filepath.Join(dir, "instructions.md"))
-	if err != nil || !strings.Contains(string(notes), routinetool.Heading) || !strings.Contains(string(notes), agentskill.Heading) || !strings.Contains(string(notes), selftool.Heading) || !strings.Contains(string(notes), grouptool.Heading) || !strings.Contains(string(notes), machinetool.Heading) || !strings.Contains(string(notes), edittool.Heading) || !strings.Contains(string(notes), "Be brief.") {
+	if err != nil || !strings.Contains(string(notes), routinetool.Heading) || !strings.Contains(string(notes), agentskill.Heading) || !strings.Contains(string(notes), selftool.Heading) || !strings.Contains(string(notes), grouptool.Heading) || !strings.Contains(string(notes), machinetool.Heading) || !strings.Contains(string(notes), edittool.Heading) || !strings.Contains(string(notes), approvetool.Heading) || !strings.Contains(string(notes), "Be brief.") {
 		t.Fatal("guides missing")
 	}
 	tr := tar.NewReader(bytes.NewReader([]byte(packed)))
@@ -308,7 +313,7 @@ func TestServedBundleCarriesRoutineSkill(t *testing.T) {
 		if hdr.Name == "agent.yaml" {
 			body, _ := io.ReadAll(tr)
 			text := string(body)
-			for _, name := range []string{routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolList, agentskill.ToolCreate, selftool.ToolUsage, grouptool.ToolCreateGroup, grouptool.ToolMoveAgents, machinetool.ToolPause, machinetool.ToolRefresh, edittool.ToolUpdate} {
+			for _, name := range []string{routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolList, agentskill.ToolCreate, selftool.ToolUsage, grouptool.ToolCreateGroup, grouptool.ToolMoveAgents, machinetool.ToolPause, machinetool.ToolRefresh, edittool.ToolUpdate, approvetool.ToolApprove, approvetool.ToolDeny, approvetool.ToolAlways} {
 				if !strings.Contains(text, name+": always-allow") && !strings.Contains(text, name+":always-allow") {
 					if !strings.Contains(text, name) || !strings.Contains(text, "always-allow") {
 						t.Fatalf("served yaml missing %s\n%s", name, text)
