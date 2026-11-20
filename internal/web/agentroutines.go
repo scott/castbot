@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -92,6 +93,8 @@ func routineToolName(action string) string {
 		return routinetool.ToolUpdate
 	case "delete":
 		return routinetool.ToolDelete
+	case "run":
+		return routinetool.ToolRun
 	default:
 		return ""
 	}
@@ -146,6 +149,8 @@ func (s *Server) runRoutineTool(ctx context.Context, user store.User, caller sto
 		return s.updateRoutineTool(ctx, user, caller, args)
 	case routinetool.ToolDelete:
 		return s.deleteRoutineTool(ctx, user, caller, args)
+	case routinetool.ToolRun:
+		return s.runRoutineNow(ctx, user, caller, args)
 	default:
 		return "That request was rejected.", true
 	}
@@ -267,6 +272,38 @@ func (s *Server) deleteRoutineTool(ctx context.Context, user store.User, caller 
 		return "That routine was not found.", true
 	}
 	return "Deleted " + cur.Name + ".", false
+}
+
+func (s *Server) runRoutineNow(ctx context.Context, user store.User, caller store.Agent, args routineArgs) (string, bool) {
+	cur, ok := s.ownRoutine(ctx, user.ID, caller.ID, args.ID)
+	if !ok {
+		return "That routine was not found.", true
+	}
+	if s.replacing(ctx, user.ID, caller.ID) {
+		return replaceSentence, true
+	}
+	row, err := s.store.ClaimManual(ctx, user.ID, cur.ID)
+	if errors.Is(err, store.ErrRoutineBusy) {
+		return "A run of this routine is already going.", true
+	}
+	if errors.Is(err, store.ErrProtected) {
+		return replaceSentence, true
+	}
+	if err != nil {
+		return "That routine could not be started.", true
+	}
+	if !row.Launch {
+		if row.Detail != "" {
+			return row.Detail, false
+		}
+		return "Waits for the reply in progress.", false
+	}
+	s.launchRoutine(ctx, row)
+	fresh, ferr := s.store.GetRoutineRun(ctx, user.ID, row.ID)
+	if ferr == nil && fresh.ThreadID != "" {
+		return "Started " + cur.Name + ". It runs in its own thread.", false
+	}
+	return "Started " + cur.Name + ".", false
 }
 
 func (s *Server) ownRoutine(ctx context.Context, userID, agentID, id string) (store.Routine, bool) {

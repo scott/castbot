@@ -339,7 +339,7 @@ func (s *Supervisor) egressAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch call.Name {
-	case agentskill.ToolCreate, agentskill.ToolList, routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete:
+	case agentskill.ToolCreate, agentskill.ToolList, routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolRun:
 	default:
 		if !selftool.Known(call.Name) && !grouptool.Known(call.Name) && !machinetool.Known(call.Name) && !edittool.Known(call.Name) && !approvetool.Known(call.Name) {
 			writeAgentReply(w, egresscontract.Rejected, true)

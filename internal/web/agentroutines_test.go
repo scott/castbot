@@ -19,6 +19,7 @@ import (
 	"github.com/scott/castbot/internal/cron"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/grouptool"
+	"github.com/scott/castbot/internal/host"
 	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/run"
@@ -273,7 +274,7 @@ func TestServedBundleCarriesRoutineSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 	skill, err := os.ReadFile(filepath.Join(dir, routinetool.SkillFile))
-	if err != nil || !strings.Contains(string(skill), routinetool.SkillName) || !strings.Contains(string(skill), "I can set that up as a routine for you") {
+	if err != nil || !strings.Contains(string(skill), routinetool.SkillName) || !strings.Contains(string(skill), "I can set that up as a routine for you") || !strings.Contains(string(skill), routinetool.ToolRun) {
 		t.Fatal("routine skill was not installed")
 	}
 	account, err := os.ReadFile(filepath.Join(dir, selftool.SkillFile))
@@ -313,7 +314,7 @@ func TestServedBundleCarriesRoutineSkill(t *testing.T) {
 		if hdr.Name == "agent.yaml" {
 			body, _ := io.ReadAll(tr)
 			text := string(body)
-			for _, name := range []string{routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolList, agentskill.ToolCreate, selftool.ToolUsage, grouptool.ToolCreateGroup, grouptool.ToolMoveAgents, machinetool.ToolPause, machinetool.ToolRefresh, edittool.ToolUpdate, approvetool.ToolApprove, approvetool.ToolDeny, approvetool.ToolAlways} {
+			for _, name := range []string{routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolList, routinetool.ToolRun, agentskill.ToolCreate, selftool.ToolUsage, grouptool.ToolCreateGroup, grouptool.ToolMoveAgents, machinetool.ToolPause, machinetool.ToolRefresh, edittool.ToolUpdate, approvetool.ToolApprove, approvetool.ToolDeny, approvetool.ToolAlways} {
 				if !strings.Contains(text, name+": always-allow") && !strings.Contains(text, name+":always-allow") {
 					if !strings.Contains(text, name) || !strings.Contains(text, "always-allow") {
 						t.Fatalf("served yaml missing %s\n%s", name, text)
@@ -326,6 +327,201 @@ func TestServedBundleCarriesRoutineSkill(t *testing.T) {
 	if !saw {
 		t.Fatal("served tar has no agent.yaml")
 	}
+}
+
+func TestMachineRunRoutineNow(t *testing.T) {
+	h := newHarness(t)
+	user, _ := h.account("run-now@example.com", "Ada", "correct-horse-1")
+	other, _ := h.account("run-now-other@example.com", "Bea", "correct-horse-1")
+	caller := seedCaller(t, h, user, "Ada")
+	sibling := seedCaller(t, h, user, "Pip")
+	otherAgent := seedCaller(t, h, other, "Bea")
+	routine := makeRoutine(t, h, user.ID, caller.ID, store.ApprovalWait, store.MissedOnce)
+	if _, err := h.st.SetRoutineEnabled(context.Background(), user.ID, routine.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	token := guestToken(t, h, caller)
+	otherToken := guestToken(t, h, otherAgent)
+	sibToken := guestToken(t, h, sibling)
+	ip := "203.0.113.84:9"
+	block := make(chan struct{})
+	h.srv.SetClient(&scriptClient{block: block})
+	t.Cleanup(func() { close(block) })
+	args := map[string]any{"id": routine.ID, "user_id": other.ID, "agent_id": sibling.ID}
+
+	code, body := machinePost(t, h, ip, otherToken, caller.ID, "/agents", routinePayload(routinetool.ToolRun, args))
+	if code != http.StatusNotFound || strings.Contains(body, "Started") {
+		t.Fatalf("other token %d %s", code, body)
+	}
+	if n := routineRunCount(t, h, user.ID, routine.ID); n != 0 {
+		t.Fatalf("other token rows %d", n)
+	}
+	code, body = machinePost(t, h, ip, token, sibling.ID, "/agents", routinePayload(routinetool.ToolRun, args))
+	if code != http.StatusNotFound {
+		t.Fatalf("sibling path %d %s", code, body)
+	}
+	if n := routineRunCount(t, h, user.ID, routine.ID); n != 0 {
+		t.Fatalf("sibling path rows %d", n)
+	}
+	code, body = machinePost(t, h, ip, sibToken, sibling.ID, "/agents", routinePayload(routinetool.ToolRun, args))
+	if code != http.StatusOK || !strings.Contains(body, `"error":true`) || !strings.Contains(body, "That routine was not found.") {
+		t.Fatalf("sibling token %d %s", code, body)
+	}
+	if n := routineRunCount(t, h, user.ID, routine.ID); n != 0 {
+		t.Fatalf("sibling token rows %d", n)
+	}
+	code, body = machinePost(t, h, ip, token, caller.ID, "/agents", routinePayload(routinetool.ToolRun, map[string]any{}))
+	if code != http.StatusOK || !strings.Contains(body, `"error":true`) || !strings.Contains(body, "That routine was not found.") {
+		t.Fatalf("empty id %d %s", code, body)
+	}
+
+	code, body = machinePost(t, h, ip, token, caller.ID, "/agents", routinePayload(routinetool.ToolRun, args))
+	if code != http.StatusOK || strings.Contains(body, `"error":true`) || !strings.Contains(body, "Started "+routine.Name+". It runs in its own thread.") {
+		t.Fatalf("run %d %s", code, body)
+	}
+	rows, err := h.st.ListRoutineRuns(context.Background(), user.ID, routine.ID, 0)
+	if err != nil || len(rows) != 1 || rows[0].Source != store.RoutineSourceManual || rows[0].ThreadID == "" || rows[0].UserID != user.ID || rows[0].AgentID != caller.ID {
+		t.Fatalf("row %v %+v", err, rows)
+	}
+	paused, err := h.st.GetLiveRoutine(context.Background(), user.ID, routine.ID)
+	if err != nil || paused.Enabled {
+		t.Fatalf("pause changed %+v %v", paused, err)
+	}
+	dm := dmThread(t, h, user.ID, caller.ID)
+	if rows[0].ThreadID == dm.ID {
+		t.Fatal("run used the chat thread")
+	}
+	th, err := h.st.GetThread(context.Background(), user.ID, rows[0].ThreadID)
+	if err != nil || th.Kind != "routine" || th.AgentID != caller.ID || th.UserID != user.ID {
+		t.Fatalf("thread %+v %v", th, err)
+	}
+	msgs, err := h.st.ListMessages(context.Background(), user.ID, th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawPrompt := false
+	for _, msg := range msgs {
+		if msg.Origin == "routine" && msg.AuthorKind == "user" && msg.Body == routine.Prompt {
+			sawPrompt = true
+		}
+	}
+	if !sawPrompt {
+		t.Fatalf("routine prompt missing %+v", msgs)
+	}
+	dmMsgs, err := h.st.ListMessages(context.Background(), user.ID, dm.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range dmMsgs {
+		if msg.Body == routine.Prompt || msg.Origin == "routine" {
+			t.Fatalf("prompt landed in the chat %+v", msg)
+		}
+	}
+
+	code, body = machinePost(t, h, ip, token, caller.ID, "/agents", routinePayload(routinetool.ToolRun, args))
+	if code != http.StatusOK || !strings.Contains(body, `"error":true`) || !strings.Contains(body, "A run of this routine is already going.") {
+		t.Fatalf("second %d %s", code, body)
+	}
+	if n := routineRunCount(t, h, user.ID, routine.ID); n != 1 {
+		t.Fatalf("second added a row %d", n)
+	}
+}
+
+func TestMachineRunRoutineQueuesBehindReply(t *testing.T) {
+	h := newHarness(t)
+	user, _ := h.account("run-queue@example.com", "Ada", "correct-horse-1")
+	caller := seedCaller(t, h, user, "Ada")
+	routine := makeRoutine(t, h, user.ID, caller.ID, store.ApprovalWait, store.MissedOnce)
+	token := guestToken(t, h, caller)
+	dm := dmThread(t, h, user.ID, caller.ID)
+	runRow, err := h.st.CreateRun(context.Background(), user.ID, dm.ID, caller.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.MarkStreaming(context.Background(), user.ID, runRow.ID); err != nil {
+		t.Fatal(err)
+	}
+	code, body := machinePost(t, h, "203.0.113.85:9", token, caller.ID, "/agents", routinePayload(routinetool.ToolRun, map[string]any{"id": routine.ID}))
+	if code != http.StatusOK || strings.Contains(body, `"error":true`) || !strings.Contains(body, "Waits for the reply in progress") {
+		t.Fatalf("queue %d %s", code, body)
+	}
+	rows, err := h.st.ListRoutineRuns(context.Background(), user.ID, routine.ID, 0)
+	if err != nil || len(rows) != 1 || rows[0].Status != store.RoutineQueued || rows[0].Detail != "Waits for the reply in progress" || rows[0].RunID != "" || rows[0].ThreadID != "" || rows[0].Source != store.RoutineSourceManual {
+		t.Fatalf("queued %v %+v", err, rows)
+	}
+}
+
+func TestMachineRunRoutineRefusesReplace(t *testing.T) {
+	h := newHarness(t)
+	user, _ := h.account("run-replace@example.com", "Ada", "correct-horse-1")
+	caller := seedCaller(t, h, user, "Ada")
+	routine := makeRoutine(t, h, user.ID, caller.ID, store.ApprovalWait, store.MissedOnce)
+	token := guestToken(t, h, caller)
+	fake := host.NewFake()
+	h.srv.SetHost(fake, "example.invalid/castbot-runtime:s09", "https://castbot.example")
+	seedPower(t, h, user.ID, caller.ID, "vm-run", "running", fake)
+	if _, _, err := h.st.BeginReplacement(context.Background(), user.ID, caller.ID, "web:test", "example.invalid/castbot-runtime:next", false); err != nil {
+		t.Fatal(err)
+	}
+	code, body := machinePost(t, h, "203.0.113.86:9", token, caller.ID, "/agents", routinePayload(routinetool.ToolRun, map[string]any{"id": routine.ID}))
+	if code != http.StatusOK || !strings.Contains(body, `"error":true`) || !strings.Contains(body, replaceSentence) {
+		t.Fatalf("replace %d %s", code, body)
+	}
+	if n := routineRunCount(t, h, user.ID, routine.ID); n != 0 {
+		t.Fatalf("replace added a row %d", n)
+	}
+	if strings.Contains(strings.Join(fake.Calls, " "), "wake") {
+		t.Fatal("replace woke the machine")
+	}
+}
+
+func TestRoutineFenceRunsOne(t *testing.T) {
+	h := newHarness(t)
+	user, _ := h.account("run-fence@example.com", "Ada", "correct-horse-1")
+	caller := seedCaller(t, h, user, "Ada")
+	routine := makeRoutine(t, h, user.ID, caller.ID, store.ApprovalWait, store.MissedOnce)
+	block := make(chan struct{})
+	h.srv.SetClient(&scriptClient{block: block})
+	t.Cleanup(func() { close(block) })
+	invalid := "Leave this.\n\n```castbot-routine\n{\"action\":\"run\"}\n```\n"
+	replyRoutine(t, h, user.ID, caller, invalid)
+	kept := agentReplyBody(t, h, user.ID, caller.ID)
+	if !strings.Contains(kept, "castbot-routine") || !strings.Contains(kept, "Leave this.") {
+		t.Fatalf("invalid fence removed %s", kept)
+	}
+	if n := routineRunCount(t, h, user.ID, routine.ID); n != 0 {
+		t.Fatalf("invalid fence started %d", n)
+	}
+	replyRoutine(t, h, user.ID, caller, "Running it now.\n\n```castbot-routine\n{\"action\":\"run\",\"id\":\""+routine.ID+"\",\"user_id\":\"other\"}\n```\n")
+	body := agentReplyBody(t, h, user.ID, caller.ID)
+	if strings.Contains(body, "castbot-routine") || !strings.Contains(body, "Running it now.") {
+		t.Fatalf("fence stayed %s", body)
+	}
+	rows, err := h.st.ListRoutineRuns(context.Background(), user.ID, routine.ID, 0)
+	if err != nil || len(rows) != 1 || rows[0].Source != store.RoutineSourceManual || rows[0].ThreadID == "" || rows[0].AgentID != caller.ID {
+		t.Fatalf("fence run %v %+v", err, rows)
+	}
+	dm := dmThread(t, h, user.ID, caller.ID)
+	if rows[0].ThreadID == dm.ID {
+		t.Fatal("fence used the chat thread")
+	}
+	replyRoutine(t, h, user.ID, caller, "Again.\n\n```castbot-routine\n{\"action\":\"run\",\"id\":\""+routine.ID+"\"}\n```\n")
+	again := agentReplyBody(t, h, user.ID, caller.ID)
+	if strings.Contains(again, "castbot-routine") || !strings.Contains(again, "Again.") || !strings.Contains(again, "A run of this routine is already going.") {
+		t.Fatalf("second fence %s", again)
+	}
+	if n := routineRunCount(t, h, user.ID, routine.ID); n != 1 {
+		t.Fatalf("second fence rows %d", n)
+	}
+}
+
+func routineRunCount(t *testing.T, h *harness, userID, routineID string) int {
+	t.Helper()
+	rows, err := h.st.ListRoutineRuns(context.Background(), userID, routineID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(rows)
 }
 
 func replyRoutine(t *testing.T, h *harness, userID string, caller store.Agent, body string) {

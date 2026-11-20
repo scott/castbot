@@ -382,7 +382,7 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 	if hits != 0 || !strings.Contains(out.String(), agentskill.ToolCreate) || !strings.Contains(out.String(), agentskill.ToolList) {
 		t.Fatalf("list hits %d %s", hits, out.String())
 	}
-	for _, name := range []string{routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete} {
+	for _, name := range []string{routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolRun} {
 		if !strings.Contains(out.String(), name) {
 			t.Fatalf("list missing %s in %s", name, out.String())
 		}
@@ -451,6 +451,14 @@ func TestAgentsMCPForwardsRoutineTools(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Morning digest") || !strings.Contains(posted, `"cron"`) || strings.Contains(posted, "user_id") {
 		t.Fatalf("posted %s out %s", posted, out.String())
+	}
+	out.Reset()
+	runCall := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"` + routinetool.ToolRun + `","arguments":{"id":"abc","user_id":"other","agent_id":"other-agent"}}}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(runCall), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Morning digest") || !strings.Contains(posted, `"id":"abc"`) || strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") {
+		t.Fatalf("run posted %s out %s", posted, out.String())
 	}
 	out.Reset()
 	selfCall := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"` + selftool.ToolUsage + `","arguments":{"user_id":"other","agent_id":"other-agent","query":"notes"}}}` + "\n"

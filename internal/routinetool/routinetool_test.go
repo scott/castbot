@@ -12,7 +12,7 @@ func TestApplyKeepsSkillAndForcesTools(t *testing.T) {
 	if once != twice {
 		t.Fatalf("apply is not stable\n%s\n%s", once, twice)
 	}
-	for _, needle := range []string{"review", "agents", "helper", SkillName, SkillDir, "always-allow", ToolList, ToolCreate, ToolUpdate, ToolDelete} {
+	for _, needle := range []string{"review", "agents", "helper", SkillName, SkillDir, "always-allow", ToolList, ToolCreate, ToolUpdate, ToolDelete, ToolRun} {
 		if !strings.Contains(once, needle) {
 			t.Fatalf("missing %s\n%s", needle, once)
 		}
@@ -79,6 +79,7 @@ func TestParseFence(t *testing.T) {
 		"```castbot-routine\n{\"action\":\"create\",\"name\":\"Morning digest\"}\n```",
 		"```castbot-routine\n{\"action\":\"nope\",\"id\":\"abc\"}\n```",
 		"```castbot-routine\n{\"action\":\"delete\"}\n```",
+		"```castbot-routine\n{\"action\":\"run\"}\n```",
 		"```castbot-routine\nnot json\n```",
 		"no fence here",
 	} {
@@ -89,6 +90,11 @@ func TestParseFence(t *testing.T) {
 		if strings.Contains(raw, "castbot-routine") && !strings.Contains(visible, "castbot-routine") {
 			t.Fatalf("invalid fence was removed %s", raw)
 		}
+	}
+	runOnce := "```castbot-routine\n{\"action\":\"run\",\"id\":\"abc\",\"user_id\":\"other\"}\n```"
+	_, req, ok = Parse(runOnce)
+	if !ok || req.Action != "run" || req.ID != "abc" {
+		t.Fatalf("run %+v %v", req, ok)
 	}
 	upd := "```castbot-routine\n{\"action\":\"update\",\"id\":\"abc\",\"enabled\":false}\n```"
 	_, req, ok = Parse(upd)
