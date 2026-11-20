@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/scott/castbot/internal/agentskill"
+	"github.com/scott/castbot/internal/chattool"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/routinetool"
@@ -70,6 +71,10 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if machinetool.Known(call.Name) {
 			s.machinePower(w, r, userID, call.Name, call.Arguments)
+			return
+		}
+		if chattool.Known(call.Name) {
+			s.machineChat(w, r, userID, call.Name, call.Arguments)
 			return
 		}
 		writeAgentResult(w, "That request was rejected.", true)

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/agentskill"
+	"github.com/scott/castbot/internal/chattool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
@@ -341,7 +342,7 @@ func (s *Supervisor) egressAgents(w http.ResponseWriter, r *http.Request) {
 	switch call.Name {
 	case agentskill.ToolCreate, agentskill.ToolList, routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolRun:
 	default:
-		if !selftool.Known(call.Name) && !grouptool.Known(call.Name) && !machinetool.Known(call.Name) {
+		if !selftool.Known(call.Name) && !grouptool.Known(call.Name) && !machinetool.Known(call.Name) && !chattool.Known(call.Name) {
 			writeAgentReply(w, egresscontract.Rejected, true)
 			return
 		}
