@@ -1,5 +1,5 @@
-// Package routinetool is the skill and fence an agent uses to create and
-// change its own routines. The runtime is not modified. The tools are
+// Package routinetool is the skill and fence an agent uses to create,
+// change, and run its own routines. The runtime is not modified. The tools are
 // listed on the agents MCP server. The control plane reads a
 // castbot-routine fence after the turn when that image does not list them.
 package routinetool
@@ -21,6 +21,8 @@ const (
 	ToolUpdate = "update_routine"
 	// ToolDelete removes one of this agent's routines.
 	ToolDelete = "delete_routine"
+	// ToolRun starts one routine now, in its own thread.
+	ToolRun = "run_routine"
 	// Fence is the markdown language tag used when the tools are absent.
 	Fence = "castbot-routine"
 	// Heading marks the served instructions section. Stored instructions omit it.
@@ -32,7 +34,7 @@ const (
 	// PlaceholderPrompt is the sample prompt in the fence example.
 	PlaceholderPrompt = "PROMPT"
 	// SkillSummary is the one-line description in the skill file and agent.yaml.
-	SkillSummary = "Create and change this agent's routines when the person in this chat asks."
+	SkillSummary = "Create, change, or run this agent's routines when the person in this chat asks."
 )
 
 const skillBody = `Call these tools only when the person in this chat asks you to do something on a schedule, or asks you to change or remove a routine.
@@ -41,7 +43,7 @@ Ask before you call a tool when the time, the days, or what you should do is unc
 
 create_routine needs name, cron, and prompt. cron is 5 fields: minute hour day month weekday. Pass timezone, missed, and approval only when the person named them. timezone is an IANA name. missed is once or skip. approval is wait or deny.
 
-list_routines before you update or delete, and use an id from that list. update_routine changes only the fields you pass. Set enabled to false to pause and true to resume. delete_routine removes one routine.
+list_routines before you update, delete, or run one, and use an id from that list. update_routine changes only the fields you pass. Set enabled to false to pause and true to resume. delete_routine removes one routine. run_routine starts one now, only when the person asked. It runs in its own thread, not this chat.
 
 Do not pass user_id or agent_id. These tools change this agent only.
 
@@ -49,7 +51,7 @@ If the tools are not listed, end your reply with one castbot-routine fence and n
 
 ` + "```castbot-routine\n" + `{"action":"create","name":"NAME","cron":"CRON","prompt":"PROMPT"}` + "\n```" + `
 
-Replace NAME, CRON, and PROMPT with what they asked for. Use action update or delete with an id from list_routines when they asked to change or remove one. Add timezone, missed, or approval only when they named them. Add enabled only when they asked to pause or resume.`
+Replace NAME, CRON, and PROMPT with what they asked for. Use action update or delete with an id from list_routines when they asked to change or remove one. Use action run with an id from list_routines when they asked to run one now. Add timezone, missed, or approval only when they named them. Add enabled only when they asked to pause or resume.`
 
 // SkillMarkdown is the SKILL.md file, frontmatter plus body.
 func SkillMarkdown() string {

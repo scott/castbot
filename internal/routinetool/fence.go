@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Request is one create, update, or delete asked for in a reply.
+// Request is one create, update, delete, or run asked for in a reply.
 // A nil field was omitted. Create requires name, cron, and prompt.
 type Request struct {
 	Action   string
@@ -75,7 +75,7 @@ func decodeFence(raw string) (Request, bool) {
 		if strings.TrimSpace(*req.Name) == PlaceholderName || strings.TrimSpace(*req.Cron) == PlaceholderCron || strings.TrimSpace(*req.Prompt) == PlaceholderPrompt {
 			return Request{}, false
 		}
-	case "update", "delete":
+	case "update", "delete", "run":
 		if req.ID == "" {
 			return Request{}, false
 		}

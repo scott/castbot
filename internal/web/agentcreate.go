@@ -57,7 +57,7 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		text, failed, _ := s.createRequestedAgent(r.Context(), user, caller, args.Description, args.Name, "")
 		writeAgentResult(w, text, failed)
-	case routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete:
+	case routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolRun:
 		s.machineRoutine(w, r, userID, call.Name, call.Arguments)
 	default:
 		if selftool.Known(call.Name) {

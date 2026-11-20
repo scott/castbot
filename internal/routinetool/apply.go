@@ -6,7 +6,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Apply adds the routines skill and forces the four routine tools to
+// Apply adds the routines skill and forces the five routine tools to
 // always-allow. It does not add an MCP server. Invalid YAML, aliases, and
 // a non-mapping root are returned unchanged.
 func Apply(text string) string {
@@ -25,7 +25,7 @@ func Apply(text string) string {
 		return text
 	}
 	ensureSkill(root)
-	for _, name := range []string{ToolList, ToolCreate, ToolUpdate, ToolDelete} {
+	for _, name := range []string{ToolList, ToolCreate, ToolUpdate, ToolDelete, ToolRun} {
 		ensurePerm(root, name)
 	}
 	raw, err := yaml.Marshal(&doc)
