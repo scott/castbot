@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/agentskill"
+	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
@@ -39,7 +40,8 @@ func Archive(yaml, instructions string) ([]byte, string, error) {
 // ArchiveFiles adds mcp shim files and the served skill files.
 // A shim name must be mcp/<name>.yaml. Skill paths are agentskill.SkillFile,
 // routinetool.SkillFile, secretask.SkillFile, selftool.SkillFile,
-// grouptool.SkillFile, machinetool.SkillFile, and edittool.SkillFile.
+// grouptool.SkillFile, machinetool.SkillFile, edittool.SkillFile, and
+// approvetool.SkillFile.
 // A nil or empty map matches Archive of the two main files.
 func ArchiveFiles(yaml, instructions string, extras map[string]string) ([]byte, string, error) {
 	if yaml == "" || instructions == "" {
@@ -77,7 +79,7 @@ func safeExtra(name string) bool {
 	if strings.Contains(name, "..") || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") {
 		return false
 	}
-	if name == agentskill.SkillFile || name == routinetool.SkillFile || name == secretask.SkillFile || name == selftool.SkillFile || name == grouptool.SkillFile || name == machinetool.SkillFile || name == edittool.SkillFile {
+	if name == agentskill.SkillFile || name == routinetool.SkillFile || name == secretask.SkillFile || name == selftool.SkillFile || name == grouptool.SkillFile || name == machinetool.SkillFile || name == edittool.SkillFile || name == approvetool.SkillFile {
 		return true
 	}
 	rest, ok := strings.CutPrefix(name, "mcp/")

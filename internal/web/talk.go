@@ -27,6 +27,7 @@ func (s *Server) settleTalk(job run.Job, status string) {
 		s.maybeGroup(job)
 		s.maybeMachine(job)
 		s.maybeEdit(job)
+		s.maybeApprove(job)
 		s.appendDeliveryLinks(job)
 	}
 	s.finishDispatch(job, status)

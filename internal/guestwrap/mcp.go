@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/agentskill"
+	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
@@ -223,6 +224,9 @@ func agentTools() []any {
 	for _, spec := range edittool.Specs() {
 		tools = append(tools, editSchema(spec))
 	}
+	for _, spec := range approvetool.Specs() {
+		tools = append(tools, approvalSchema(spec))
+	}
 	return tools
 }
 
@@ -370,6 +374,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 			payload = map[string]any{"name": call.Name, "arguments": forwarded}
 			break
 		}
+		if approvetool.Known(call.Name) {
+			forwarded, ok := approvalForwardArgs(call.Arguments)
+			if !ok {
+				return egresscontract.Rejected, true
+			}
+			payload = map[string]any{"name": call.Name, "arguments": forwarded}
+			break
+		}
 		if !grouptool.Known(call.Name) {
 			return egresscontract.Rejected, true
 		}
@@ -439,6 +451,38 @@ func machineForwardArgs(raw json.RawMessage) (map[string]any, bool) {
 		return nil, false
 	}
 	return map[string]any{}, true
+}
+
+func approvalSchema(spec approvetool.Spec) map[string]any {
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"card": map[string]any{"type": "string", "description": "Tool name, words on the card, or the card id. Leave it out when only one approval is waiting."},
+			},
+		},
+	}
+}
+
+func approvalForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	out := map[string]any{}
+	if value, ok := args["card"]; ok {
+		text, ok := value.(string)
+		if !ok {
+			return nil, false
+		}
+		out["card"] = text
+	}
+	return out, true
 }
 
 func editForwardArgs(raw json.RawMessage) (map[string]any, bool) {
