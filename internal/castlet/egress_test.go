@@ -385,19 +385,19 @@ func TestAgentsForwardRoutines(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, `{"text":"Morning digest. Every weekday at 8:00 AM.","error":false}`)
 	})
-	for _, name := range []string{routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete} {
+	for _, name := range []string{routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolRun} {
 		rec := httptest.NewRecorder()
 		sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+name+`","arguments":{}}`))
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Morning digest") || strings.Contains(rec.Body.String(), fixtureValue) {
 			t.Fatalf("%s %d %s", name, rec.Code, rec.Body.String())
 		}
 	}
-	if hit.count("/agents") != 4 {
+	if hit.count("/agents") != 5 {
 		t.Fatalf("forwards %d", hit.count("/agents"))
 	}
 	rec := httptest.NewRecorder()
 	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
-	if hit.count("/agents") != 4 || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
+	if hit.count("/agents") != 5 || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
 		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
 	}
 }
