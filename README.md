@@ -31,4 +31,18 @@ On a new host, as root:
 curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh | bash
 ```
 
-The script installs the control plane, asks for the first account, and creates an agent named CastBot. CastBot is the personal assistant for that account, knows how to use castbot, and can delegate work to other agents. Details are in `docs/INSTALL.md`.
+The script installs the control plane, creates the first account, and creates the first agent. Prompts are read from the terminal. It asks for an email, a display name, and a password of 12 to 1024 characters, then an optional public hostname.
+
+With a hostname, it installs a reverse proxy, opens ports 80 and 443, and sets the public URL to `https://` that name. Point DNS at the host so the proxy can obtain a certificate. Sign in at `https://<hostname>/login`.
+
+Without a hostname, castbot listens on `127.0.0.1:8080` only. From your computer, tunnel port 8080 and open `http://127.0.0.1:8080/login`.
+
+The script prints an authenticator secret once and copies it to `/root/castbot-first-login.txt` (mode 0600). Add the secret to an authenticator, then delete that file. The session key and the secrets key are generated in `/etc/castbot/castbot.env` (mode 0600). They are not printed.
+
+The first agent is named CastBot and is placed in the pinned section. CastBot is the personal assistant for that account, knows how to use castbot, and can delegate work to other agents. The agent stays in draft until a model key is saved and its machine is started. The first chat line says to add a key and start the machine. The machine says hello once, on the first healthy start.
+
+A second run keeps the env file and does not rewrite CastBot. Add a machine token or a runtime image by editing `/etc/castbot/castbot.env`. The machine host stays off until the token, the image, and an https public URL are all set.
+
+For a host with no terminal, set `CASTBOT_INSTALL_NONINTERACTIVE=1` plus `CASTBOT_ADMIN_EMAIL`, `CASTBOT_ADMIN_NAME`, and `CASTBOT_ADMIN_PASSWORD`. The script refuses to run under `bash -x`.
+
+`docs/INSTALL.md` lists the paths, the firewall, and every setting. Later updates use `scripts/deploy.sh` from a laptop.
