@@ -14,6 +14,7 @@ import (
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
+	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/selftool"
 )
@@ -439,6 +440,30 @@ func TestAgentsForwardGroups(t *testing.T) {
 	}
 	if hit.count("/agents") != len(grouptool.Specs()) {
 		t.Fatalf("forwards %d", hit.count("/agents"))
+	}
+}
+
+func TestAgentsForwardMachine(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/agents") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"text":"The machine is paused. A chat message wakes it.","error":false}`)
+	})
+	for _, spec := range machinetool.Specs() {
+		rec := httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+spec.Name+`","arguments":{}}`))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "paused") || strings.Contains(rec.Body.String(), fixtureValue) {
+			t.Fatalf("%s %d %s", spec.Name, rec.Code, rec.Body.String())
+		}
+	}
+	if hit.count("/agents") != len(machinetool.Specs()) {
+		t.Fatalf("forwards %d", hit.count("/agents"))
+	}
+	rec := httptest.NewRecorder()
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"replace_machine","arguments":{}}`))
+	if hit.count("/agents") != len(machinetool.Specs()) || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
+		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
+	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
 	"github.com/scott/castbot/internal/selftool"
@@ -394,6 +395,11 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 			t.Fatalf("list missing %s in %s", spec.Name, out.String())
 		}
 	}
+	for _, spec := range machinetool.Specs() {
+		if !strings.Contains(out.String(), spec.Name) {
+			t.Fatalf("list missing %s in %s", spec.Name, out.String())
+		}
+	}
 	out.Reset()
 	call := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + agentskill.ToolCreate + `","arguments":{"description":"Sort the support inbox and draft replies.","name":"Quill","user_id":"other"}}}` + "\n"
 	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
@@ -473,6 +479,35 @@ func TestAgentsMCPForwardsGroupTools(t *testing.T) {
 	}
 	out.Reset()
 	bad := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"` + grouptool.ToolMoveAgents + `","arguments":["nope"]}}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, "http://127.0.0.1:1", strings.NewReader(bad), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), egresscontract.Rejected) {
+		t.Fatal(out.String())
+	}
+}
+
+func TestAgentsMCPForwardsMachineTools(t *testing.T) {
+	var posted string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		posted = string(raw)
+		if strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") || strings.Contains(posted, fixtureValue) {
+			t.Errorf("forwarded a scoped id or the env value")
+		}
+		_, _ = io.WriteString(w, `{"text":"The machine is paused. A chat message wakes it.","error":false}`)
+	}))
+	defer srv.Close()
+	call := `{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"` + machinetool.ToolPause + `","arguments":{"user_id":"other","agent_id":"other-agent"}}}` + "\n"
+	var out strings.Builder
+	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "paused") || strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") {
+		t.Fatalf("posted %s out %s", posted, out.String())
+	}
+	out.Reset()
+	bad := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"` + machinetool.ToolWake + `","arguments":["nope"]}}` + "\n"
 	if err := ServeMCP(agentskill.ServerName, "http://127.0.0.1:1", strings.NewReader(bad), &out); err != nil {
 		t.Fatal(err)
 	}

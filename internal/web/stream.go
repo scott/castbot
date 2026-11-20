@@ -459,6 +459,7 @@ func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User
 	s.maybeSecret(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	s.maybeSelf(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	s.maybeGroup(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
+	s.maybeMachine(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	msg, err := s.store.GetMessage(ctx, user.ID, messageID)
 	if err != nil {
 		return err
@@ -488,6 +489,7 @@ func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User
 		body += chrome
 	}
 	body += s.sideOOB(ctx, user, runRow.AgentID)
+	body += s.machineChromeFrame(ctx, user, runRow)
 	body += s.sidebarFrame(ctx, user, runRow, csrf)
 	body += s.sectionsFrame(ctx, user, runRow, csrf)
 	clearDwell(runRow.ID)
