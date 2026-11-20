@@ -16,6 +16,7 @@ import (
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
+	"github.com/scott/castbot/internal/replacetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/secretstool"
@@ -100,6 +101,10 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if secretstool.Known(call.Name) {
 			s.machineVault(w, r, userID, call.Name, call.Arguments)
+			return
+		}
+		if replacetool.Known(call.Name) {
+			s.machineReplace(w, r, userID, call.Name, call.Arguments)
 			return
 		}
 		writeAgentResult(w, "That request was rejected.", true)

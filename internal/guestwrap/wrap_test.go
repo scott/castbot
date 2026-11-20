@@ -18,6 +18,7 @@ import (
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
+	"github.com/scott/castbot/internal/replacetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
 	"github.com/scott/castbot/internal/secretstool"
@@ -436,6 +437,11 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 			t.Fatalf("list missing %s in %s", spec.Name, out.String())
 		}
 	}
+	for _, spec := range replacetool.Specs() {
+		if !strings.Contains(out.String(), spec.Name) {
+			t.Fatalf("list missing %s in %s", spec.Name, out.String())
+		}
+	}
 	out.Reset()
 	call := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + agentskill.ToolCreate + `","arguments":{"description":"Sort the support inbox and draft replies.","name":"Quill","user_id":"other"}}}` + "\n"
 	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
@@ -478,6 +484,14 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 	}
 	if !strings.Contains(posted, `"secret":"NOTES_TOKEN"`) || !strings.Contains(posted, `"agent":"Pip"`) || strings.Contains(posted, "value") || strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") {
 		t.Fatalf("grant posted %s", posted)
+	}
+	out.Reset()
+	replaceCall := `{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"` + replacetool.ToolReplace + `","arguments":{"confirm":"yes","user_id":"other","agent_id":"other-agent","value":"secret-token"}}}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(replaceCall), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(posted, `"confirm":"yes"`) || strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") || strings.Contains(posted, "value") {
+		t.Fatalf("replace posted %s", posted)
 	}
 	out.Reset()
 	bad := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"delete_agent","arguments":{}}}` + "\n"
