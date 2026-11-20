@@ -14,6 +14,7 @@ import (
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
+	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
 	"github.com/scott/castbot/internal/selftool"
@@ -215,6 +216,9 @@ func agentTools() []any {
 	for _, spec := range selftool.Specs() {
 		tools = append(tools, selfSchema(spec))
 	}
+	for _, spec := range machinetool.Specs() {
+		tools = append(tools, machineSchema(spec))
+	}
 	return tools
 }
 
@@ -265,6 +269,17 @@ func organizeSchema(spec grouptool.Spec) map[string]any {
 		"name":        spec.Name,
 		"description": spec.Description,
 		"inputSchema": schema,
+	}
+}
+
+func machineSchema(spec machinetool.Spec) map[string]any {
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
 	}
 }
 
@@ -335,6 +350,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 			payload = map[string]any{"name": call.Name, "arguments": forwarded}
 			break
 		}
+		if machinetool.Known(call.Name) {
+			forwarded, ok := machineForwardArgs(call.Arguments)
+			if !ok {
+				return egresscontract.Rejected, true
+			}
+			payload = map[string]any{"name": call.Name, "arguments": forwarded}
+			break
+		}
 		if !grouptool.Known(call.Name) {
 			return egresscontract.Rejected, true
 		}
@@ -374,6 +397,17 @@ func selfForwardArgs(raw json.RawMessage) (map[string]any, bool) {
 		out["id"] = id
 	}
 	return out, true
+}
+
+func machineForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	return map[string]any{}, true
 }
 
 func groupForwardArgs(raw json.RawMessage) (map[string]any, bool) {
