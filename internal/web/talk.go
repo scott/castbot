@@ -30,6 +30,7 @@ func (s *Server) settleTalk(job run.Job, status string) {
 		s.maybeApprove(job)
 		s.maybeChat(job)
 		s.maybeSettings(job)
+		s.maybeConnection(job)
 		s.appendDeliveryLinks(job)
 	}
 	s.finishDispatch(job, status)

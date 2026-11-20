@@ -14,6 +14,7 @@ import (
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/chattool"
+	"github.com/scott/castbot/internal/connectiontool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
@@ -440,6 +441,25 @@ func TestAgentsForwardSettings(t *testing.T) {
 		}
 	}
 	if hit.count("/agents") != len(settingstool.Specs()) {
+		t.Fatalf("forwards %d", hit.count("/agents"))
+	}
+}
+
+func TestAgentsForwardConnections(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/agents") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"text":"Saved. Every agent you own uses these choices.","error":false}`)
+	})
+	for _, spec := range connectiontool.Specs() {
+		rec := httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+spec.Name+`","arguments":{}}`))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Saved. Every agent you own uses these choices.") || strings.Contains(rec.Body.String(), fixtureValue) {
+			t.Fatalf("%s %d %s", spec.Name, rec.Code, rec.Body.String())
+		}
+	}
+	if hit.count("/agents") != len(connectiontool.Specs()) {
 		t.Fatalf("forwards %d", hit.count("/agents"))
 	}
 }

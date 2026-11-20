@@ -14,6 +14,7 @@ import (
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/chattool"
+	"github.com/scott/castbot/internal/connectiontool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
@@ -246,6 +247,9 @@ func agentTools() []any {
 	for _, spec := range settingstool.Specs() {
 		tools = append(tools, settingsSchema(spec))
 	}
+	for _, spec := range connectiontool.Specs() {
+		tools = append(tools, connectionSchema(spec))
+	}
 	return tools
 }
 
@@ -417,6 +421,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 			payload = map[string]any{"name": call.Name, "arguments": forwarded}
 			break
 		}
+		if connectiontool.Known(call.Name) {
+			forwarded, ok := connectionForwardArgs(call.Arguments)
+			if !ok {
+				return egresscontract.Rejected, true
+			}
+			payload = map[string]any{"name": call.Name, "arguments": forwarded}
+			break
+		}
 		if !grouptool.Known(call.Name) {
 			return egresscontract.Rejected, true
 		}
@@ -524,6 +536,52 @@ func settingsSchema(spec settingstool.Spec) map[string]any {
 		"description": spec.Description,
 		"inputSchema": schema,
 	}
+}
+
+func connectionSchema(spec connectiontool.Spec) map[string]any {
+	props := map[string]any{}
+	var required []string
+	for _, arg := range spec.Args {
+		props[arg.Name] = map[string]any{"type": "string", "description": arg.Description}
+		if arg.Required {
+			required = append(required, arg.Name)
+		}
+	}
+	schema := map[string]any{
+		"type":       "object",
+		"properties": props,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": schema,
+	}
+}
+
+func connectionForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	out := map[string]any{}
+	for _, key := range []string{"connection", "tool", "level"} {
+		value, ok := args[key]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			return nil, false
+		}
+		out[key] = text
+	}
+	return out, true
 }
 
 func settingsForwardArgs(raw json.RawMessage) (map[string]any, bool) {

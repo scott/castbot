@@ -12,6 +12,7 @@ import (
 	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/bundle"
 	"github.com/scott/castbot/internal/chattool"
+	"github.com/scott/castbot/internal/connectiontool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
@@ -113,12 +114,12 @@ func (s *Server) writeBundle(w http.ResponseWriter, r *http.Request, userID stri
 // serveBundle checks the stored tar, then serves a copy that includes the
 // create-agent skill, the routines skill, the API key skill, the account
 // skill, the groups skill, the machine skill, the edit skill, the approvals
-// skill, the chat skill, the settings skill, and those instructions sections. The header sum is the served bytes.
+// skill, the chat skill, the settings skill, the connections skill, and those instructions sections. The header sum is the served bytes.
 // A later pull is stable because the additions are deterministic.
 func serveBundle(yaml, instructions string, extras map[string]string, stored []byte, storedSum string) ([]byte, string) {
-	yaml = settingstool.Apply(chattool.Apply(approvetool.Apply(edittool.Apply(machinetool.Apply(grouptool.Apply(selftool.Apply(secretask.Apply(routinetool.Apply(agentskill.Apply(yaml))))))))))
-	notes := settingstool.Instructions(chattool.Instructions(approvetool.Instructions(edittool.Instructions(machinetool.Instructions(grouptool.Instructions(selftool.Instructions(secretask.Instructions(routinetool.Instructions(agentskill.Instructions(instructions))))))))))
-	extras = settingstool.MergeExtras(chattool.MergeExtras(approvetool.MergeExtras(edittool.MergeExtras(machinetool.MergeExtras(grouptool.MergeExtras(selftool.MergeExtras(secretask.MergeExtras(routinetool.MergeExtras(agentskill.MergeExtras(extras))))))))))
+	yaml = connectiontool.Apply(settingstool.Apply(chattool.Apply(approvetool.Apply(edittool.Apply(machinetool.Apply(grouptool.Apply(selftool.Apply(secretask.Apply(routinetool.Apply(agentskill.Apply(yaml)))))))))))
+	notes := connectiontool.Instructions(settingstool.Instructions(chattool.Instructions(approvetool.Instructions(edittool.Instructions(machinetool.Instructions(grouptool.Instructions(selftool.Instructions(secretask.Instructions(routinetool.Instructions(agentskill.Instructions(instructions)))))))))))
+	extras = connectiontool.MergeExtras(settingstool.MergeExtras(chattool.MergeExtras(approvetool.MergeExtras(edittool.MergeExtras(machinetool.MergeExtras(grouptool.MergeExtras(selftool.MergeExtras(secretask.MergeExtras(routinetool.MergeExtras(agentskill.MergeExtras(extras)))))))))))
 	raw, sum, err := bundle.ArchiveFiles(yaml, notes, extras)
 	if err != nil || sum == "" {
 		return stored, storedSum
