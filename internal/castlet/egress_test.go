@@ -20,6 +20,7 @@ import (
 	"github.com/scott/castbot/internal/machinetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/selftool"
+	"github.com/scott/castbot/internal/settingstool"
 )
 
 const fixtureValue = "fixture-should-not-appear"
@@ -420,6 +421,25 @@ func TestAgentsForwardChat(t *testing.T) {
 		}
 	}
 	if hit.count("/agents") != len(chattool.Specs()) {
+		t.Fatalf("forwards %d", hit.count("/agents"))
+	}
+}
+
+func TestAgentsForwardSettings(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/agents") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"text":"Name saved.","error":false}`)
+	})
+	for _, spec := range settingstool.Specs() {
+		rec := httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+spec.Name+`","arguments":{}}`))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Name saved.") || strings.Contains(rec.Body.String(), fixtureValue) {
+			t.Fatalf("%s %d %s", spec.Name, rec.Code, rec.Body.String())
+		}
+	}
+	if hit.count("/agents") != len(settingstool.Specs()) {
 		t.Fatalf("forwards %d", hit.count("/agents"))
 	}
 }

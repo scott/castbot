@@ -21,6 +21,7 @@ import (
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
 	"github.com/scott/castbot/internal/selftool"
+	"github.com/scott/castbot/internal/settingstool"
 )
 
 // ServeMCP speaks newline-delimited JSON-RPC on stdin and stdout.
@@ -242,6 +243,9 @@ func agentTools() []any {
 	for _, spec := range chattool.Specs() {
 		tools = append(tools, chatSchema(spec))
 	}
+	for _, spec := range settingstool.Specs() {
+		tools = append(tools, settingsSchema(spec))
+	}
 	return tools
 }
 
@@ -405,6 +409,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 			payload = map[string]any{"name": call.Name, "arguments": forwarded}
 			break
 		}
+		if settingstool.Known(call.Name) {
+			forwarded, ok := settingsForwardArgs(call.Arguments)
+			if !ok {
+				return egresscontract.Rejected, true
+			}
+			payload = map[string]any{"name": call.Name, "arguments": forwarded}
+			break
+		}
 		if !grouptool.Known(call.Name) {
 			return egresscontract.Rejected, true
 		}
@@ -489,6 +501,52 @@ func chatSchema(spec chattool.Spec) map[string]any {
 			"properties": props,
 		},
 	}
+}
+
+func settingsSchema(spec settingstool.Spec) map[string]any {
+	props := map[string]any{}
+	var required []string
+	for _, arg := range spec.Args {
+		props[arg.Name] = map[string]any{"type": "string", "description": arg.Description}
+		if arg.Required {
+			required = append(required, arg.Name)
+		}
+	}
+	schema := map[string]any{
+		"type":       "object",
+		"properties": props,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": schema,
+	}
+}
+
+func settingsForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	out := map[string]any{}
+	for _, key := range []string{"name", "theme", "email", "invite"} {
+		value, ok := args[key]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			return nil, false
+		}
+		out[key] = text
+	}
+	return out, true
 }
 
 func chatForwardArgs(raw json.RawMessage) (map[string]any, bool) {

@@ -18,6 +18,7 @@ import (
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/selftool"
+	"github.com/scott/castbot/internal/settingstool"
 	"github.com/scott/castbot/internal/store"
 )
 
@@ -85,6 +86,10 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if chattool.Known(call.Name) {
 			s.machineChat(w, r, userID, call.Name, call.Arguments)
+			return
+		}
+		if settingstool.Known(call.Name) {
+			s.machineSettings(w, r, userID, call.Name, call.Arguments)
 			return
 		}
 		writeAgentResult(w, "That request was rejected.", true)
