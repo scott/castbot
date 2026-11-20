@@ -19,6 +19,7 @@ import (
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
+	"github.com/scott/castbot/internal/replacetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretstool"
 	"github.com/scott/castbot/internal/selftool"
@@ -484,6 +485,25 @@ func TestAgentsForwardVault(t *testing.T) {
 	}
 }
 
+func TestAgentsForwardReplace(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/agents") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"text":"Chat is paused until it is done.","error":false}`)
+	})
+	for _, spec := range replacetool.Specs() {
+		rec := httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+spec.Name+`","arguments":{}}`))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Chat is paused until it is done.") || strings.Contains(rec.Body.String(), fixtureValue) {
+			t.Fatalf("%s %d %s", spec.Name, rec.Code, rec.Body.String())
+		}
+	}
+	if hit.count("/agents") != len(replacetool.Specs()) {
+		t.Fatalf("forwards %d", hit.count("/agents"))
+	}
+}
+
 func TestAgentsForwardSelf(t *testing.T) {
 	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/agents") {
@@ -543,7 +563,7 @@ func TestAgentsForwardMachine(t *testing.T) {
 		t.Fatalf("forwards %d", hit.count("/agents"))
 	}
 	rec := httptest.NewRecorder()
-	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"replace_machine","arguments":{}}`))
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
 	if hit.count("/agents") != len(machinetool.Specs()) || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
 		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
 	}

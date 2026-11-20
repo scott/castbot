@@ -24,6 +24,7 @@ import (
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
+	"github.com/scott/castbot/internal/replacetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
 	"github.com/scott/castbot/internal/secretstool"
@@ -83,7 +84,7 @@ func safeExtra(name string) bool {
 	if strings.Contains(name, "..") || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") {
 		return false
 	}
-	if name == agentskill.SkillFile || name == routinetool.SkillFile || name == secretask.SkillFile || name == selftool.SkillFile || name == grouptool.SkillFile || name == machinetool.SkillFile || name == edittool.SkillFile || name == approvetool.SkillFile || name == chattool.SkillFile || name == settingstool.SkillFile || name == connectiontool.SkillFile || name == secretstool.SkillFile {
+	if name == agentskill.SkillFile || name == routinetool.SkillFile || name == secretask.SkillFile || name == selftool.SkillFile || name == grouptool.SkillFile || name == machinetool.SkillFile || name == edittool.SkillFile || name == approvetool.SkillFile || name == chattool.SkillFile || name == settingstool.SkillFile || name == connectiontool.SkillFile || name == secretstool.SkillFile || name == replacetool.SkillFile {
 		return true
 	}
 	rest, ok := strings.CutPrefix(name, "mcp/")
