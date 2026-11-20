@@ -15,6 +15,7 @@ import (
 	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/chattool"
 	"github.com/scott/castbot/internal/connectiontool"
+	"github.com/scott/castbot/internal/deletetool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
@@ -372,7 +373,7 @@ func TestAgentsForwardIgnoresProviderStatus(t *testing.T) {
 		t.Fatalf("forwards %d", hit.count("/agents"))
 	}
 	rec = httptest.NewRecorder()
-	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"sign_out","arguments":{}}`))
 	if hit.count("/agents") != 1 || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
 		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
 	}
@@ -403,7 +404,7 @@ func TestAgentsForwardRoutines(t *testing.T) {
 		t.Fatalf("forwards %d", hit.count("/agents"))
 	}
 	rec := httptest.NewRecorder()
-	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"sign_out","arguments":{}}`))
 	if hit.count("/agents") != 5 || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
 		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
 	}
@@ -504,6 +505,25 @@ func TestAgentsForwardReplace(t *testing.T) {
 	}
 }
 
+func TestAgentsForwardDelete(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/agents") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"text":"Type Ada to delete this machine.","error":false}`)
+	})
+	for _, spec := range deletetool.Specs() {
+		rec := httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+spec.Name+`","arguments":{}}`))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Type Ada to delete this machine.") || strings.Contains(rec.Body.String(), fixtureValue) {
+			t.Fatalf("%s %d %s", spec.Name, rec.Code, rec.Body.String())
+		}
+	}
+	if hit.count("/agents") != len(deletetool.Specs()) {
+		t.Fatalf("forwards %d", hit.count("/agents"))
+	}
+}
+
 func TestAgentsForwardSelf(t *testing.T) {
 	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/agents") {
@@ -520,7 +540,7 @@ func TestAgentsForwardSelf(t *testing.T) {
 		t.Fatalf("forwards %d", hit.count("/agents"))
 	}
 	rec = httptest.NewRecorder()
-	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"sign_out","arguments":{}}`))
 	if hit.count("/agents") != 1 || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
 		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
 	}
@@ -563,7 +583,7 @@ func TestAgentsForwardMachine(t *testing.T) {
 		t.Fatalf("forwards %d", hit.count("/agents"))
 	}
 	rec := httptest.NewRecorder()
-	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"sign_out","arguments":{}}`))
 	if hit.count("/agents") != len(machinetool.Specs()) || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
 		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
 	}
@@ -612,7 +632,7 @@ func TestAgentsForwardApproval(t *testing.T) {
 		t.Fatalf("forwards %d", hit.count("/agents"))
 	}
 	rec := httptest.NewRecorder()
-	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"delete_agent","arguments":{}}`))
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"sign_out","arguments":{}}`))
 	if hit.count("/agents") != len(approvetool.Specs()) || !strings.Contains(rec.Body.String(), egresscontract.Rejected) {
 		t.Fatalf("unknown tool %d %s", hit.count("/agents"), rec.Body.String())
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/scott/castbot/internal/chattool"
 	"github.com/scott/castbot/internal/connectiontool"
 	"github.com/scott/castbot/internal/cron"
+	"github.com/scott/castbot/internal/deletetool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/host"
@@ -322,8 +323,12 @@ func TestServedBundleCarriesRoutineSkill(t *testing.T) {
 	if err != nil || !strings.Contains(string(replaceSkill), replacetool.SkillName) || !strings.Contains(string(replaceSkill), replacetool.Fence) || strings.Contains(string(replaceSkill), replacetool.Heading) {
 		t.Fatal("replace skill was not installed")
 	}
+	deleteSkill, err := os.ReadFile(filepath.Join(dir, deletetool.SkillFile))
+	if err != nil || !strings.Contains(string(deleteSkill), deletetool.SkillName) || !strings.Contains(string(deleteSkill), deletetool.Fence) || strings.Contains(string(deleteSkill), deletetool.Heading) {
+		t.Fatal("delete skill was not installed")
+	}
 	notes, err := os.ReadFile(filepath.Join(dir, "instructions.md"))
-	if err != nil || !strings.Contains(string(notes), routinetool.Heading) || !strings.Contains(string(notes), agentskill.Heading) || !strings.Contains(string(notes), selftool.Heading) || !strings.Contains(string(notes), grouptool.Heading) || !strings.Contains(string(notes), machinetool.Heading) || !strings.Contains(string(notes), edittool.Heading) || !strings.Contains(string(notes), approvetool.Heading) || !strings.Contains(string(notes), chattool.Heading) || !strings.Contains(string(notes), settingstool.Heading) || !strings.Contains(string(notes), connectiontool.Heading) || !strings.Contains(string(notes), secretstool.Heading) || !strings.Contains(string(notes), replacetool.Heading) || !strings.Contains(string(notes), "Be brief.") {
+	if err != nil || !strings.Contains(string(notes), routinetool.Heading) || !strings.Contains(string(notes), agentskill.Heading) || !strings.Contains(string(notes), selftool.Heading) || !strings.Contains(string(notes), grouptool.Heading) || !strings.Contains(string(notes), machinetool.Heading) || !strings.Contains(string(notes), edittool.Heading) || !strings.Contains(string(notes), approvetool.Heading) || !strings.Contains(string(notes), chattool.Heading) || !strings.Contains(string(notes), settingstool.Heading) || !strings.Contains(string(notes), connectiontool.Heading) || !strings.Contains(string(notes), secretstool.Heading) || !strings.Contains(string(notes), replacetool.Heading) || !strings.Contains(string(notes), deletetool.Heading) || !strings.Contains(string(notes), "Be brief.") {
 		t.Fatal("guides missing")
 	}
 	tr := tar.NewReader(bytes.NewReader([]byte(packed)))
@@ -339,7 +344,7 @@ func TestServedBundleCarriesRoutineSkill(t *testing.T) {
 		if hdr.Name == "agent.yaml" {
 			body, _ := io.ReadAll(tr)
 			text := string(body)
-			for _, name := range []string{routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolList, routinetool.ToolRun, agentskill.ToolCreate, selftool.ToolUsage, grouptool.ToolCreateGroup, grouptool.ToolMoveAgents, machinetool.ToolPause, machinetool.ToolRefresh, edittool.ToolUpdate, approvetool.ToolApprove, approvetool.ToolDeny, approvetool.ToolAlways, chattool.ToolStop, chattool.ToolRetry, chattool.ToolList, chattool.ToolOpen, settingstool.ToolName, settingstool.ToolTheme, settingstool.ToolInvite, settingstool.ToolRevoke, connectiontool.ToolDisconnect, connectiontool.ToolLevel, secretstool.ToolGrant, secretstool.ToolRevoke, secretstool.ToolMove, secretstool.ToolDelete, replacetool.ToolReplace, replacetool.ToolRollback} {
+			for _, name := range []string{routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolList, routinetool.ToolRun, agentskill.ToolCreate, selftool.ToolUsage, grouptool.ToolCreateGroup, grouptool.ToolMoveAgents, machinetool.ToolPause, machinetool.ToolRefresh, edittool.ToolUpdate, approvetool.ToolApprove, approvetool.ToolDeny, approvetool.ToolAlways, chattool.ToolStop, chattool.ToolRetry, chattool.ToolList, chattool.ToolOpen, settingstool.ToolName, settingstool.ToolTheme, settingstool.ToolInvite, settingstool.ToolRevoke, connectiontool.ToolDisconnect, connectiontool.ToolLevel, secretstool.ToolGrant, secretstool.ToolRevoke, secretstool.ToolMove, secretstool.ToolDelete, replacetool.ToolReplace, replacetool.ToolRollback, deletetool.ToolDelete} {
 				if !strings.Contains(text, name+": always-allow") && !strings.Contains(text, name+":always-allow") {
 					if !strings.Contains(text, name) || !strings.Contains(text, "always-allow") {
 						t.Fatalf("served yaml missing %s\n%s", name, text)

@@ -13,6 +13,7 @@ import (
 	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/chattool"
 	"github.com/scott/castbot/internal/connectiontool"
+	"github.com/scott/castbot/internal/deletetool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
@@ -105,6 +106,10 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if replacetool.Known(call.Name) {
 			s.machineReplace(w, r, userID, call.Name, call.Arguments)
+			return
+		}
+		if deletetool.Known(call.Name) {
+			s.machineDelete(w, r, userID, call.Name, call.Arguments)
 			return
 		}
 		writeAgentResult(w, "That request was rejected.", true)
