@@ -12,6 +12,7 @@ import (
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/approvetool"
 	"github.com/scott/castbot/internal/chattool"
+	"github.com/scott/castbot/internal/connectiontool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
@@ -90,6 +91,10 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if settingstool.Known(call.Name) {
 			s.machineSettings(w, r, userID, call.Name, call.Arguments)
+			return
+		}
+		if connectiontool.Known(call.Name) {
+			s.machineConnection(w, r, userID, call.Name, call.Arguments)
 			return
 		}
 		writeAgentResult(w, "That request was rejected.", true)
