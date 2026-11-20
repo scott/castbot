@@ -22,3 +22,13 @@ go run ./cmd/castbot
 ```
 
 `create-user` reads the password from the terminal and prints the authenticator secret once. It refuses to run when any account already exists. Open the address from the log, which defaults to `127.0.0.1:8080`.
+
+## Install
+
+On a new host, as root:
+
+```
+curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh | bash
+```
+
+The script installs the control plane, asks for the first account, and creates an agent named CastBot. CastBot is the personal assistant for that account, knows how to use castbot, and can delegate work to other agents. Details are in `docs/INSTALL.md`.
