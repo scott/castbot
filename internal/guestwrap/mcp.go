@@ -13,6 +13,7 @@ import (
 
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/approvetool"
+	"github.com/scott/castbot/internal/chattool"
 	"github.com/scott/castbot/internal/edittool"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
@@ -238,6 +239,9 @@ func agentTools() []any {
 	for _, spec := range approvetool.Specs() {
 		tools = append(tools, approvalSchema(spec))
 	}
+	for _, spec := range chattool.Specs() {
+		tools = append(tools, chatSchema(spec))
+	}
 	return tools
 }
 
@@ -393,6 +397,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 			payload = map[string]any{"name": call.Name, "arguments": forwarded}
 			break
 		}
+		if chattool.Known(call.Name) {
+			forwarded, ok := chatForwardArgs(call.Arguments)
+			if !ok {
+				return egresscontract.Rejected, true
+			}
+			payload = map[string]any{"name": call.Name, "arguments": forwarded}
+			break
+		}
 		if !grouptool.Known(call.Name) {
 			return egresscontract.Rejected, true
 		}
@@ -462,6 +474,40 @@ func machineForwardArgs(raw json.RawMessage) (map[string]any, bool) {
 		return nil, false
 	}
 	return map[string]any{}, true
+}
+
+func chatSchema(spec chattool.Spec) map[string]any {
+	props := map[string]any{}
+	if spec.Thread {
+		props["thread"] = map[string]any{"type": "string", "description": "Thread title or id. Leave it out when only one thread matches."}
+	}
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": map[string]any{
+			"type":       "object",
+			"properties": props,
+		},
+	}
+}
+
+func chatForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	out := map[string]any{}
+	if value, ok := args["thread"]; ok {
+		text, ok := value.(string)
+		if !ok {
+			return nil, false
+		}
+		out["thread"] = text
+	}
+	return out, true
 }
 
 func approvalSchema(spec approvetool.Spec) map[string]any {

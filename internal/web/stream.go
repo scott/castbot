@@ -462,6 +462,7 @@ func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User
 	s.maybeMachine(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	s.maybeEdit(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	s.maybeApprove(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
+	s.maybeChat(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	msg, err := s.store.GetMessage(ctx, user.ID, messageID)
 	if err != nil {
 		return err
