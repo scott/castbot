@@ -33,7 +33,7 @@ The castbot catalog does not include `write_file`, `edit_file`, or `web_fetch` y
 - `GOBIN=/app/.local/bin`, `GOPATH=/app/.local/go`, `GOCACHE=/app/.local/cache/go-build`, `GOMODCACHE=/app/.local/go/pkg/mod`
 - `GOTOOLCHAIN=local` so Go does not download another toolchain
 
-The prefix is on the machine disk, so it remains across pause and resume. Replace machine copies memory and workspace files only. It does not copy `/app/.local`. A later change may copy it with a size cap. This image does not.
+The prefix is on the machine disk, so it remains across pause and resume. Replace machine streams `workspace/`, `memory/`, and `/app/.local` as one archive onto the new machine. The archive keeps file modes and stores symlinks as links. A guest that does not have the archive export yet still sends its memory tar and workspace files. That copy does not include `/app/.local` until the guest is replaced onto an image that has the archive. If the new machine cannot import an archive, the copy stays that older per-file move.
 
 ## Guest stubs
 

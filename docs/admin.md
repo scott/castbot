@@ -18,7 +18,7 @@ One line per live machine: agent name, state, image tag, and `update available` 
 castbot admin replace-machine <agent id or Cast CLI slug> [--dry-run] [--yes] [--no-copy]
 ```
 
-This is the same replace the Machine tab runs. It starts a new machine on `CASTBOT_IMAGE`, copies memory and workspace files, and deletes the old machine only after the new one is healthy. It does not copy `/app/.local`, so language packages installed on the old machine are not on the new one.
+This is the same replace the Machine tab runs. It starts a new machine on `CASTBOT_IMAGE`, streams one archive of memory, workspace files, and `/app/.local`, and deletes the old machine only after the new one is healthy. The control plane proxies the archive and does not store the tree. A guest that is still on an older runtime has no archive export. The control plane then reads that guest's memory tar and workspace files and streams those into the archive. That first copy does not include `/app/.local`. The next replace does. If the new machine's runtime has no archive import yet, the copy stays the older per-file move, which also leaves `/app/.local` behind. File modes and symlinks are kept when both guests speak the archive. An archive larger than the destination disk stops the replace and leaves the agent on the old machine.
 
 `--dry-run` prints the agent, the machine id prefix, the state, the current image, the target image, and any reason the replace would be refused. It does not call the machine API.
 
@@ -36,7 +36,7 @@ A move that copies memory saves the runtime it left. The Machine page offers tha
 castbot admin rollback-runtime <agent id or Cast CLI slug> [--dry-run] [--yes]
 ```
 
-This is the same replace, aimed at the runtime saved by the last memory-copying move. It copies memory and workspace files again. `--dry-run` prints the agent, the current image, the rollback image, and any reason the move would be refused. It does not call the machine API.
+This is the same replace, aimed at the runtime saved by the last memory-copying move. It streams the archive again. `--dry-run` prints the agent, the current image, the rollback image, and any reason the move would be refused. It does not call the machine API.
 
 Without `--yes`, the command waits until the agent name is typed. Exit codes match `replace-machine`. When no runtime is saved, the command prints `rollback: none` and exits 1.
 

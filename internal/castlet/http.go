@@ -43,6 +43,10 @@ func (s *Supervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.exportMemory(w, r)
 	case r.URL.Path == "/castlet/memory" && r.Method == http.MethodPut:
 		s.importMemory(w, r)
+	case r.URL.Path == "/castlet/archive" && r.Method == http.MethodGet:
+		s.exportArchive(w, r)
+	case r.URL.Path == "/castlet/archive" && r.Method == http.MethodPut:
+		s.importArchive(w, r)
 	case r.URL.Path == "/castlet/files" && r.Method == http.MethodGet:
 		s.listFiles(w, r)
 	case strings.HasPrefix(r.URL.Path, "/castlet/files/") && (r.Method == http.MethodGet || r.Method == http.MethodPut):
@@ -517,17 +521,24 @@ func openUnder(root, full string) (*os.File, error) {
 }
 
 func ensureParent(root, full string) error {
-	cur := filepath.Dir(full)
+	root = filepath.Clean(root)
+	cur := filepath.Dir(filepath.Clean(full))
 	for {
-		if _, err := os.Lstat(cur); err == nil {
+		info, err := os.Lstat(cur)
+		if err == nil {
 			resolved, err := filepath.EvalSymlinks(cur)
 			if err != nil {
 				return err
 			}
-			if resolved != root && !under(root, resolved) {
-				return errOutside
+			if resolved == root || under(root, resolved) {
+				return nil
 			}
-			return nil
+			// A missing archive root, such as /app/.local, has to be created.
+			// Only a real ancestor of that root is a safe place to create it.
+			if info.Mode()&os.ModeSymlink == 0 && resolved == cur && under(cur, root) {
+				return nil
+			}
+			return errOutside
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {

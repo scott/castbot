@@ -33,6 +33,9 @@ const (
 	bootDefault    = 4 * time.Minute
 	cleanupTimeout = 30 * time.Second
 	beatEvery      = 30 * time.Second
+	// RunLimit is how long a web replace may run. Streaming a full disk
+	// takes longer than the old per-file copy.
+	RunLimit = 90 * time.Minute
 	// StaleAfter is how long a running replace can sit without a heartbeat before recovery takes it.
 	StaleAfter = 10 * time.Minute
 )
@@ -86,9 +89,11 @@ type Options struct {
 	BeatEvery time.Duration
 	// HaltAt stops after that step and leaves the row for Recover.
 	// Steps: lock, create, boot, read_old, copy, verify, switch, delete.
-	HaltAt   string
-	Progress func(title string)
-	Logger   *slog.Logger
+	HaltAt string
+	// ArchiveLimit is the largest archive, in bytes. Zero uses the small machine disk.
+	ArchiveLimit int64
+	Progress     func(title string)
+	Logger       *slog.Logger
 }
 
 // Result is the outcome the UI and the admin command print.
@@ -124,6 +129,8 @@ func Reason(class string) string {
 		return "The old machine could not be read."
 	case "copy":
 		return "Memory or files could not be copied."
+	case "disk":
+		return "The checkout does not fit on the new machine."
 	default:
 		return "The new machine did not pass its health check."
 	}
@@ -306,28 +313,19 @@ func (r *runner) run() (Result, error) {
 		if err := r.halt("verify"); err != nil {
 			return r.res, err
 		}
+	} else if copier, ok := r.h.(host.StateCopier); ok {
+		r.uiStep("read_old")
+		err := r.copyState(copier)
+		if errors.Is(err, errUseFiles) {
+			if err := r.copyFiles(); err != nil {
+				return r.res, err
+			}
+		} else if err != nil {
+			return r.res, err
+		}
 	} else {
 		r.uiStep("read_old")
-		mem, files, err := r.readOld()
-		if err != nil {
-			return r.res, err
-		}
-		if err := r.halt("read_old"); err != nil {
-			r.cleanup(mem, files)
-			return r.res, err
-		}
-		if err := r.writeNew(mem, files); err != nil {
-			r.cleanup(mem, files)
-			return r.res, err
-		}
-		r.cleanup(mem, files)
-		if err := r.halt("copy"); err != nil {
-			return r.res, err
-		}
-		if err := r.verify(mem, files); err != nil {
-			return r.res, err
-		}
-		if err := r.halt("verify"); err != nil {
+		if err := r.copyFiles(); err != nil {
 			return r.res, err
 		}
 	}
@@ -439,6 +437,33 @@ func (r *runner) healthy(endpoint, token string) (string, error) {
 		return "", host.ErrGuestWait
 	}
 	return r.h.Health(r.ctx, endpoint, token)
+}
+
+func (r *runner) copyFiles() error {
+	r.uiStep("read_old")
+	mem, files, err := r.readOld()
+	if err != nil {
+		return err
+	}
+	if err := r.halt("read_old"); err != nil {
+		r.cleanup(mem, files)
+		return err
+	}
+	if err := r.writeNew(mem, files); err != nil {
+		r.cleanup(mem, files)
+		return err
+	}
+	r.cleanup(mem, files)
+	if err := r.halt("copy"); err != nil {
+		return err
+	}
+	if err := r.verify(mem, files); err != nil {
+		return err
+	}
+	if err := r.halt("verify"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *runner) readOld() (*saved, []savedFile, error) {
