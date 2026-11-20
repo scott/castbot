@@ -244,6 +244,31 @@ func (s *Store) ListAgentsInSection(ctx context.Context, userID, sectionID strin
 	return scanAgents(rows)
 }
 
+// MoveAgentSection moves one of the caller's agents to the end of one of the
+// caller's sections. An agent already in that section stays put. A section
+// or agent the caller does not own is ErrNotFound. The section is never cleared.
+func (s *Store) MoveAgentSection(ctx context.Context, userID, agentID, sectionID string) error {
+	agent, err := s.GetAgent(ctx, userID, agentID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.GetSection(ctx, userID, sectionID); err != nil {
+		return err
+	}
+	if agent.SectionID == sectionID {
+		return nil
+	}
+	var pos int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(position), 0) + 1 FROM agents WHERE user_id = ? AND section_id = ? AND deleted_at IS NULL`, userID, sectionID).Scan(&pos); err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE agents SET section_id = ?, position = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, sectionID, pos, agentID, userID)
+	if err != nil {
+		return err
+	}
+	return rowsAffected(res)
+}
+
 // GetAgent returns one live agent owned by the caller.
 func (s *Store) GetAgent(ctx context.Context, userID, id string) (Agent, error) {
 	var a Agent

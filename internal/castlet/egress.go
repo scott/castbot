@@ -20,6 +20,7 @@ import (
 
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/egresscontract"
+	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/selftool"
 )
@@ -323,8 +324,8 @@ func (s *Supervisor) egressSecret(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(egresscontract.SecretResult{Result: result.Result})
 }
 
-// egressAgents forwards the agent, routine, and account read tools. It is
-// not a connection, so it does not check whether a provider is connected.
+// egressAgents forwards the agent, routine, account read, and group tools.
+// It is not a connection, so it does not check whether a provider is connected.
 func (s *Supervisor) egressAgents(w http.ResponseWriter, r *http.Request) {
 	var call struct {
 		Name      string          `json:"name"`
@@ -337,7 +338,7 @@ func (s *Supervisor) egressAgents(w http.ResponseWriter, r *http.Request) {
 	switch call.Name {
 	case agentskill.ToolCreate, agentskill.ToolList, routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete:
 	default:
-		if !selftool.Known(call.Name) {
+		if !selftool.Known(call.Name) && !grouptool.Known(call.Name) {
 			writeAgentReply(w, egresscontract.Rejected, true)
 			return
 		}

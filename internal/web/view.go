@@ -238,6 +238,7 @@ type page struct {
 	QuotaUploads        string
 	Groups              []groupLink
 	GroupsFolded        bool
+	SideOOB             bool
 	Group               groupPage
 	Routines            routinePanel
 	Run                 runBar

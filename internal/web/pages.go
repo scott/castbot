@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"html/template"
 	"net/http"
@@ -662,20 +663,29 @@ func (s *Server) createSection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) shell(r *http.Request, user store.User) (page, error) {
-	sections, err := s.store.ListSections(r.Context(), user.ID)
+	p, err := s.fillSidebar(r.Context(), user, from(r).CSRF)
 	if err != nil {
 		return page{}, err
 	}
-	agents, err := s.store.ListAgents(r.Context(), user.ID)
+	s.attachSearch(r, &p)
+	return p, nil
+}
+
+func (s *Server) fillSidebar(ctx context.Context, user store.User, csrf string) (page, error) {
+	sections, err := s.store.ListSections(ctx, user.ID)
+	if err != nil {
+		return page{}, err
+	}
+	agents, err := s.store.ListAgents(ctx, user.ID)
 	if err != nil {
 		return page{}, err
 	}
 	loc := userLocation(user.Timezone)
-	cards, err := s.store.ListGroupCards(r.Context(), user.ID)
+	cards, err := s.store.ListGroupCards(ctx, user.ID)
 	if err != nil {
 		return page{}, err
 	}
-	folds, err := s.store.FoldedSections(r.Context(), user.ID)
+	folds, err := s.store.FoldedSections(ctx, user.ID)
 	if err != nil {
 		return page{}, err
 	}
@@ -696,7 +706,7 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 		}
 	}
 	open := map[string]store.OpenRun{}
-	if rows, err := s.store.ListOpenRuns(r.Context(), user.ID); err == nil {
+	if rows, err := s.store.ListOpenRuns(ctx, user.ID); err == nil {
 		for _, row := range rows {
 			open[row.AgentID] = row
 		}
@@ -705,9 +715,9 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 	approvals := 0
 	for _, a := range agents {
 		approvals += a.Approvals
-		view := s.paintAgent(r.Context(), user.ID, a, false, loc)
+		view := s.paintAgent(ctx, user.ID, a, false, loc)
 		row, has := open[a.ID]
-		s.decorateAgent(r.Context(), user.ID, &view, row, has)
+		s.decorateAgent(ctx, user.ID, &view, row, has)
 		by[a.SectionID] = append(by[a.SectionID], view)
 	}
 	var sv []sectionView
@@ -719,7 +729,7 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 	}
 	p := page{
 		Theme:        user.Theme,
-		CSRF:         from(r).CSRF,
+		CSRF:         csrf,
 		User:         user,
 		HasUser:      true,
 		Initials:     initials(user.DisplayName),
@@ -738,7 +748,6 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 			return "Last changed " + d
 		}(),
 	}
-	s.attachSearch(r, &p)
 	return p, nil
 }
 
