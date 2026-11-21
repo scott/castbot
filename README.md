@@ -67,7 +67,7 @@ The script prints an authenticator secret once and copies it to `/root/castbot-f
 
 The first agent is named CastBot and is placed in the pinned section. CastBot is the personal assistant for that account, knows how to use castbot, and can delegate work to other agents. The agent stays in draft until a model key is saved and its machine is started. The first chat line says to add a key and start the machine. The machine says hello once, on the first healthy start.
 
-A second run keeps the env file and does not rewrite CastBot. The first run writes the newest public runtime image whose guest inputs match the installed commit. Set `CASTBOT_IMAGE` before the first run to use a different image. Add a machine token by editing `/etc/castbot/castbot.env`. The machine host stays off until the token, the image, and an https public URL are all set.
+A second run keeps the session keys and does not rewrite CastBot. When a machine token and a public hostname are both set, the first run writes the newest public runtime image whose guest inputs match the installed commit. Set `CASTBOT_IMAGE` before the first run to use a different image. The machine host stays off until the token, the image, and an https public URL are all set. The service still starts, so you can sign in and add the token later.
 
 For a host with no terminal, set `CASTBOT_INSTALL_NONINTERACTIVE=1` plus `CASTBOT_ADMIN_EMAIL`, `CASTBOT_ADMIN_NAME`, and `CASTBOT_ADMIN_PASSWORD`. The script refuses to run under `bash -x`.
 
