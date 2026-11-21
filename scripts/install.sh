@@ -358,6 +358,15 @@ assert_static() {
   [[ "$ldd_out" != *"=>"* ]] || die "binary has dynamic libraries"
 }
 
+# install_owned sets the service owner. A non-root test cannot chown.
+install_owned() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    install -o "$OWNER" -g "$GROUP" "$@"
+  else
+    install "$@"
+  fi
+}
+
 install_binary() {
   local built
   if [[ -n "${CASTBOT_BINARY:-}" ]]; then
@@ -392,8 +401,8 @@ install_binary() {
     assert_static "$built"
   fi
   install -d -m 0755 "$APP_DIR" "$APP_DIR/bin" "$APP_DIR/releases/${SHA}"
-  install -d -o "$OWNER" -g "$GROUP" -m 0700 "$APP_DIR/data"
-  install -o "$OWNER" -g "$GROUP" -m 0755 "$built" "$APP_DIR/releases/${SHA}/castbot"
+  install_owned -d -m 0700 "$APP_DIR/data"
+  install_owned -m 0755 "$built" "$APP_DIR/releases/${SHA}/castbot"
   ln -sfn "$APP_DIR/releases/${SHA}/castbot" "$APP_DIR/bin/castbot"
   printf '%s\n' "$SHA" > "$APP_DIR/RELEASE"
   if [[ -z "${CASTBOT_BINARY:-}" ]]; then
@@ -444,7 +453,9 @@ write_env() {
     fi
   } > "$TMP_ENV"
   unset session secrets TOKEN CASTBOT_DO_TOKEN
-  chown "$OWNER:$GROUP" "$TMP_ENV"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown "$OWNER:$GROUP" "$TMP_ENV"
+  fi
   chmod 0600 "$TMP_ENV"
   mv "$TMP_ENV" "$ENV_FILE"
   TMP_ENV=""
