@@ -137,6 +137,12 @@ list_shas_registry() {
     rm -f "$body" "$hdr"
     die "could not reach the runtime image registry"
   }
+  # A missing package and a private package both deny an anonymous token.
+  # That is an empty public tag list, so the publish job can push the first image.
+  if [[ "$code" == "401" || "$code" == "403" ]]; then
+    rm -f "$body" "$hdr"
+    return 0
+  fi
   if [[ "$code" != "200" ]]; then
     rm -f "$body" "$hdr"
     die "could not reach the runtime image registry"

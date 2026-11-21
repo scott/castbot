@@ -118,6 +118,29 @@ set -e
 [[ "$code" -eq 1 ]] || fail "bad sha code"
 grep -q '40 hex' /tmp/castbot-runtime-image.err || fail "bad sha message"
 
-rm -rf "$repo"
+stub=$(mktemp -d)
+cat >"$stub/curl" <<'EOF'
+#!/bin/sh
+printf '403'
+EOF
+chmod 0755 "$stub/curl"
+set +e
+got=$(PATH="$stub:$PATH" CASTBOT_RUNTIME_REPO="$repo" CASTBOT_RUNTIME_REGISTRY=ghcr.io/scott/castbot-runtime bash "$script" select "$head" 2>/tmp/castbot-runtime-image.err)
+code=$?
+set -e
+[[ "$code" -eq 1 ]] || fail "denied registry code $code"
+[[ -z "$got" ]] || fail "denied registry printed $got"
+[[ ! -s /tmp/castbot-runtime-image.err ]] || fail "denied registry wrote an error"
+printf '%s\n' '#!/bin/sh' 'exit 1' >"$stub/curl"
+set +e
+PATH="$stub:$PATH" \
+  CASTBOT_RUNTIME_REPO="$repo" \
+  CASTBOT_RUNTIME_REGISTRY=ghcr.io/scott/castbot-runtime \
+  bash "$script" select "$head" >/tmp/castbot-runtime-image.out 2>/tmp/castbot-runtime-image.err
+code=$?
+set -e
+[[ "$code" -eq 1 ]] || fail "curl failure code"
+grep -q 'could not reach the runtime image registry' /tmp/castbot-runtime-image.err || fail "curl failure message"
+rm -rf "$stub" "$repo"
 rm -f "$tags" /tmp/castbot-runtime-image.out /tmp/castbot-runtime-image.err
 printf 'runtime image tests passed\n'
