@@ -29,14 +29,23 @@ set -e
 [[ "$code" -ne 0 ]] || fail "extra args should refuse"
 grep -q 'takes no arguments' /tmp/castbot-install-args.err || fail "args message"
 
-copy=$(mktemp)
-cp "$install" "$copy"
-chmod 0755 "$copy"
-set +e
-su nobody -s /bin/bash -c "bash $(printf '%q' "$copy")" >/tmp/castbot-install-nobody.out 2>/tmp/castbot-install-nobody.err
-code=$?
-set -e
-rm -f "$copy"
+# GitHub Actions is not root, so su cannot drop privileges there.
+# Run the installer as the current user in that case. As root, drop to nobody.
+if [[ "$(id -u)" -eq 0 ]]; then
+  copy=$(mktemp)
+  cp "$install" "$copy"
+  chmod 0755 "$copy"
+  set +e
+  su nobody -s /bin/bash -c "bash $(printf '%q' "$copy")" >/tmp/castbot-install-nobody.out 2>/tmp/castbot-install-nobody.err
+  code=$?
+  set -e
+  rm -f "$copy"
+else
+  set +e
+  bash "$install" >/tmp/castbot-install-nobody.out 2>/tmp/castbot-install-nobody.err
+  code=$?
+  set -e
+fi
 [[ "$code" -ne 0 ]] || fail "non-root should refuse"
 grep -q 'run as root' /tmp/castbot-install-nobody.err || fail "root message"
 
