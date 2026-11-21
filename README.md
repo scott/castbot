@@ -6,6 +6,28 @@ castbot is a web UI for Cast agents (https://castagent.dev) running on DigitalOc
 
 ![The agent list on a phone.](docs/readme/phone.png)
 
+## What it is
+
+castbot is where you sign in and keep a set of agents. Sign-in is a password plus an authenticator code. Each agent is one chat with its own machine. The machine pauses when the agent is idle and wakes for the next message. A reply streams into the thread. If the browser drops, the work continues on the machine and the thread catches up when you come back.
+
+You add a model key on your account and choose a model for each agent. The key stays in the vault. It is stored encrypted and is not shown again.
+
+## What you can do
+
+The sidebar holds agents, groups, and sections, and the search box is there too. Pin the agents you use. Each agent has its own color.
+
+- Send a message and attach a file. Uploads and the files an agent writes show in its Files panel. You can preview text and download.
+- A risky tool call waits on an approval card until you allow it. Write tools ask first. Read tools are allowed.
+- Save a routine. It runs a prompt on a schedule, on that agent's machine, in its own thread.
+- Keep secrets in the vault and grant each one to a single agent. An agent can ask for a new key in the chat. You type it on a masked card. The agent does not receive the value.
+- Turn on a connection so an agent can call an outside tool. The token stays on the control plane.
+- Describe a new agent in the chat. castbot turns that into a setup card. Create saves the agent and starts its machine.
+- Open a group with two or more of your agents. Mention one with @Name when you want that agent to reply. The owner can invite another person into the workspace. That person keeps their own agents, secrets, and machines.
+- Allow an agent to delegate. It can message the other agents on the account, in a direct chat or in a group, and hand them work. On a new install the first agent is CastBot, and delegation is on.
+- Replace a machine when you want the current runtime. castbot copies memory and workspace files onto the new machine. The agent and its chats stay. Roll back returns to the previous runtime the same way.
+
+The phone layout is the same account: the list, the chat, and the agent panel.
+
 The shell signs you in, lists seeded agents, and streams a chat reply from a local echo runtime. A dropped connection resumes, and the reply is stored if the browser leaves. It does not call a model provider. A machine host is attached only when the env file has a token, one shared image, and an https control plane URL. Tests use a fake machine API and do not need a token.
 
 `Dockerfile` builds the shared runtime image used by local tests. The default target contains castlet, the Cast runtime, and the coding tools in `docs/runtime.md` (git, curl, ripgrep, Node.js, Go, gh, doctl, and a compiler). The stand-in target is only for local tests. A container boots by pulling its bundle from the control plane. The image is not pushed anywhere. Packages installed into `/app/.local` stay on that machine across pause and resume. Replace machine does not copy them.
