@@ -79,8 +79,8 @@ func TestEnsureCreatesCastBot(t *testing.T) {
 	if bundle.Instructions != Instructions() || !strings.Contains(bundle.Instructions, "Be faithful") || !strings.Contains(bundle.Instructions, "delegate") {
 		t.Fatalf("instructions %q", bundle.Instructions)
 	}
-	if strings.Contains(bundle.Instructions, "—") || strings.Contains(bundle.YAML, "—") {
-		t.Fatal("em dash in the bundle")
+	if strings.ContainsRune(bundle.Instructions, '\u2014') || strings.ContainsRune(bundle.YAML, '\u2014') || strings.ContainsRune(bundle.Instructions, '\u2013') || strings.ContainsRune(bundle.YAML, '\u2013') {
+		t.Fatal("dash in the bundle")
 	}
 	for _, word := range []string{"OpenAI", "Anthropic", "Gemini", "GitHub", "DigitalOcean", "OpenRouter", "Claude"} {
 		if strings.Contains(bundle.Instructions, word) {
