@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/scott/castbot/internal/assistant"
 	"github.com/scott/castbot/internal/auth"
 	"github.com/scott/castbot/internal/config"
 	"github.com/scott/castbot/internal/demo"
@@ -42,10 +43,12 @@ func main() {
 		createUser(args)
 	case "seed-demo":
 		seedDemo(args)
+	case "create-assistant":
+		createAssistant(args)
 	case "admin":
 		os.Exit(adminCmd(args))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo|admin]")
+		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo|create-assistant|admin]")
 		os.Exit(2)
 	}
 }
@@ -241,6 +244,37 @@ func seedDemo(args []string) {
 		log.Fatal(err)
 	}
 	fmt.Println("demo data ready")
+}
+
+func createAssistant(args []string) {
+	fs := flag.NewFlagSet("create-assistant", flag.ExitOnError)
+	email := fs.String("email", "", "account email")
+	_ = fs.Parse(args)
+	if *email == "" {
+		log.Fatal("create-assistant needs --email")
+	}
+	_, st := openStore()
+	defer st.Close()
+	user, err := st.FindUserByEmail(context.Background(), *email)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			log.Fatal("no account for that email")
+		}
+		log.Fatal("could not read the account")
+	}
+	res, err := assistant.Ensure(context.Background(), st, user.ID)
+	if err != nil {
+		if errors.Is(err, assistant.ErrInUse) {
+			log.Fatal("an agent already exists")
+		}
+		log.Fatalf("could not create CastBot: %v", err)
+	}
+	if res.Created {
+		fmt.Printf("created CastBot %s\n", res.Agent.ID)
+	} else {
+		fmt.Printf("CastBot already exists %s\n", res.Agent.ID)
+	}
+	fmt.Printf("/agents/%s\n", res.Agent.ID)
 }
 
 func openStore() (config.Config, *store.Store) {
