@@ -36,9 +36,10 @@ jobs:
         run: |
           curl -sSfL -o /tmp/shellcheck.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz
           tar -xJf /tmp/shellcheck.tar.xz -C /tmp
-          /tmp/shellcheck-v0.10.0/shellcheck scripts/deploy.sh scripts/check-deploy-secrets.sh scripts/deploy_test.sh scripts/install.sh scripts/install_test.sh
+          /tmp/shellcheck-v0.10.0/shellcheck scripts/deploy.sh scripts/check-deploy-secrets.sh scripts/deploy_test.sh scripts/install.sh scripts/install_test.sh scripts/runtime-image.sh scripts/runtime_image_test.sh
           bash scripts/deploy_test.sh
           bash scripts/install_test.sh
+          bash scripts/runtime_image_test.sh
 
   shots:
     runs-on: ubuntu-latest

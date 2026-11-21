@@ -55,7 +55,8 @@ On a new host, as root:
 
 A terminal asks for the account email, name, and password, and for an
 optional public hostname. Without a hostname, castbot listens on
-127.0.0.1:8080 only.
+127.0.0.1:8080 only. The script chooses the runtime image. Set
+CASTBOT_IMAGE to use a different one.
 
 Non-interactive settings:
   CASTBOT_ADMIN_EMAIL
@@ -63,7 +64,7 @@ Non-interactive settings:
   CASTBOT_ADMIN_PASSWORD
   CASTBOT_PUBLIC_HOST          optional hostname
   CASTBOT_DO_TOKEN             optional machine token
-  CASTBOT_IMAGE                optional runtime image
+  CASTBOT_IMAGE                runtime image override
   CASTBOT_REF                  git branch, tag, or commit (default main)
   CASTBOT_WORKSPACE            workspace name (default Personal)
 
@@ -211,11 +212,7 @@ read_settings() {
     if [[ -z "$TOKEN" ]]; then
       TOKEN=$(prompt_secret "Machine token (optional): ")
     fi
-    if [[ -z "${CASTBOT_IMAGE:-}" ]]; then
-      IMAGE=$(prompt "Runtime image (optional): ")
-    else
-      IMAGE=$CASTBOT_IMAGE
-    fi
+    IMAGE=${CASTBOT_IMAGE:-}
   else
     EMAIL=${CASTBOT_ADMIN_EMAIL:-}
     NAME=${CASTBOT_ADMIN_NAME:-}
@@ -407,6 +404,51 @@ install_binary() {
   printf '%s\n' "$SHA" > "$APP_DIR/RELEASE"
   if [[ -z "${CASTBOT_BINARY:-}" ]]; then
     rm -f "$built"
+  fi
+}
+
+# resolve_image fills CASTBOT_IMAGE from the published tags when the
+# operator did not set one. An existing env file is left alone.
+resolve_image() {
+  if [[ -e "$ENV_FILE" ]]; then
+    return 0
+  fi
+  if [[ -z "$IMAGE" ]]; then
+    local repo script err selected
+    repo=${CASTBOT_RUNTIME_REPO:-${SRC_DIR:-}}
+    script=${CASTBOT_RUNTIME_IMAGE_SH:-}
+    if [[ -z "$script" && -n "$repo" ]]; then
+      script="${repo}/scripts/runtime-image.sh"
+    fi
+    if [[ -n "$script" && -n "$repo" ]]; then
+      if [[ ! -f "$script" ]]; then
+        if [[ -n "$TOKEN" || -n "$PUBLIC_HOST" ]]; then
+          die "runtime image helper is missing"
+        fi
+        printf 'install: runtime image helper is missing. The machine host stays off.\n' >&2
+      else
+        err=$(mktemp)
+        if ! selected=$(CASTBOT_RUNTIME_REPO="$repo" bash "$script" select "$SHA" 2>"$err"); then
+          if [[ -s "$err" ]]; then
+            cat "$err" >&2
+          fi
+          rm -f "$err"
+          if [[ -n "$TOKEN" || -n "$PUBLIC_HOST" ]]; then
+            die "no published runtime image matches this commit"
+          fi
+          printf 'install: no published runtime image matches this commit. The machine host stays off.\n' >&2
+        else
+          rm -f "$err"
+          IMAGE=$selected
+          if ! valid_image "$IMAGE"; then
+            die "runtime image has a character that is not allowed"
+          fi
+        fi
+      fi
+    fi
+  fi
+  if [[ -n "$IMAGE" ]]; then
+    printf 'Runtime image: %s\n' "$IMAGE"
   fi
 }
 
@@ -654,6 +696,7 @@ main() {
   read_settings
   prepare_os
   install_binary
+  resolve_image
   write_env
   write_unit
   write_caddy

@@ -36,7 +36,7 @@ The binary is uploaded with `scp` into a temporary directory the SSH user can wr
 
 After restart the script polls `DEPLOY_LOCAL_HEALTH_URL` (default `http://127.0.0.1:8080/login`) from the host and `<DEPLOY_PUBLIC_URL>/login` from the laptop, for up to 30 seconds.
 
-The server env file is searched with `grep` for one line, `CASTBOT_IMAGE=`. The image tag's longest hex run of 7 to 40 characters is the commit the image was built from. A short sha is enough when it is unique in the local clone, for example `example.invalid/castbot-runtime:abc1234`. Other lines in that file are not read.
+The server env file is searched with `grep` for one line, `CASTBOT_IMAGE=`. The image tag's longest hex run of 7 to 40 characters is the commit the image was built from. A short sha is enough when it is unique in the local clone, for example `example.invalid/castbot-runtime:abc1234`. Other lines in that file are not read. A new install selects `ghcr.io/scott/castbot-runtime:<full commit>`, the newest public tag whose guest inputs match the installed commit. A later deploy still reads whatever `CASTBOT_IMAGE` is already on the server.
 
 ## Dry run
 
