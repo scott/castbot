@@ -381,6 +381,7 @@ image_gate() {
   value=$(read_image_value) || die "could not read CASTBOT_IMAGE"
   IMAGE_VALUE=$value
   commit=$(image_commit "$value")
+  # Guest inputs are the same set scripts/runtime-image.sh compares.
   paths=$(
     {
       printf '%s\n' Dockerfile deploy go.mod go.sum cmd/castlet cmd/castbot-guest cmd/cast-standin internal/castlet

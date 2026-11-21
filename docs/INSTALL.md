@@ -24,7 +24,7 @@ The password must be 12 to 1024 characters. The script prints an authenticator s
 | `/etc/systemd/system/castbot.service` | The service |
 | `/etc/caddy/Caddyfile` | Present only when a public hostname is set |
 
-The service runs as `castbot` and reads `CASTBOT_ENV_FILE=/etc/castbot/castbot.env`. The session key and the secrets key are generated in that file. They are not printed. A second run keeps the file. Edit it by hand to add `CASTBOT_DO_TOKEN` or `CASTBOT_IMAGE` later. The machine host stays off until both are set and `CASTBOT_PUBLIC_URL` is an https URL.
+The service runs as `castbot` and reads `CASTBOT_ENV_FILE=/etc/castbot/castbot.env`. The session key and the secrets key are generated in that file. They are not printed. The first run writes `CASTBOT_IMAGE` to the newest public tag whose guest inputs match the installed commit. Set `CASTBOT_IMAGE` before that run to use a different image. A second run keeps the file. Edit it by hand to add `CASTBOT_DO_TOKEN` later. The machine host stays off until the token, the image, and an https public URL are all set. If a token or a public hostname is set and no published image matches, the script stops before it writes the env file.
 
 The script also installs `sqlite3`, `fail2ban`, and, when a hostname is set, `caddy`. When a hostname is set, it allows the current SSH port plus ports 80 and 443, then enables the firewall. It installs Go `go1.27.4` under `/usr/local/go` only when `go version` is not already that release, then builds a static binary from `CASTBOT_REF` (default `main`). A later run replaces that binary and keeps the env file. It stops the service for the account commands, then starts it again.
 
@@ -47,10 +47,10 @@ Set these in the environment when there is no terminal. `CASTBOT_INSTALL_NONINTE
 | `CASTBOT_ADMIN_PASSWORD` | Password, 12 to 1024 characters |
 | `CASTBOT_PUBLIC_HOST` | Optional hostname, without a scheme |
 | `CASTBOT_DO_TOKEN` | Optional machine token |
-| `CASTBOT_IMAGE` | Optional runtime image |
+| `CASTBOT_IMAGE` | Runtime image override. Unset chooses the public tag |
 | `CASTBOT_REF` | Branch, tag, or commit. The default is `main` |
 | `CASTBOT_WORKSPACE` | Workspace name. The default is `Personal` |
 
 The script refuses to run under `bash -x`, because a trace would print the password and the generated keys. It does not print `CASTBOT_DO_TOKEN`, `CASTBOT_SESSION_KEY`, or `CASTBOT_SECRETS_KEY`.
 
-The runtime image is not built or pushed. `docs/runtime.md` and `docs/DEPLOY.md` cover that image and later updates.
+The runtime image is not built on the host. `docs/runtime.md` names the public tag, and `docs/DEPLOY.md` covers later updates.
