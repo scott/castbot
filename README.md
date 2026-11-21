@@ -2,6 +2,10 @@
 
 castbot is a web UI for Cast agents (https://castagent.dev) running on DigitalOcean MicroVMs: a sidebar of your agents, a streaming chat with each one, approval cards for risky tool calls, routines that run on a schedule, and files in and out, with every agent living in its own MicroVM that pauses when idle. It is a Go + SQLite + htmx control plane in front of the Cast runtime.
 
+![Chat with Atlas. The sidebar lists the other agents.](docs/readme/chat.png)
+
+![The agent list on a phone.](docs/readme/phone.png)
+
 The shell signs you in, lists seeded agents, and streams a chat reply from a local echo runtime. A dropped connection resumes, and the reply is stored if the browser leaves. It does not call a model provider. A machine host is attached only when the env file has a token, one shared image, and an https control plane URL. Tests use a fake machine API and do not need a token.
 
 `Dockerfile` builds the shared runtime image used by local tests. The default target contains castlet, the Cast runtime, and the coding tools in `docs/runtime.md` (git, curl, ripgrep, Node.js, Go, gh, doctl, and a compiler). The stand-in target is only for local tests. A container boots by pulling its bundle from the control plane. The image is not pushed anywhere. Packages installed into `/app/.local` stay on that machine across pause and resume. Replace machine does not copy them.
