@@ -15,6 +15,13 @@ help=$(bash "$install" --help)
 printf '%s\n' "$help" | grep -q 'curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh' || fail "help missing curl"
 printf '%s\n' "$help" | grep -q 'CastBot' || fail "help missing CastBot"
 printf '%s\n' "$help" | grep -q 'DigitalOcean' || fail "help missing provider"
+printf '%s\n' "$help" | grep -q 'Machine host' || fail "help missing machine host"
+printf '%s\n' "$help" | grep -q 'API token' || fail "help missing API token"
+printf '%s\n' "$help" | grep -q 'Model provider' || fail "help missing model provider"
+printf '%s\n' "$help" | grep -q 'model access key' || fail "help missing model access key"
+if printf '%s\n' "$help" | grep -Eiq 'sprite|docker'; then
+  fail "help offers an unfinished machine host"
+fi
 printf '%s\n' "$help" | grep -q 'OpenRouter' || fail "help missing OpenRouter"
 printf '%s\n' "$help" | grep -q 'OpenAI' || fail "help missing OpenAI"
 printf '%s\n' "$help" | grep -q 'Anthropic' || fail "help missing Anthropic"
@@ -707,9 +714,9 @@ def wait_count(token, count, timeout=30):
 def send(raw):
     os.write(fd, raw)
 
-wait_count(b"Provider: ", 1)
+wait_count(b"Machine host: ", 1)
 send(b"\n")
-wait_count(b"Provider: ", 2)
+wait_count(b"Model provider: ", 1)
 send(b"6\n")
 wait_count(b"Model key: ", 1)
 send(key.encode() + b"\n")
@@ -751,6 +758,9 @@ for needle in (
     "Google Gemini",
     "xAI",
     "DigitalOcean",
+    "cloud machines, needs an API token",
+    "where agent machines run",
+    "Model provider",
     "grok-4.7",
     "The model key is saved.",
 ):
@@ -758,7 +768,10 @@ for needle in (
         sys.stderr.write("missing installer text\n")
         sys.stderr.write(redact(buf))
         sys.exit(1)
-for banned in ("Ollama", "Bedrock", "ollama", "bedrock"):
+if "Provider: " in text:
+    sys.stderr.write("old provider prompt is still shown\n")
+    sys.exit(1)
+for banned in ("Ollama", "Bedrock", "ollama", "bedrock", "sprite", "Sprite", "docker", "Docker"):
     if banned in text:
         sys.stderr.write("unexpected provider in installer text\n")
         sys.exit(1)

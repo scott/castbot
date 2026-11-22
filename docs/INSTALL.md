@@ -10,9 +10,9 @@ curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.
 
 The script reads prompts from the terminal, so the pipe is safe. Each question explains what it is for. It asks for an email, a display name, and a password of 12 to 1024 characters on one line. It then asks for an optional public hostname. A hostname installs a reverse proxy, opens ports 80 and 443, and sets `CASTBOT_PUBLIC_URL` to `https://` that name. Do not include a scheme or a port. Point DNS at the host before the proxy can obtain a certificate. Without a hostname, castbot listens on `127.0.0.1:8080` only. Tunnel that port and open `http://127.0.0.1:8080/login`.
 
-The machine token is optional. It lets castbot start, pause, and delete agent machines. The prompt lists the supported providers. DigitalOcean is supported today. The token is stored in the env file and is not printed. Sign-in uses the email and password. Two-factor can be turned on later in Settings.
+The machine host is optional. The prompt says Machine host. It is where agent machines run. DigitalOcean is supported today. Choosing it asks for a DigitalOcean API token, which is a personal access token that can manage machines. The token is stored in the env file and is not printed. Press Enter to skip. The site still runs, and agent machines stay off. Sign-in uses the email and password. Two-factor can be turned on later in Settings.
 
-The model provider is optional. The prompt lists OpenRouter, DigitalOcean, OpenAI, Anthropic, Google Gemini, and xAI. Paste a key for the one you choose. After the program is installed, the installer lists the models that key can use. Press Enter to use the first model, or enter a number or a model id. The key is stored in the vault and is not printed. It is not written to the env file. Press Enter at the provider prompt to skip and add a key later in Settings. A machine token and a model key are separate. The machine token starts agent machines. The model key calls a model.
+The model provider is optional. The prompt says Model provider. It lists OpenRouter, DigitalOcean, OpenAI, Anthropic, Google Gemini, and xAI. Paste a key for the one you choose. Choosing DigitalOcean there asks for a model access key. That key is separate from the API token on the machine host screen. After the program is installed, the installer lists the models that key can use. Press Enter to use the first model, or enter a number or a model id. The key is stored in the vault and is not printed. It is not written to the env file. Press Enter at the model provider prompt to skip and add a key later in Settings.
 
 ## What it creates
 
@@ -48,7 +48,7 @@ Set these in the environment when there is no terminal. `CASTBOT_INSTALL_NONINTE
 | `CASTBOT_ADMIN_NAME` | Display name |
 | `CASTBOT_ADMIN_PASSWORD` | Password, 12 to 1024 characters |
 | `CASTBOT_PUBLIC_HOST` | Optional hostname, without a scheme |
-| `CASTBOT_DO_TOKEN` | Optional DigitalOcean machine token |
+| `CASTBOT_DO_TOKEN` | Optional DigitalOcean API token for agent machines |
 | `CASTBOT_MODEL_PROVIDER` | Optional inference provider id. Set with the key and the model, or leave all three unset |
 | `CASTBOT_MODEL_KEY` | Optional model key for that provider. Stored in the vault. Not printed and not written to the env file |
 | `CASTBOT_MODEL` | Model id from that provider, such as `xai/grok-4.7` |
