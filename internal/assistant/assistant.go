@@ -21,6 +21,8 @@ const (
 	Job = "Faithful personal assistant and expert on CastBot. Delegates work to other agents."
 	// Note is the first line in the chat, before the machine has started.
 	Note = "CastBot was created with this account. Add a model key, then start the machine. This chat says hello once the machine is running."
+	// NoteWithKey is the first line when the installer already saved a model key.
+	NoteWithKey = "CastBot was created with this account. The model key is saved. Start the machine. This chat says hello once the machine is running."
 
 	bundleVersion = "1"
 	idleTimeout   = 900
@@ -56,6 +58,33 @@ Speak plainly. Do the work they asked for. Keep a short record of what changed.
 // Ensure creates CastBot for userID when that account has no agents yet.
 // A second call returns the same agent and does not rewrite it.
 func Ensure(ctx context.Context, st *store.Store, userID string) (Result, error) {
+	return ensure(ctx, st, userID, "")
+}
+
+// EnsureWithModel creates CastBot and stores model when the account has no agents.
+// An empty model uses the manifest default. A second call does not change the saved model.
+func EnsureWithModel(ctx context.Context, st *store.Store, userID, model string) (Result, error) {
+	model = strings.TrimSpace(model)
+	if model != "" {
+		if err := usableModel(model); err != nil {
+			return Result{}, err
+		}
+	}
+	return ensure(ctx, st, userID, model)
+}
+
+func usableModel(model string) error {
+	if len(model) > 200 || strings.ContainsAny(model, " \t\r\n") {
+		return store.ErrInvalid
+	}
+	inf, ok := castcfg.InferenceFor(model)
+	if !ok || inf.Keyless || inf.EnvVar == "" {
+		return store.ErrInvalid
+	}
+	return nil
+}
+
+func ensure(ctx context.Context, st *store.Store, userID, model string) (Result, error) {
 	if _, err := st.GetUser(ctx, userID); err != nil {
 		return Result{}, err
 	}
@@ -69,7 +98,7 @@ func Ensure(ctx context.Context, st *store.Store, userID string) (Result, error)
 	if len(agents) > 0 {
 		return Result{}, ErrInUse
 	}
-	return create(ctx, st, userID)
+	return create(ctx, st, userID, model)
 }
 
 func findCastBot(agents []store.Agent) (store.Agent, bool) {
@@ -81,14 +110,19 @@ func findCastBot(agents []store.Agent) (store.Agent, bool) {
 	return store.Agent{}, false
 }
 
-func create(ctx context.Context, st *store.Store, userID string) (Result, error) {
+func create(ctx context.Context, st *store.Store, userID, model string) (Result, error) {
 	sec, err := st.SystemSection(ctx, userID, "pinned")
 	if err != nil {
 		return Result{}, err
 	}
-	model, err := defaultModel()
-	if err != nil {
-		return Result{}, err
+	note := Note
+	if strings.TrimSpace(model) != "" {
+		note = NoteWithKey
+	} else {
+		model, err = defaultModel()
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	agent, thread, err := st.CreateAgent(ctx, userID, store.AgentInput{
 		SectionID:    sec.ID,
@@ -114,7 +148,7 @@ func create(ctx context.Context, st *store.Store, userID string) (Result, error)
 		_ = st.DeleteAgent(ctx, userID, agent.ID)
 		return Result{}, err
 	}
-	if _, err := st.CreateOriginMessage(ctx, userID, thread.ID, "system", agent.ID, Note, "created"); err != nil {
+	if _, err := st.CreateOriginMessage(ctx, userID, thread.ID, "system", agent.ID, note, "created"); err != nil {
 		_ = st.DeleteAgent(ctx, userID, agent.ID)
 		return Result{}, err
 	}

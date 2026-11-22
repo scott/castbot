@@ -15,6 +15,12 @@ help=$(bash "$install" --help)
 printf '%s\n' "$help" | grep -q 'curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh' || fail "help missing curl"
 printf '%s\n' "$help" | grep -q 'CastBot' || fail "help missing CastBot"
 printf '%s\n' "$help" | grep -q 'DigitalOcean' || fail "help missing provider"
+printf '%s\n' "$help" | grep -q 'OpenRouter' || fail "help missing OpenRouter"
+printf '%s\n' "$help" | grep -q 'OpenAI' || fail "help missing OpenAI"
+printf '%s\n' "$help" | grep -q 'Anthropic' || fail "help missing Anthropic"
+printf '%s\n' "$help" | grep -q 'Google Gemini' || fail "help missing Gemini"
+printf '%s\n' "$help" | grep -q 'xAI' || fail "help missing xAI"
+printf '%s\n' "$help" | grep -q 'model key' || fail "help missing model key"
 printf '%s\n' "$help" | grep -q '12 to 1024' || fail "help missing password length"
 printf '%s\n' "$help" | grep -q 'Two-factor can be turned on later in Settings' || fail "help missing two-factor"
 
@@ -185,6 +191,9 @@ grep -q '^CASTBOT_TRUSTED_PROXIES=127.0.0.1/32$' "$envfile" || fail "trusted pro
 grep -q "^CASTBOT_DO_TOKEN=${token}$" "$envfile" || fail "token stored"
 grep -q '^CASTBOT_IMAGE=example.invalid/castbot-runtime:test$' "$envfile" || fail "image"
 grep -q "^CASTBOT_DB=${prefix}/opt/castbot/data/castbot.db$" "$envfile" || fail "db path"
+if grep -q 'CASTBOT_MODEL' "$envfile" || grep -q 'CASTBOT_PROVIDER_KEY_' "$envfile"; then
+  fail "env has a model setting"
+fi
 session=$(sed -n 's/^CASTBOT_SESSION_KEY=//p' "$envfile")
 secrets=$(sed -n 's/^CASTBOT_SECRETS_KEY=//p' "$envfile")
 [[ ${#session} -eq 64 && ${#secrets} -eq 64 && "$session" != "$secrets" ]] || fail "keys"
@@ -495,6 +504,277 @@ if printf '%s\n' "$out" | grep -q 'Authenticator secret'; then
   fail "secret heading without a secret"
 fi
 [[ ! -e "$prefix/root/castbot-first-login.txt" ]] || fail "note without a secret"
+rm -rf "$prefix"
+
+model_key='fixture-install-model-key'
+
+prefix=$(mktemp -d)
+expect_fail "$prefix" CASTBOT_MODEL_PROVIDER=xai
+grep -q 'must be set together' /tmp/castbot-install-fail.err || fail "provider alone"
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+expect_fail "$prefix" \
+  CASTBOT_MODEL_PROVIDER=xai \
+  CASTBOT_MODEL_KEY="$model_key" \
+  CASTBOT_MODEL='openai-api/gpt-4o'
+grep -q 'model is not valid' /tmp/castbot-install-fail.err || fail "wrong model prefix"
+if grep -q "$model_key" /tmp/castbot-install-fail.err || grep -q "$model_key" /tmp/castbot-install-fail.out; then
+  fail "model key in prefix failure"
+fi
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+expect_fail "$prefix" \
+  CASTBOT_MODEL_PROVIDER=bedrock \
+  CASTBOT_MODEL_KEY="$model_key" \
+  CASTBOT_MODEL='bedrock/claude'
+grep -q 'model provider is not supported' /tmp/castbot-install-fail.err || fail "bedrock provider"
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+expect_fail "$prefix" \
+  CASTBOT_MODEL_PROVIDER=xai \
+  CASTBOT_MODEL_KEY='bad key' \
+  CASTBOT_MODEL='xai/grok-4.7'
+grep -q 'model key is not a single token' /tmp/castbot-install-fail.err || fail "model key spaces"
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+cat > "$stub" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CASTBOT_STUB_LOG"
+if [ "$1" = "create-user" ]; then
+  read -r pw || true
+  printf 'pw-len %s\n' "${#pw}" >> "$CASTBOT_STUB_LOG"
+  echo "created admin@example.com"
+  echo "Sign in with this email and the password. Two-factor can be turned on later in Settings."
+  exit 0
+fi
+if [ "$1" = "save-provider-key" ]; then
+  read -r key || true
+  printf 'save-len %s\n' "${#key}" >> "$CASTBOT_STUB_LOG"
+  echo "saved model key"
+  exit 0
+fi
+if [ "$1" = "create-assistant" ]; then
+  echo "created CastBot abcdef"
+  echo "/agents/abcdef"
+  exit 0
+fi
+echo "unknown command" >&2
+exit 2
+EOF
+chmod 0755 "$stub"
+: > "$prefix/stub.log"
+out=$(run_install "$prefix" \
+  CASTBOT_MODEL_PROVIDER=xai \
+  CASTBOT_MODEL_KEY="$model_key" \
+  CASTBOT_MODEL='xai/grok-4.7' \
+  CASTBOT_BINARY="$stub")
+printf '%s\n' "$out" | grep -q 'The model key is saved. Start its machine.' || fail "saved model finish"
+printf '%s\n' "$out" | grep -q 'created CastBot abcdef' || fail "model assistant output"
+if printf '%s\n' "$out" | grep -q "$model_key"; then
+  fail "model key in output"
+fi
+if printf '%s\n' "$out" | grep -q "$password"; then
+  fail "password in model output"
+fi
+grep -q 'save-provider-key --email admin@example.com --provider xai' "$prefix/stub.log" || fail "save-provider-key args"
+grep -q 'create-assistant --email admin@example.com --model xai/grok-4.7' "$prefix/stub.log" || fail "create-assistant model"
+grep -q 'save-len 25' "$prefix/stub.log" || fail "model key length"
+if grep -q 'list-models' "$prefix/stub.log"; then
+  fail "noninteractive listed models"
+fi
+if grep -q "$model_key" "$prefix/stub.log"; then
+  fail "model key in stub log"
+fi
+envfile="$prefix/etc/castbot/castbot.env"
+if grep -q "$model_key" "$envfile" || grep -q 'CASTBOT_MODEL' "$envfile" || grep -q 'CASTBOT_PROVIDER_KEY_' "$envfile"; then
+  fail "model key stored in env"
+fi
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+cat > "$stub" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CASTBOT_STUB_LOG"
+if [ "$1" = "list-models" ]; then
+  read -r key || true
+  printf 'list-len %s\n' "${#key}" >> "$CASTBOT_STUB_LOG"
+  printf 'xai/grok-4.7\tgrok-4.7\n'
+  exit 0
+fi
+if [ "$1" = "create-user" ]; then
+  read -r pw || true
+  printf 'pw-len %s\n' "${#pw}" >> "$CASTBOT_STUB_LOG"
+  echo "created admin@example.com"
+  echo "Sign in with this email and the password. Two-factor can be turned on later in Settings."
+  exit 0
+fi
+if [ "$1" = "save-provider-key" ]; then
+  read -r key || true
+  printf 'save-len %s\n' "${#key}" >> "$CASTBOT_STUB_LOG"
+  echo "saved model key"
+  exit 0
+fi
+if [ "$1" = "create-assistant" ]; then
+  echo "created CastBot abcdef"
+  echo "/agents/abcdef"
+  exit 0
+fi
+echo "unknown command" >&2
+exit 2
+EOF
+chmod 0755 "$stub"
+: > "$prefix/stub.log"
+python3 - "$install" "$prefix" "$stub" "$sha" "$email" "$name" "$password" "$model_key" <<'PY'
+import errno, os, pty, select, sys, time
+
+install, prefix, stub, sha, email, name, password, key = sys.argv[1:9]
+os.environ["CASTBOT_INSTALL_PREFIX"] = prefix
+os.environ["CASTBOT_ADMIN_EMAIL"] = email
+os.environ["CASTBOT_ADMIN_NAME"] = name
+os.environ["CASTBOT_ADMIN_PASSWORD"] = password
+os.environ["CASTBOT_PUBLIC_HOST"] = ""
+os.environ["CASTBOT_SHA"] = sha
+os.environ["CASTBOT_BINARY"] = stub
+os.environ["CASTBOT_STUB_LOG"] = prefix + "/stub.log"
+os.environ["CASTBOT_STUB_USER"] = prefix + "/stub.user"
+for name_var in (
+    "CASTBOT_INSTALL_NONINTERACTIVE",
+    "CASTBOT_MODEL_PROVIDER",
+    "CASTBOT_MODEL_KEY",
+    "CASTBOT_MODEL",
+    "CASTBOT_DO_TOKEN",
+    "CASTBOT_IMAGE",
+):
+    os.environ.pop(name_var, None)
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv("/bin/bash", ["bash", install])
+
+buf = b""
+status = None
+
+def redact(raw):
+    text = raw.decode("utf-8", "replace")
+    return text.replace(key, "[redacted]").replace(password, "[redacted]")
+
+def reap(block=False):
+    global status
+    if status is not None:
+        return
+    try:
+        wpid, got = os.waitpid(pid, 0 if block else os.WNOHANG)
+    except ChildProcessError:
+        return
+    if wpid != 0:
+        status = got
+
+def pump_once(timeout):
+    global buf
+    readable, _, _ = select.select([fd], [], [], timeout)
+    if readable:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError as err:
+            if err.errno == errno.EIO:
+                reap(block=True)
+                return False
+            raise
+        if not chunk:
+            reap(block=True)
+            return False
+        buf += chunk
+        return True
+    reap()
+    return status is None
+
+def wait_count(token, count, timeout=30):
+    deadline = time.time() + timeout
+    while buf.count(token) < count:
+        if time.time() > deadline or not pump_once(0.2):
+            if buf.count(token) >= count:
+                return
+            sys.stderr.write("timeout waiting for installer prompt\n")
+            sys.stderr.write(redact(buf))
+            sys.exit(1)
+
+def send(raw):
+    os.write(fd, raw)
+
+wait_count(b"Provider: ", 1)
+send(b"\n")
+wait_count(b"Provider: ", 2)
+send(b"6\n")
+wait_count(b"Model key: ", 1)
+send(key.encode() + b"\n")
+wait_count(b"Model: ", 1)
+send(b"1\n")
+
+deadline = time.time() + 30
+while status is None:
+    if time.time() > deadline:
+        sys.stderr.write("timeout waiting for installer exit\n")
+        sys.stderr.write(redact(buf))
+        sys.exit(1)
+    pump_once(0.2)
+while True:
+    readable, _, _ = select.select([fd], [], [], 0.2)
+    if not readable:
+        break
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    buf += chunk
+
+if os.WIFEXITED(status):
+    code = os.WEXITSTATUS(status)
+else:
+    code = 1
+text = buf.decode("utf-8", "replace")
+if code != 0 or key in text or password in text:
+    sys.stderr.write("interactive installer failed\n")
+    sys.stderr.write(redact(buf))
+    sys.exit(1)
+for needle in (
+    "OpenRouter",
+    "OpenAI",
+    "Anthropic",
+    "Google Gemini",
+    "xAI",
+    "DigitalOcean",
+    "grok-4.7",
+    "The model key is saved.",
+):
+    if needle not in text:
+        sys.stderr.write("missing installer text\n")
+        sys.stderr.write(redact(buf))
+        sys.exit(1)
+for banned in ("Ollama", "Bedrock", "ollama", "bedrock"):
+    if banned in text:
+        sys.stderr.write("unexpected provider in installer text\n")
+        sys.exit(1)
+PY
+grep -q 'list-models --provider xai' "$prefix/stub.log" || fail "interactive list-models"
+grep -q 'list-len 25' "$prefix/stub.log" || fail "interactive list length"
+grep -q 'save-provider-key --email admin@example.com --provider xai' "$prefix/stub.log" || fail "interactive save"
+grep -q 'save-len 25' "$prefix/stub.log" || fail "interactive save length"
+grep -q 'create-assistant --email admin@example.com --model xai/grok-4.7' "$prefix/stub.log" || fail "interactive model"
+if grep -q "$model_key" "$prefix/stub.log" || grep -q "$password" "$prefix/stub.log"; then
+  fail "secret in interactive stub log"
+fi
+envfile="$prefix/etc/castbot/castbot.env"
+if grep -q "$model_key" "$envfile" || grep -q 'CASTBOT_MODEL' "$envfile" || grep -q 'CASTBOT_PROVIDER_KEY_' "$envfile"; then
+  fail "interactive model key stored in env"
+fi
 rm -rf "$prefix"
 
 rm -f /tmp/castbot-install-xtrace.out /tmp/castbot-install-xtrace.err \

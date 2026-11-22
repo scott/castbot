@@ -12,6 +12,8 @@ The script reads prompts from the terminal, so the pipe is safe. Each question e
 
 The machine token is optional. It lets castbot start, pause, and delete agent machines. The prompt lists the supported providers. DigitalOcean is supported today. The token is stored in the env file and is not printed. Sign-in uses the email and password. Two-factor can be turned on later in Settings.
 
+The model provider is optional. The prompt lists OpenRouter, DigitalOcean, OpenAI, Anthropic, Google Gemini, and xAI. Paste a key for the one you choose. After the program is installed, the installer lists the models that key can use. Press Enter to use the first model, or enter a number or a model id. The key is stored in the vault and is not printed. It is not written to the env file. Press Enter at the provider prompt to skip and add a key later in Settings. A machine token and a model key are separate. The machine token starts agent machines. The model key calls a model.
+
 ## What it creates
 
 | Path | Role |
@@ -32,7 +34,7 @@ The script also installs `sqlite3`, `fail2ban`, and, when a hostname is set, `ca
 
 After the account exists, the script runs `castbot create-assistant`. That command creates one agent named CastBot in the pinned section when the account has no agents yet.
 
-CastBot is a personal assistant for the owner and an expert on this product. Delegation is on, so CastBot can message the other agents on the account and hand them work. Write tools ask before they run. Read tools are allowed. The agent stays in draft until a model key is saved and its machine is started. The first chat line says to add a key and start the machine. The machine says hello once, on the first healthy start.
+CastBot is a personal assistant for the owner and an expert on this product. Delegation is on, so CastBot can message the other agents on the account and hand them work. Write tools ask before they run. Read tools are allowed. The agent stays in draft until its machine is started. When the installer saved a model key, that model is stored on CastBot and the first chat line says to start the machine. Otherwise the first chat line says to add a key and start the machine. The machine says hello once, on the first healthy start. A later run does not change the model on an existing CastBot.
 
 A second run does not rewrite CastBot. If the account already has other agents and no CastBot, the command stops and leaves those agents alone.
 
@@ -47,10 +49,13 @@ Set these in the environment when there is no terminal. `CASTBOT_INSTALL_NONINTE
 | `CASTBOT_ADMIN_PASSWORD` | Password, 12 to 1024 characters |
 | `CASTBOT_PUBLIC_HOST` | Optional hostname, without a scheme |
 | `CASTBOT_DO_TOKEN` | Optional DigitalOcean machine token |
+| `CASTBOT_MODEL_PROVIDER` | Optional inference provider id. Set with the key and the model, or leave all three unset |
+| `CASTBOT_MODEL_KEY` | Optional model key for that provider. Stored in the vault. Not printed and not written to the env file |
+| `CASTBOT_MODEL` | Model id from that provider, such as `xai/grok-4.7` |
 | `CASTBOT_IMAGE` | Runtime image override. Unset chooses the public tag when a token and a hostname are both set |
 | `CASTBOT_REF` | Branch, tag, or commit. The default is `main` |
 | `CASTBOT_WORKSPACE` | Workspace name. The default is `Personal` |
 
-The script refuses to run under `bash -x`, because a trace would print the password and the generated keys. It does not print `CASTBOT_DO_TOKEN`, `CASTBOT_SESSION_KEY`, or `CASTBOT_SECRETS_KEY`.
+The script refuses to run under `bash -x`, because a trace would print the password and the generated keys. It does not print `CASTBOT_DO_TOKEN`, `CASTBOT_MODEL_KEY`, `CASTBOT_SESSION_KEY`, or `CASTBOT_SECRETS_KEY`. A partial model setting stops the install before it changes the host. When all three model settings are present, the script checks the provider and that the model id starts with that provider. It does not ask the provider for a list.
 
 The runtime image is not built on the host. `docs/runtime.md` names the public tag, and `docs/DEPLOY.md` covers later updates.

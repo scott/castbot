@@ -161,6 +161,40 @@ func TestEnsureRefusesWhenAgentsExist(t *testing.T) {
 	}
 }
 
+func TestEnsureWithModelStoresTheChoice(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	owner := makeUser(t, s, "owner@example.com", "Owner")
+	const model = "xai/grok-4.7"
+	res, err := EnsureWithModel(ctx, s, owner.ID, model)
+	if err != nil || !res.Created || res.Agent.Model != model {
+		t.Fatalf("agent %+v %v", res.Agent, err)
+	}
+	bundle, err := s.LatestBundle(ctx, owner.ID, res.Agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := castcfg.ParseYAML(bundle.YAML)
+	if err != nil || spec.Model != model {
+		t.Fatalf("yaml %v %v", spec.Model, err)
+	}
+	th, err := s.DMThread(ctx, owner.ID, res.Agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := s.ListMessages(ctx, owner.ID, th.ID)
+	if err != nil || len(msgs) != 1 || msgs[0].Body != NoteWithKey {
+		t.Fatalf("messages %+v %v", msgs, err)
+	}
+	again, err := EnsureWithModel(ctx, s, owner.ID, "openrouter/minimax/minimax-m2.5")
+	if err != nil || again.Created || again.Agent.Model != model {
+		t.Fatalf("rewrite %+v %v", again.Agent, err)
+	}
+	if _, err := EnsureWithModel(ctx, s, owner.ID, "ollama/qwen3"); err != store.ErrInvalid {
+		t.Fatalf("keyless %v", err)
+	}
+}
+
 func TestEnsureUnknownUser(t *testing.T) {
 	s := testStore(t)
 	if _, err := Ensure(context.Background(), s, "missing"); err != store.ErrNotFound {

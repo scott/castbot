@@ -65,7 +65,9 @@ Without a hostname, castbot listens on `127.0.0.1:8080` only. From your computer
 
 The machine token is optional. It lets castbot start, pause, and delete agent machines. The prompt lists the supported providers. DigitalOcean is supported. The token is stored in the env file and is not printed. Sign-in uses the email and password. Two-factor can be turned on later in Settings. The session key and the secrets key are generated in `/etc/castbot/castbot.env` (mode 0600). They are not printed.
 
-The first agent is named CastBot and is placed in the pinned section. CastBot is the personal assistant for that account, knows how to use castbot, and can delegate work to other agents. The agent stays in draft until a model key is saved and its machine is started. The first chat line says to add a key and start the machine. The machine says hello once, on the first healthy start.
+The model provider is optional. The prompt lists OpenRouter, DigitalOcean, OpenAI, Anthropic, Google Gemini, and xAI. Paste a key for the one you choose. After the program is installed, the installer lists the models that key can use. The key is stored in the vault and is not printed. It is not written to the env file. Press Enter to skip and add a key later in Settings.
+
+The first agent is named CastBot and is placed in the pinned section. CastBot is the personal assistant for that account, knows how to use castbot, and can delegate work to other agents. The agent stays in draft until its machine is started. When the installer saved a model key, the first chat line says to start the machine. Otherwise it says to add a key and start the machine. The machine says hello once, on the first healthy start.
 
 A second run keeps the session keys and does not rewrite CastBot. When a machine token and a public hostname are both set, the first run writes the newest public runtime image whose guest inputs match the installed commit. Set `CASTBOT_IMAGE` before the first run to use a different image. The machine host stays off until the token, the image, and an https public URL are all set. The service still starts, so you can sign in and add the token later.
 
