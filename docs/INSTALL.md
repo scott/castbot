@@ -24,7 +24,7 @@ The password must be 12 to 1024 characters. The script prints an authenticator s
 | `/etc/systemd/system/castbot.service` | The service |
 | `/etc/caddy/Caddyfile` | Present only when a public hostname is set |
 
-The service runs as `castbot` and reads `CASTBOT_ENV_FILE=/etc/castbot/castbot.env`. The session key and the secrets key are generated in that file. They are not printed. The first run writes `CASTBOT_IMAGE` to the newest public tag whose guest inputs match the installed commit. Set `CASTBOT_IMAGE` before that run to use a different image. A second run keeps the file. Edit it by hand to add `CASTBOT_DO_TOKEN` later. The machine host stays off until the token, the image, and an https public URL are all set. If a token or a public hostname is set and no published image matches, the script stops before it writes the env file.
+The service runs as `castbot` and reads `CASTBOT_ENV_FILE=/etc/castbot/castbot.env`. The session key and the secrets key are generated in that file. They are not printed. When a machine token and a public hostname are both set, the first run writes `CASTBOT_IMAGE` to the newest public tag whose guest inputs match the installed commit. Set `CASTBOT_IMAGE` before that run to use a different image. Without both, the image is left unset and the machine host stays off. The service still answers on `/login`. A public hostname without a token still installs the proxy and sets `CASTBOT_PUBLIC_URL`. A second run keeps the session keys. If that run adds a hostname, a token, or an image that the file does not have yet, it appends those lines and does not print them. If a token and a public hostname are both set and no published image matches, the script stops before it writes the env file.
 
 The script also installs `sqlite3`, `fail2ban`, and, when a hostname is set, `caddy`. When a hostname is set, it allows the current SSH port plus ports 80 and 443, then enables the firewall. It installs Go `go1.27.4` under `/usr/local/go` only when `go version` is not already that release, then builds a static binary from `CASTBOT_REF` (default `main`). A later run replaces that binary and keeps the env file. It stops the service for the account commands, then starts it again.
 
@@ -47,7 +47,7 @@ Set these in the environment when there is no terminal. `CASTBOT_INSTALL_NONINTE
 | `CASTBOT_ADMIN_PASSWORD` | Password, 12 to 1024 characters |
 | `CASTBOT_PUBLIC_HOST` | Optional hostname, without a scheme |
 | `CASTBOT_DO_TOKEN` | Optional machine token |
-| `CASTBOT_IMAGE` | Runtime image override. Unset chooses the public tag |
+| `CASTBOT_IMAGE` | Runtime image override. Unset chooses the public tag when a token and a hostname are both set |
 | `CASTBOT_REF` | Branch, tag, or commit. The default is `main` |
 | `CASTBOT_WORKSPACE` | Workspace name. The default is `Personal` |
 

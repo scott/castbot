@@ -143,11 +143,13 @@ func attachMachine(app *web.Server, cfg config.Config) {
 		app.SetTrustedProxies(nets)
 		log.Printf("trusted proxies: %d", len(nets))
 	}
-	if cfg.MachineToken == "" && cfg.Image == "" && cfg.PublicURL == "" {
-		return
-	}
+	// The host stays off until a token, an image, and an https public URL
+	// are all set. A partial set must not exit: the UI still has to serve.
 	if cfg.MachineToken == "" || cfg.Image == "" || cfg.PublicURL == "" {
-		log.Fatal("machine host needs a token, an image, and a public https URL")
+		if cfg.MachineToken != "" || cfg.Image != "" || cfg.PublicURL != "" {
+			log.Print("machine host stays off")
+		}
+		return
 	}
 	u, err := url.Parse(cfg.PublicURL)
 	if err != nil || u.Host == "" || u.Scheme != "https" {

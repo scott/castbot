@@ -54,9 +54,11 @@ On a new host, as root:
   curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh | bash
 
 A terminal asks for the account email, name, and password, and for an
-optional public hostname. Without a hostname, castbot listens on
-127.0.0.1:8080 only. The script chooses the runtime image. Set
-CASTBOT_IMAGE to use a different one.
+optional public hostname and an optional machine token. Without a
+hostname, castbot listens on 127.0.0.1:8080 only. The script chooses
+the runtime image when both the token and the hostname are set. Set
+CASTBOT_IMAGE to use a different one. The service still starts when
+the machine host stays off.
 
 Non-interactive settings:
   CASTBOT_ADMIN_EMAIL
@@ -407,49 +409,77 @@ install_binary() {
   fi
 }
 
-# resolve_image fills CASTBOT_IMAGE from the published tags when the
-# operator did not set one. An existing env file is left alone.
-resolve_image() {
+# machine_host_wanted is true when a token and a public host are both
+# available, counting keys already stored in the env file. Values are
+# not printed.
+machine_host_wanted() {
+  local have_token=0 have_host=0
+  if [[ -n "$TOKEN" ]]; then
+    have_token=1
+  fi
+  if [[ -n "$PUBLIC_HOST" ]]; then
+    have_host=1
+  fi
   if [[ -e "$ENV_FILE" ]]; then
+    if grep -q '^CASTBOT_DO_TOKEN=' "$ENV_FILE"; then
+      have_token=1
+    fi
+    if grep -q '^CASTBOT_PUBLIC_URL=' "$ENV_FILE"; then
+      have_host=1
+    fi
+  fi
+  [[ "$have_token" -eq 1 && "$have_host" -eq 1 ]]
+}
+
+# resolve_image fills CASTBOT_IMAGE only when the machine host can start.
+# Without a token and a public host, the image stays unset and the host
+# stays off. The service still listens.
+resolve_image() {
+  local have_image=0
+  if [[ -e "$ENV_FILE" ]] && grep -q '^CASTBOT_IMAGE=' "$ENV_FILE"; then
+    have_image=1
+  fi
+  if ! machine_host_wanted; then
+    if [[ -n "$IMAGE" && "$have_image" -eq 0 ]]; then
+      printf 'install: runtime image ignored. The machine host stays off.\n' >&2
+    fi
+    IMAGE=""
     return 0
   fi
-  if [[ -z "$IMAGE" ]]; then
-    local repo script err selected
-    repo=${CASTBOT_RUNTIME_REPO:-${SRC_DIR:-}}
-    script=${CASTBOT_RUNTIME_IMAGE_SH:-}
-    if [[ -z "$script" && -n "$repo" ]]; then
-      script="${repo}/scripts/runtime-image.sh"
-    fi
-    if [[ -n "$script" && -n "$repo" ]]; then
-      if [[ ! -f "$script" ]]; then
-        if [[ -n "$TOKEN" || -n "$PUBLIC_HOST" ]]; then
-          die "runtime image helper is missing"
-        fi
-        printf 'install: runtime image helper is missing. The machine host stays off.\n' >&2
-      else
-        err=$(mktemp)
-        if ! selected=$(CASTBOT_RUNTIME_REPO="$repo" bash "$script" select "$SHA" 2>"$err"); then
-          if [[ -s "$err" ]]; then
-            cat "$err" >&2
-          fi
-          rm -f "$err"
-          if [[ -n "$TOKEN" || -n "$PUBLIC_HOST" ]]; then
-            die "no published runtime image matches this commit"
-          fi
-          printf 'install: no published runtime image matches this commit. The machine host stays off.\n' >&2
-        else
-          rm -f "$err"
-          IMAGE=$selected
-          if ! valid_image "$IMAGE"; then
-            die "runtime image has a character that is not allowed"
-          fi
-        fi
-      fi
-    fi
+  if [[ "$have_image" -eq 1 ]]; then
+    IMAGE=""
+    return 0
   fi
   if [[ -n "$IMAGE" ]]; then
     printf 'Runtime image: %s\n' "$IMAGE"
+    return 0
   fi
+  local repo script err selected
+  repo=${CASTBOT_RUNTIME_REPO:-${SRC_DIR:-}}
+  script=${CASTBOT_RUNTIME_IMAGE_SH:-}
+  if [[ -z "$script" && -n "$repo" ]]; then
+    script="${repo}/scripts/runtime-image.sh"
+  fi
+  if [[ -z "$script" || -z "$repo" ]]; then
+    die "no published runtime image matches this commit"
+  fi
+  if [[ ! -f "$script" ]]; then
+    die "runtime image helper is missing"
+  fi
+  err=$(mktemp)
+  if ! selected=$(CASTBOT_RUNTIME_REPO="$repo" bash "$script" select "$SHA" 2>"$err"); then
+    if [[ -s "$err" ]]; then
+      cat "$err" >&2
+    fi
+    rm -f "$err"
+    die "no published runtime image matches this commit"
+  fi
+  rm -f "$err"
+  IMAGE=$selected
+  if ! valid_image "$IMAGE"; then
+    die "runtime image has a character that is not allowed"
+  fi
+  printf 'Runtime image: %s\n' "$IMAGE"
 }
 
 write_env() {
@@ -460,6 +490,21 @@ write_env() {
     if [[ "$mode" != "600" ]]; then
       die "env file is not mode 0600"
     fi
+    # A later run can add the public URL, the proxy trust, the token, or
+    # the image. Session keys stay. Values are not printed.
+    if [[ -n "$PUBLIC_HOST" ]] && ! grep -q '^CASTBOT_PUBLIC_URL=' "$ENV_FILE"; then
+      printf 'CASTBOT_PUBLIC_URL=%s\n' "https://${PUBLIC_HOST}" >> "$ENV_FILE"
+    fi
+    if [[ -n "$PUBLIC_HOST" ]] && ! grep -q '^CASTBOT_TRUSTED_PROXIES=' "$ENV_FILE"; then
+      printf 'CASTBOT_TRUSTED_PROXIES=%s\n' "127.0.0.1/32" >> "$ENV_FILE"
+    fi
+    if [[ -n "$TOKEN" ]] && ! grep -q '^CASTBOT_DO_TOKEN=' "$ENV_FILE"; then
+      printf 'CASTBOT_DO_TOKEN=%s\n' "$TOKEN" >> "$ENV_FILE"
+    fi
+    if [[ -n "$IMAGE" ]] && ! grep -q '^CASTBOT_IMAGE=' "$ENV_FILE"; then
+      printf 'CASTBOT_IMAGE=%s\n' "$IMAGE" >> "$ENV_FILE"
+    fi
+    chmod 0600 "$ENV_FILE"
     unset TOKEN CASTBOT_DO_TOKEN
     return 0
   fi
@@ -655,12 +700,17 @@ start_services() {
   local i
   i=0
   while [[ "$i" -lt 30 ]]; do
-    if curl -fsS --max-time 2 http://127.0.0.1:8080/login >/dev/null; then
+    if curl -fsS --max-time 2 http://127.0.0.1:8080/login >/dev/null 2>&1; then
       return 0
     fi
     i=$((i + 1))
     sleep 1
   done
+  if command -v journalctl >/dev/null 2>&1; then
+    journalctl -u castbot -n 40 --no-pager -o cat 2>/dev/null \
+      | grep -E 'machine host|castbot listening|trusted proxies' \
+      | tail -n 5 >&2 || true
+  fi
   die "castbot did not answer on /login"
 }
 

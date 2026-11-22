@@ -2,7 +2,7 @@
 
 Every agent uses one shared image, the `runtime` target of `Dockerfile`. New agents get whatever tag `CASTBOT_IMAGE` names at create time. An existing agent stays on the image it was created with until the owner runs Replace machine.
 
-The runtime image workflow on `main` pushes `ghcr.io/scott/castbot-runtime:<full commit>` when that commit's guest inputs differ from the newest public tag. Guest inputs are the Dockerfile, `deploy/`, the Go module files, the guest commands, and the packages those commands import. A test file is not an input. A matching public tag is left in place. The installer writes the newest matching tag into `CASTBOT_IMAGE`. Publishing a tag does not edit a server env file, does not deploy, and does not replace a machine.
+The runtime image workflow on `main` pushes `ghcr.io/scott/castbot-runtime:<full commit>` when that commit's guest inputs differ from the newest public tag. Guest inputs are the Dockerfile, `deploy/`, the Go module files, the guest commands, and the packages those commands import. A test file is not an input. A matching public tag is left in place. The installer writes the newest matching tag into `CASTBOT_IMAGE` when a machine token and a public hostname are both set. Otherwise the machine host stays off and the service still starts. Publishing a tag does not edit a server env file, does not deploy, and does not replace a machine.
 
 ## What the image contains
 

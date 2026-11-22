@@ -294,9 +294,52 @@ out=$(run_install "$prefix" \
   CASTBOT_BINARY="$stub" \
   CASTBOT_RUNTIME_REPO="$prefix/repo" \
   CASTBOT_RUNTIME_IMAGE_SH="$selector")
+printf '%s\n' "$out" | grep -q '127.0.0.1:8080' || fail "local listen"
+if printf '%s\n' "$out" | grep -q 'Runtime image:'; then
+  fail "local install printed an image"
+fi
+envfile="$prefix/etc/castbot/castbot.env"
+if grep -q 'CASTBOT_IMAGE=' "$envfile"; then
+  fail "local install stored an image"
+fi
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+cat > "$stub" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CASTBOT_STUB_LOG"
+if [ "$1" = "create-user" ]; then
+  read -r _ || true
+  echo "Authenticator secret: TESTSECRET234567"
+  echo "otpauth://totp/castbot:admin?secret=TESTSECRET234567"
+  exit 0
+fi
+if [ "$1" = "create-assistant" ]; then
+  echo "created CastBot abcdef"
+  exit 0
+fi
+exit 2
+EOF
+chmod 0755 "$stub"
+selector="$prefix/select.sh"
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" "example.invalid/castbot-runtime:0123456789abcdef0123456789abcdef01234567"' > "$selector"
+chmod 0755 "$selector"
+mkdir -p "$prefix/repo"
+: > "$prefix/stub.log"
+out=$(run_install "$prefix" \
+  CASTBOT_PUBLIC_HOST='bot.example.com' \
+  CASTBOT_DO_TOKEN="$token" \
+  CASTBOT_BINARY="$stub" \
+  CASTBOT_RUNTIME_REPO="$prefix/repo" \
+  CASTBOT_RUNTIME_IMAGE_SH="$selector")
 printf '%s\n' "$out" | grep -q 'Runtime image: example.invalid/castbot-runtime:0123456789abcdef0123456789abcdef01234567' || fail "selected image output"
 envfile="$prefix/etc/castbot/castbot.env"
 grep -q '^CASTBOT_IMAGE=example.invalid/castbot-runtime:0123456789abcdef0123456789abcdef01234567$' "$envfile" || fail "selected image"
+grep -q '^CASTBOT_PUBLIC_URL=https://bot.example.com$' "$envfile" || fail "selected public url"
+if printf '%s\n' "$out" | grep -q "$token"; then
+  fail "token in selected output"
+fi
 rm -rf "$prefix"
 
 prefix=$(mktemp -d)
@@ -310,6 +353,7 @@ mkdir -p "$prefix/repo"
 set +e
 run_install "$prefix" \
   CASTBOT_PUBLIC_HOST='bot.example.com' \
+  CASTBOT_DO_TOKEN="$token" \
   CASTBOT_BINARY="$stub" \
   CASTBOT_RUNTIME_REPO="$prefix/repo" \
   CASTBOT_RUNTIME_IMAGE_SH="$selector" >/tmp/castbot-install-fail.out 2>/tmp/castbot-install-fail.err
@@ -318,6 +362,46 @@ set -e
 [[ "$code" -ne 0 ]] || fail "missing image should refuse"
 grep -q 'no published runtime image matches this commit' /tmp/castbot-install-fail.err || fail "missing image message"
 [[ ! -e "$prefix/etc/castbot/castbot.env" ]] || fail "missing image wrote an env file"
+if grep -q "$token" /tmp/castbot-install-fail.err || grep -q "$token" /tmp/castbot-install-fail.out; then
+  fail "token in missing image output"
+fi
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+cat > "$stub" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CASTBOT_STUB_LOG"
+if [ "$1" = "create-user" ]; then
+  read -r _ || true
+  echo "Authenticator secret: TESTSECRET234567"
+  echo "otpauth://totp/castbot:admin?secret=TESTSECRET234567"
+  exit 0
+fi
+if [ "$1" = "create-assistant" ]; then
+  echo "created CastBot abcdef"
+  exit 0
+fi
+exit 2
+EOF
+chmod 0755 "$stub"
+: > "$prefix/stub.log"
+out=$(run_install "$prefix" CASTBOT_BINARY="$stub")
+envfile="$prefix/etc/castbot/castbot.env"
+session=$(sed -n 's/^CASTBOT_SESSION_KEY=//p' "$envfile")
+out2=$(run_install "$prefix" \
+  CASTBOT_PUBLIC_HOST='bot.example.com' \
+  CASTBOT_BINARY="$stub")
+grep -q '^CASTBOT_PUBLIC_URL=https://bot.example.com$' "$envfile" || fail "second run public url"
+grep -q '^CASTBOT_TRUSTED_PROXIES=127.0.0.1/32$' "$envfile" || fail "second run proxies"
+if grep -q 'CASTBOT_IMAGE=' "$envfile" || grep -q 'CASTBOT_DO_TOKEN=' "$envfile"; then
+  fail "second run stored a machine host"
+fi
+[[ "$(sed -n 's/^CASTBOT_SESSION_KEY=//p' "$envfile")" == "$session" ]] || fail "second run session key"
+if printf '%s\n' "$out2" | grep -q "$session"; then
+  fail "session key in second output"
+fi
+printf '%s\n' "$out2" | grep -q 'https://bot.example.com/login' || fail "second run sign-in url"
 rm -rf "$prefix"
 
 prefix=$(mktemp -d)
@@ -348,10 +432,40 @@ out=$(run_install "$prefix" \
   CASTBOT_RUNTIME_REPO="$prefix/repo" \
   CASTBOT_RUNTIME_IMAGE_SH="$selector" 2>/tmp/castbot-install-fail.err)
 printf '%s\n' "$out" | grep -q '127.0.0.1:8080' || fail "local listen without an image"
-grep -q 'machine host stays off' /tmp/castbot-install-fail.err || fail "local image message"
+if grep -q 'no published runtime image' /tmp/castbot-install-fail.err; then
+  fail "local miss treated a missing image as fatal"
+fi
 envfile="$prefix/etc/castbot/castbot.env"
 if grep -q 'CASTBOT_IMAGE=' "$envfile"; then
   fail "local miss stored an image"
+fi
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+cat > "$stub" <<'EOF'
+#!/bin/sh
+if [ "$1" = "create-user" ]; then
+  read -r _ || true
+  echo "Authenticator secret: TESTSECRET234567"
+  echo "otpauth://totp/castbot:admin?secret=TESTSECRET234567"
+  exit 0
+fi
+if [ "$1" = "create-assistant" ]; then
+  echo "created CastBot abcdef"
+  exit 0
+fi
+exit 2
+EOF
+chmod 0755 "$stub"
+out=$(run_install "$prefix" \
+  CASTBOT_IMAGE='example.invalid/castbot-runtime:test' \
+  CASTBOT_BINARY="$stub" 2>/tmp/castbot-install-fail.err)
+printf '%s\n' "$out" | grep -q '127.0.0.1:8080' || fail "ignored image listen"
+grep -q 'runtime image ignored' /tmp/castbot-install-fail.err || fail "ignored image message"
+envfile="$prefix/etc/castbot/castbot.env"
+if grep -q 'CASTBOT_IMAGE=' "$envfile"; then
+  fail "ignored image was stored"
 fi
 rm -rf "$prefix"
 
