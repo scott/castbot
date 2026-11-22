@@ -8,7 +8,7 @@ castbot is a web UI for Cast agents (https://castagent.dev) running on DigitalOc
 
 ## What it is
 
-castbot is where you sign in and keep a set of agents. Sign-in is a password plus an authenticator code. Each agent is one chat with its own machine. The machine pauses when the agent is idle and wakes for the next message. A reply streams into the thread. If the browser drops, the work continues on the machine and the thread catches up when you come back.
+castbot is where you sign in and keep a set of agents. Sign-in is an email and a password. Two-factor is optional and can be turned on in Settings. Each agent is one chat with its own machine. The machine pauses when the agent is idle and wakes for the next message. A reply streams into the thread. If the browser drops, the work continues on the machine and the thread catches up when you come back.
 
 You add a model key on your account and choose a model for each agent. The key stays in the vault. It is stored encrypted and is not shown again.
 
@@ -47,7 +47,7 @@ go run ./cmd/castbot seed-demo --email you@example.com
 go run ./cmd/castbot
 ```
 
-`create-user` reads the password from the terminal and prints the authenticator secret once. It refuses to run when any account already exists. Open the address from the log, which defaults to `127.0.0.1:8080`.
+`create-user` reads the password from the terminal. It refuses to run when any account already exists. Sign-in uses that email and password. Two-factor can be turned on later in Settings. Open the address from the log, which defaults to `127.0.0.1:8080`.
 
 ## Install
 
@@ -57,13 +57,13 @@ On a new host, as root:
 curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh | bash
 ```
 
-The script installs the control plane, creates the first account, and creates the first agent. Prompts are read from the terminal. It asks for an email, a display name, and a password of 12 to 1024 characters, then an optional public hostname.
+The script installs the control plane, creates the first account, and creates the first agent. Prompts are read from the terminal. Each question explains what it is for. It asks for an email, a display name, and a password of 12 to 1024 characters, then an optional public hostname.
 
-With a hostname, it installs a reverse proxy, opens ports 80 and 443, and sets the public URL to `https://` that name. Point DNS at the host so the proxy can obtain a certificate. Sign in at `https://<hostname>/login`.
+With a hostname, it installs a reverse proxy, opens ports 80 and 443, and sets the public URL to `https://` that name. Do not include a scheme or a port. Point DNS at the host so the proxy can obtain a certificate. Sign in at `https://<hostname>/login`.
 
 Without a hostname, castbot listens on `127.0.0.1:8080` only. From your computer, tunnel port 8080 and open `http://127.0.0.1:8080/login`.
 
-The script prints an authenticator secret once and copies it to `/root/castbot-first-login.txt` (mode 0600). Add the secret to an authenticator, then delete that file. The session key and the secrets key are generated in `/etc/castbot/castbot.env` (mode 0600). They are not printed.
+The machine token is optional. It lets castbot start, pause, and delete agent machines. The prompt lists the supported providers. DigitalOcean is supported. The token is stored in the env file and is not printed. Sign-in uses the email and password. Two-factor can be turned on later in Settings. The session key and the secrets key are generated in `/etc/castbot/castbot.env` (mode 0600). They are not printed.
 
 The first agent is named CastBot and is placed in the pinned section. CastBot is the personal assistant for that account, knows how to use castbot, and can delegate work to other agents. The agent stays in draft until a model key is saved and its machine is started. The first chat line says to add a key and start the machine. The machine says hello once, on the first healthy start.
 

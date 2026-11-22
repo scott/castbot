@@ -146,7 +146,7 @@
 <div class="search{{if .SearchQuery}} on{{end}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input id="search" type="search" placeholder="Search agents and chats" aria-label="Search agents and chats" autocomplete="off" value="{{.SearchQuery}}"><kbd>/</kbd></div>
 <div id="search-pop"{{if not .SearchQuery}} hidden{{end}}>{{template "searchResults" .}}</div>
 {{template "sidebarSections" .}}
-<div class="sb-foot"><a class="acct{{if eq .Page "settings" "password" "stub" "secrets" "connections"}} on{{end}}" href="/settings" aria-label="Account and settings"><span class="av me">{{.Initials}}</span><span class="grow"><span class="nm">{{.User.DisplayName}}</span><br><span class="sub">{{.User.WorkspaceName}} workspace</span></span>{{template "gear" .}}</a></div>
+<div class="sb-foot"><a class="acct{{if eq .Page "settings" "password" "two-factor" "stub" "secrets" "connections"}} on{{end}}" href="/settings" aria-label="Account and settings"><span class="av me">{{.Initials}}</span><span class="grow"><span class="nm">{{.User.DisplayName}}</span><br><span class="sub">{{.User.WorkspaceName}} workspace</span></span>{{template "gear" .}}</a></div>
 </aside>
 {{end}}
 
@@ -280,7 +280,7 @@
 <div class="set-row"><div class="grow"><div class="k">Name</div>{{if .EditName}}<form method="post" action="/settings/account"><input type="hidden" name="csrf" value="{{.CSRF}}"><div class="inp"><input name="name" value="{{.User.DisplayName}}" maxlength="80" aria-label="Name" required></div><button class="btn sm pri" type="submit">Save</button></form>{{else}}<div class="v">{{.User.DisplayName}}</div>{{end}}</div>{{if not .EditName}}<a class="btn sm" href="/settings?edit=name">Edit</a>{{end}}</div>
 <div class="set-row"><div class="grow"><div class="k">Email</div><div class="v">{{.User.Email}}</div><span class="t2">Used to sign in. We send a link to confirm a new one.</span></div><a class="btn sm" href="/settings/email">Change</a></div>
 <div class="set-row"><div class="grow"><div class="k">Password</div><div class="v">{{.PasswordOn}}</div></div><a class="btn sm" href="/settings/password">Change password</a></div>
-<div class="set-row"><div class="grow"><div class="k">Two-factor</div><div class="v"><span class="chip run"><span class="pip"></span>On</span> Authenticator app</div><span class="t2">8 recovery codes left</span></div><a class="btn sm" href="/settings/two-factor">Manage</a></div>
+<div class="set-row"><div class="grow"><div class="k">Two-factor</div>{{if .TwoFactorOn}}<div class="v"><span class="chip run"><span class="pip"></span>On</span> Authenticator app</div><span class="t2">A code is required when you sign in on a new device.</span>{{else}}<div class="v"><span class="chip"><span class="pip"></span>Off</span> Optional</div><span class="t2">Sign-in uses your password. You can add an authenticator later.</span>{{end}}</div>{{if .TwoFactorOn}}<a class="btn sm" href="/settings/two-factor">Manage</a>{{else}}<a class="btn sm" href="/settings/two-factor">Set up</a>{{end}}</div>
 </section>
 <section class="card" id="people" aria-labelledby="s-people"><div class="card-h"><h3 id="s-people">People</h3><span class="side">{{.User.WorkspaceName}}</span></div>
 <p class="fineprint">People here share group chats you add them to. Agents, secrets, and machines stay with the person who created them.</p>
@@ -336,6 +336,35 @@
 <button class="btn pri" type="submit">Change password</button>
 <a class="btn" href="/settings">Cancel</a>
 </form></div>
+{{end}}
+
+{{define "twoFactorMain"}}
+<header class="ph-top ph-only"><a class="ibtn" href="/settings" aria-label="Back">{{template "backsvg" .}}</a><span class="t">Two-factor</span></header>
+<div class="page-h"><div><h1 class="dt-only">Two-factor</h1>{{if .TwoFactorOn}}<p class="sub">Two-factor is on. A code from your authenticator is required when you sign in on a new device.</p>{{else if .TOTPSecret}}<p class="sub">Add this secret to an authenticator app, then enter the current 6-digit code.</p>{{else}}<p class="sub">Two-factor is off. Sign-in uses your password. You can add an authenticator when you want one.</p>{{end}}</div></div>
+<div class="page-b">
+{{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
+{{if .TwoFactorOn}}
+<p>Two-factor stays on for this account.</p>
+<a class="btn" href="/settings">Back to settings</a>
+{{else if .TOTPSecret}}
+<div class="field"><span class="lab">Secret</span><div class="inp"><input readonly value="{{.TOTPSecret}}" aria-label="Authenticator secret"></div></div>
+<div class="field"><span class="lab">Setup link</span><div class="inp"><input readonly value="{{.TOTPURL}}" aria-label="Authenticator setup link"></div></div>
+<p class="fineprint">This secret stays on this page until you confirm a code. It is not shown after that.</p>
+<form method="post" action="/settings/two-factor/confirm">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<div class="field"><span class="lab">Code</span><div class="inp"><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" aria-label="Authenticator code" required></div></div>
+<button class="btn pri" type="submit">Turn on two-factor</button>
+<a class="btn" href="/settings">Cancel</a>
+</form>
+{{else}}
+<p>An authenticator adds a 6-digit code when you sign in on a new device. You can skip this and set it up later.</p>
+<form method="post" action="/settings/two-factor/start">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<button class="btn pri" type="submit">Set up authenticator</button>
+<a class="btn" href="/settings">Cancel</a>
+</form>
+{{end}}
+</div>
 {{end}}
 
 {{define "agentForm"}}
@@ -513,6 +542,7 @@
 {{else if eq .Page "connections"}}{{template "connectionsMain" .}}
 {{else if eq .Page "first"}}{{template "firstMain" .}}
 {{else if eq .Page "password"}}{{template "passwordMain" .}}
+{{else if eq .Page "two-factor"}}{{template "twoFactorMain" .}}
 {{else if eq .Page "new" "edit"}}{{template "agentForm" .}}
 {{else}}{{template "stubMain" .}}{{end}}
 </main>

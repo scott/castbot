@@ -202,9 +202,11 @@ func (s *Store) PeekInvite(ctx context.Context, token string) (Invite, error) {
 }
 
 // AcceptInvite creates a member in the inviter's workspace and consumes the token.
-// passwordHash and totp are stored as given. A used or expired token is ErrNotFound.
+// passwordHash is required. totp is stored only when it is set, so two-factor can stay off.
+// A used or expired token is ErrNotFound.
 func (s *Store) AcceptInvite(ctx context.Context, token, passwordHash, totp string) (User, error) {
-	if passwordHash == "" || totp == "" {
+	totp = strings.TrimSpace(totp)
+	if passwordHash == "" || strings.ContainsAny(totp, " \t\r\n") {
 		return User{}, ErrInvalid
 	}
 	row, err := s.PeekInvite(ctx, token)
@@ -248,7 +250,11 @@ func (s *Store) AcceptInvite(ctx context.Context, token, passwordHash, totp stri
 		}
 		return User{}, err
 	}
-	for _, kind := range []struct{ k, data string }{{"password", passwordHash}, {"totp", totp}} {
+	kinds := []struct{ k, data string }{{"password", passwordHash}}
+	if totp != "" {
+		kinds = append(kinds, struct{ k, data string }{"totp", totp})
+	}
+	for _, kind := range kinds {
 		cid, err := newID()
 		if err != nil {
 			return User{}, err

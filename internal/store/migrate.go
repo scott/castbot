@@ -529,6 +529,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV33(); err != nil {
 		return err
 	}
+	// Version 34 holds an authenticator secret until the person confirms a code.
+	if err := s.migrateV34(); err != nil {
+		return err
+	}
 	return nil
 }
 

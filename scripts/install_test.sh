@@ -14,6 +14,9 @@ bash -n "$install"
 help=$(bash "$install" --help)
 printf '%s\n' "$help" | grep -q 'curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh' || fail "help missing curl"
 printf '%s\n' "$help" | grep -q 'CastBot' || fail "help missing CastBot"
+printf '%s\n' "$help" | grep -q 'DigitalOcean' || fail "help missing provider"
+printf '%s\n' "$help" | grep -q '12 to 1024' || fail "help missing password length"
+printf '%s\n' "$help" | grep -q 'Two-factor can be turned on later in Settings' || fail "help missing two-factor"
 
 set +e
 bash -x "$install" --help >/tmp/castbot-install-xtrace.out 2>/tmp/castbot-install-xtrace.err
@@ -467,6 +470,31 @@ envfile="$prefix/etc/castbot/castbot.env"
 if grep -q 'CASTBOT_IMAGE=' "$envfile"; then
   fail "ignored image was stored"
 fi
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+cat > "$stub" <<'EOF'
+#!/bin/sh
+if [ "$1" = "create-user" ]; then
+  read -r _ || true
+  echo "created admin@example.com"
+  echo "Sign in with this email and the password. Two-factor can be turned on later in Settings."
+  exit 0
+fi
+if [ "$1" = "create-assistant" ]; then
+  echo "created CastBot abcdef"
+  exit 0
+fi
+exit 2
+EOF
+chmod 0755 "$stub"
+out=$(run_install "$prefix" CASTBOT_BINARY="$stub")
+printf '%s\n' "$out" | grep -q 'Two-factor can be turned on later in Settings' || fail "optional two-factor"
+if printf '%s\n' "$out" | grep -q 'Authenticator secret'; then
+  fail "secret heading without a secret"
+fi
+[[ ! -e "$prefix/root/castbot-first-login.txt" ]] || fail "note without a secret"
 rm -rf "$prefix"
 
 rm -f /tmp/castbot-install-xtrace.out /tmp/castbot-install-xtrace.err \

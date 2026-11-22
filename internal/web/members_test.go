@@ -81,24 +81,20 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 	if code != http.StatusBadRequest || !strings.Contains(body, "Use 12 or more characters, and enter the password twice.") || !strings.Contains(body, `action="/invite/`+token2+`"`) {
 		t.Fatalf("password mismatch %d (%d bytes)", code, len(body))
 	}
-	code, body, _ = h.do(http.MethodPost, "/invite/"+token2, h.form(mapForm("password", password, "again", password)), ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, "Save your authenticator secret") || !strings.Contains(body, "otpauth://totp/") {
-		t.Fatal("secret page missing")
-	}
-	secret := labeledValue(t, body, "Authenticator secret")
-	if strings.Count(body, secret) < 2 {
-		t.Fatal("secret was not shown on the accept page")
+	code, body, hdr := h.do(http.MethodPost, "/invite/"+token2, h.form(mapForm("password", password, "again", password)), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/" || strings.Contains(body, "otpauth://") || strings.Contains(body, "Authenticator secret") {
+		t.Fatalf("accept %d %s", code, hdr.Get("Location"))
 	}
 	code, home, hdr := h.do(http.MethodGet, "/", "", ip, nil)
 	if code != http.StatusSeeOther || hdr.Get("Location") != "/new-agent" {
 		t.Fatalf("accepted home %d %s", code, hdr.Get("Location"))
 	}
 	code, home, _ = h.do(http.MethodGet, "/new-agent", "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(home, "Pip Lane") || strings.Contains(home, "Create your first agent") || strings.Contains(home, "Pick an agent") || strings.Contains(home, secret) || strings.Contains(home, token2) {
+	if code != http.StatusOK || !strings.Contains(home, "Pip Lane") || strings.Contains(home, "Create your first agent") || strings.Contains(home, "Pick an agent") || strings.Contains(home, "otpauth://") || strings.Contains(home, token2) {
 		t.Fatal("accepted session did not open the new-agent screen")
 	}
 	code, spent, _ := h.do(http.MethodGet, "/invite/"+token2, "", ip, nil)
-	if code != http.StatusNotFound || strings.Contains(spent, secret) {
+	if code != http.StatusNotFound || strings.Contains(spent, "otpauth://") {
 		t.Fatal("spent invite still opens")
 	}
 	code, _, _ = h.do(http.MethodPost, "/invite/"+token2, h.form(mapForm("password", password, "again", password)), ip, nil)
@@ -121,9 +117,9 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 	}
 
 	h.logout(ip)
-	signIn("pip-s13@example.com", secret)
+	h.loginPassword("pip-s13@example.com", password, ip)
 	code, body, _ = h.do(http.MethodGet, "/settings", "", ip, nil)
-	if code != http.StatusOK || !strings.Contains(body, "Member of Personal workspace") || !strings.Contains(body, "The owner invites people to this workspace.") || strings.Contains(body, "Create invite") || strings.Contains(body, secret) {
+	if code != http.StatusOK || !strings.Contains(body, "Member of Personal workspace") || !strings.Contains(body, "The owner invites people to this workspace.") || strings.Contains(body, "Create invite") || strings.Contains(body, "otpauth://") || strings.Contains(body, "8 recovery codes") {
 		t.Fatal("member settings leaked the invite form or the secret")
 	}
 	if !strings.Contains(body, "0 of 4") || !strings.Contains(body, "0 B of 2 GB") || !strings.Contains(body, "Pip Lane (you)") || !strings.Contains(body, ">Owner<") {
@@ -225,7 +221,7 @@ func TestMembersInvitesAndGroupChat(t *testing.T) {
 	}
 
 	h.logout(ip)
-	signIn("pip-s13@example.com", secret)
+	h.loginPassword("pip-s13@example.com", password, ip)
 	code, body, hdr = h.do(http.MethodGet, "/", "", ip, nil)
 	if code != http.StatusSeeOther || hdr.Get("Location") != "/new-agent" || strings.Contains(body, "Standup") || strings.Contains(body, "owner private note 13") {
 		t.Fatalf("member home %d %s", code, hdr.Get("Location"))

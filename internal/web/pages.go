@@ -557,10 +557,6 @@ func (s *Server) stubEmail(w http.ResponseWriter, r *http.Request) {
 	s.stub(w, r, "Change email", "Email changes are not available in this version. A later update will send a link to confirm a new address.")
 }
 
-func (s *Server) stubTwoFactor(w http.ResponseWriter, r *http.Request) {
-	s.stub(w, r, "Two-factor", "Managing recovery codes and the authenticator app arrives in a later update. Two-factor stays on.")
-}
-
 func (s *Server) stubKeys(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := s.requireUser(w, r); !ok {
 		return
@@ -748,6 +744,11 @@ func (s *Server) fillSidebar(ctx context.Context, user store.User, csrf string) 
 			return "Last changed " + d
 		}(),
 	}
+	on, err := s.store.HasTOTP(ctx, user.ID)
+	if err != nil {
+		return page{}, err
+	}
+	p.TwoFactorOn = on
 	return p, nil
 }
 
@@ -923,9 +924,10 @@ func (s *Server) bad(w http.ResponseWriter, err error) bool {
 }
 
 var notices = map[string]string{
-	"name":     "Name saved.",
-	"password": "Password changed.",
-	"sessions": "Other sessions were signed out.",
+	"name":       "Name saved.",
+	"password":   "Password changed.",
+	"sessions":   "Other sessions were signed out.",
+	"two-factor": "Two-factor is on. A code is required when you sign in on a new device.",
 }
 
 func back(r *http.Request) string {

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Install the castbot control plane on a new host and create the first agent.
-# Prompts are read from the terminal. Secrets are not traced or logged.
+# Prompts are read from the terminal. Each question explains what it is for.
+# Secrets are not traced or logged.
 #
 #   curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh | bash
 if [[ $- == *x* ]]; then
@@ -53,12 +54,15 @@ On a new host, as root:
 
   curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh | bash
 
-A terminal asks for the account email, name, and password, and for an
-optional public hostname and an optional machine token. Without a
-hostname, castbot listens on 127.0.0.1:8080 only. The script chooses
-the runtime image when both the token and the hostname are set. Set
-CASTBOT_IMAGE to use a different one. The service still starts when
-the machine host stays off.
+A terminal explains each question. It asks for the account email, the
+display name, and a password of 12 to 1024 characters. It then asks for
+an optional public hostname and an optional machine token. The machine
+token step lists the supported providers. DigitalOcean is supported.
+Without a hostname, castbot listens on 127.0.0.1:8080 only. The script
+chooses the runtime image when both the token and the hostname are set.
+Set CASTBOT_IMAGE to use a different one. The service still starts when
+the machine host stays off. Sign-in is the email and the password.
+Two-factor can be turned on later in Settings.
 
 Non-interactive settings:
   CASTBOT_ADMIN_EMAIL
@@ -168,6 +172,159 @@ prompt_secret() {
   printf '%s' "$value"
 }
 
+say() {
+  if [[ "$INTERACTIVE" != "1" ]]; then
+    return 0
+  fi
+  printf '%s\n' "$*" >/dev/tty
+}
+
+say_intro() {
+  say "castbot installer"
+  say ""
+  say "This installs the control plane on this host and creates the first agent, CastBot."
+  say "CastBot is your personal assistant, knows how to use castbot, and can hand work to other agents."
+  say ""
+  say "You will choose a sign-in email, a display name, and a password."
+  say "A public hostname and a machine token are optional."
+  say "Sign-in uses the email and the password. Two-factor can be turned on later in Settings."
+}
+
+ask_email() {
+  local try=0 value
+  say ""
+  say "Email"
+  say "This is the address you use to sign in. It stays on this host."
+  while [[ "$try" -lt 5 ]]; do
+    value=$(prompt "Email: ")
+    if valid_email "$value"; then
+      EMAIL=$value
+      return 0
+    fi
+    say "Enter an email address, up to 254 characters, with no spaces."
+    try=$((try + 1))
+  done
+  die "email is missing or not valid"
+}
+
+ask_name() {
+  local try=0 value
+  say ""
+  say "Display name"
+  say "This name appears in the sidebar. You can change it later in Settings."
+  while [[ "$try" -lt 5 ]]; do
+    value=$(prompt "Display name: ")
+    if valid_name "$value"; then
+      NAME=$value
+      return 0
+    fi
+    say "Enter a name, up to 80 characters, on one line."
+    try=$((try + 1))
+  done
+  die "display name is missing or too long"
+}
+
+ask_password() {
+  local try=0 first again
+  say ""
+  say "Password"
+  say "Use 12 to 1024 characters on one line. The characters are hidden as you type."
+  while [[ "$try" -lt 5 ]]; do
+    first=$(prompt_secret "Password: ")
+    again=$(prompt_secret "Password again: ")
+    if [[ "$first" == "$again" && ${#first} -ge 12 && ${#first} -le 1024 && "$first" != *$'\n'* && "$first" != *$'\r'* ]]; then
+      PASSWORD=$first
+      unset first again
+      return 0
+    fi
+    unset first again
+    say "Use 12 to 1024 characters on one line, and enter the same password twice."
+    try=$((try + 1))
+  done
+  unset PASSWORD
+  die "password must be 12 to 1024 characters"
+}
+
+ask_host() {
+  local try=0 raw norm
+  say ""
+  say "Public hostname (optional)"
+  say "Leave this blank to keep castbot on this machine only. Open it through an ssh tunnel to 127.0.0.1:8080."
+  say "A hostname turns on https for that name. Do not include https:// or a port. Example: bot.example.com"
+  while [[ "$try" -lt 5 ]]; do
+    raw=$(prompt "Public hostname: ")
+    if [[ -z "$raw" ]]; then
+      PUBLIC_HOST=""
+      return 0
+    fi
+    if norm=$(normalize_host "$raw") && valid_host "$norm"; then
+      PUBLIC_HOST=$norm
+      return 0
+    fi
+    say "Enter a hostname such as bot.example.com, with no port, or press Enter to skip."
+    try=$((try + 1))
+  done
+  die "public hostname is not a hostname"
+}
+
+ask_token() {
+  local try=0 choice picked use
+  TOKEN=${CASTBOT_DO_TOKEN:-}
+  if [[ -n "$TOKEN" ]]; then
+    say ""
+    say "Machine token"
+    say "A machine token is already set in the environment."
+    say "It lets castbot start, pause, and delete the machines that agents run on."
+    use=$(prompt "Use the token that is already set? [y/N] ")
+    case "$use" in
+      y|Y) return 0 ;;
+    esac
+    TOKEN=""
+  fi
+  while [[ "$try" -lt 5 ]]; do
+    say ""
+    say "Machine token (optional)"
+    say "A machine token lets castbot start, pause, and delete the small cloud machines that agents run on."
+    say "You can skip this and add a token later. The control plane still runs without one."
+    say ""
+    say "Supported providers:"
+    say "  1) DigitalOcean"
+    say ""
+    say "Enter a number, or press Enter to skip."
+    choice=$(prompt "Provider: ")
+    case "$choice" in
+      ""|skip|Skip)
+        TOKEN=""
+        return 0
+        ;;
+      1|digitalocean|DigitalOcean)
+        say ""
+        say "DigitalOcean token"
+        say "Create a token that can manage machines, then paste it here. It is stored on this host and is not printed."
+        picked=$(prompt_secret "Token: ")
+        if [[ -z "$picked" ]]; then
+          TOKEN=""
+          unset picked
+          return 0
+        fi
+        if valid_token "$picked"; then
+          TOKEN=$picked
+          unset picked
+          return 0
+        fi
+        unset picked
+        say "The token must be one line, with no spaces."
+        ;;
+      *)
+        say "Enter 1 for DigitalOcean, or press Enter to skip."
+        ;;
+    esac
+    try=$((try + 1))
+  done
+  unset TOKEN
+  die "machine token is not a single token"
+}
+
 read_settings() {
   if [[ -t 1 && -r /dev/tty && -z "${CASTBOT_INSTALL_NONINTERACTIVE:-}" ]]; then
     INTERACTIVE=1
@@ -175,45 +332,28 @@ read_settings() {
   WORKSPACE=${CASTBOT_WORKSPACE:-Personal}
   REF=${CASTBOT_REF:-main}
   if [[ "$INTERACTIVE" == "1" ]]; then
+    say_intro
     if [[ -z "${CASTBOT_ADMIN_EMAIL:-}" ]]; then
-      EMAIL=$(prompt "Email: ")
+      ask_email
     else
       EMAIL=$CASTBOT_ADMIN_EMAIL
     fi
     if [[ -z "${CASTBOT_ADMIN_NAME:-}" ]]; then
-      NAME=$(prompt "Display name: ")
+      ask_name
     else
       NAME=$CASTBOT_ADMIN_NAME
     fi
     if [[ -z "${CASTBOT_ADMIN_PASSWORD:-}" ]]; then
-      PASSWORD=$(prompt_secret "Password: ")
-      local again
-      again=$(prompt_secret "Password again: ")
-      if [[ "$PASSWORD" != "$again" ]]; then
-        unset PASSWORD again
-        die "passwords did not match"
-      fi
-      unset again
+      ask_password
     else
       PASSWORD=$CASTBOT_ADMIN_PASSWORD
     fi
     if [[ -z "${CASTBOT_PUBLIC_HOST+x}" ]]; then
-      PUBLIC_HOST=$(prompt "Public hostname (optional): ")
+      ask_host
     else
       PUBLIC_HOST=$CASTBOT_PUBLIC_HOST
     fi
-    TOKEN=${CASTBOT_DO_TOKEN:-}
-    if [[ -n "$TOKEN" ]]; then
-      local use
-      use=$(prompt "A machine token is already set. Use it? [y/N] ")
-      case "$use" in
-        y|Y) ;;
-        *) TOKEN="" ;;
-      esac
-    fi
-    if [[ -z "$TOKEN" ]]; then
-      TOKEN=$(prompt_secret "Machine token (optional): ")
-    fi
+    ask_token
     IMAGE=${CASTBOT_IMAGE:-}
   else
     EMAIL=${CASTBOT_ADMIN_EMAIL:-}
@@ -649,13 +789,9 @@ onboard() {
         otpauth://*) url=$line ;;
       esac
     done <<<"$out"
-    if [[ -z "$secret" ]]; then
-      install -d -m 0700 "${PREFIX}/root"
-      printf '%s\n' "$out" > "$NOTE"
-      chmod 0600 "$NOTE"
-      die "the account command did not print an authenticator secret"
+    if [[ -n "$secret" ]]; then
+      write_note "$secret" "$url"
     fi
-    write_note "$secret" "$url"
     unset secret url out
     ACCOUNT_NEW=1
   fi
@@ -728,6 +864,8 @@ finish() {
     printf '\n'
     cat "$NOTE"
     printf '\n'
+  elif [[ "$ACCOUNT_NEW" == "1" ]]; then
+    printf 'Sign in with this email and the password. Two-factor can be turned on later in Settings.\n'
   fi
   printf 'CastBot is the first agent. Add a model key, then start its machine.\n'
 }

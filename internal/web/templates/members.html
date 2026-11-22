@@ -2,7 +2,7 @@
 {{template "docOpen" .}}
 <div class="auth-card">
 <h1>Join {{.StubTitle}}</h1>
-<p class="muted">{{.Text}} invited {{.StubBody}} ({{.Email}}). Choose a password. You will save an authenticator secret on the next step.</p>
+<p class="muted">{{.Text}} invited {{.StubBody}} ({{.Email}}). Choose a password of 12 or more characters. You can turn on two-factor later in Settings.</p>
 {{if .FormError}}<div class="banner err" role="alert"><span class="grow">{{.FormError}}</span></div>{{end}}
 <form method="post" action="/invite/{{.PathToken}}">
 <input type="hidden" name="csrf" value="{{.CSRF}}">

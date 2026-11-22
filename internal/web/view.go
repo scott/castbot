@@ -226,6 +226,9 @@ type page struct {
 	Text                string
 	RoleLine            string
 	PasswordOn          string
+	TwoFactorOn         bool
+	TOTPSecret          string
+	TOTPURL             string
 	Members             []memberView
 	Invites             []inviteView
 	CanInvite           bool

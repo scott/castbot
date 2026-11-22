@@ -216,20 +216,15 @@ func createUser(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	secret, err := auth.NewTOTPSecret()
-	if err != nil {
-		log.Fatal(err)
-	}
 	user, err := st.CreateUser(context.Background(), store.NewUser{
 		Email: *email, DisplayName: *name, Workspace: *workspace,
-		PasswordHash: hash, TOTPSecret: secret, Theme: "dark",
+		PasswordHash: hash, Theme: "dark",
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("created %s\n", user.Email)
-	fmt.Printf("Authenticator secret: %s\n", secret)
-	fmt.Printf("%s\n", auth.OTPAuthURL(user.Email, secret))
+	fmt.Println("Sign in with this email and the password. Two-factor can be turned on later in Settings.")
 	_ = cfg
 }
 

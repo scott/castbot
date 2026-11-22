@@ -8,9 +8,9 @@ On the host, as root:
 curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh | bash
 ```
 
-The script reads prompts from the terminal, so the pipe is safe. It asks for an email, a display name, and a password. It then asks for an optional public hostname. With a hostname it installs a reverse proxy, opens ports 80 and 443, and sets `CASTBOT_PUBLIC_URL` to `https://` that name. Point DNS at the host before the proxy can obtain a certificate. Without a hostname, castbot listens on `127.0.0.1:8080` only. Tunnel that port and open `http://127.0.0.1:8080/login`.
+The script reads prompts from the terminal, so the pipe is safe. Each question explains what it is for. It asks for an email, a display name, and a password of 12 to 1024 characters on one line. It then asks for an optional public hostname. A hostname installs a reverse proxy, opens ports 80 and 443, and sets `CASTBOT_PUBLIC_URL` to `https://` that name. Do not include a scheme or a port. Point DNS at the host before the proxy can obtain a certificate. Without a hostname, castbot listens on `127.0.0.1:8080` only. Tunnel that port and open `http://127.0.0.1:8080/login`.
 
-The password must be 12 to 1024 characters. The script prints an authenticator secret once and copies it to `/root/castbot-first-login.txt` (mode 0600). Add the secret to an authenticator, then delete that file.
+The machine token is optional. It lets castbot start, pause, and delete agent machines. The prompt lists the supported providers. DigitalOcean is supported today. The token is stored in the env file and is not printed. Sign-in uses the email and password. Two-factor can be turned on later in Settings.
 
 ## What it creates
 
@@ -46,7 +46,7 @@ Set these in the environment when there is no terminal. `CASTBOT_INSTALL_NONINTE
 | `CASTBOT_ADMIN_NAME` | Display name |
 | `CASTBOT_ADMIN_PASSWORD` | Password, 12 to 1024 characters |
 | `CASTBOT_PUBLIC_HOST` | Optional hostname, without a scheme |
-| `CASTBOT_DO_TOKEN` | Optional machine token |
+| `CASTBOT_DO_TOKEN` | Optional DigitalOcean machine token |
 | `CASTBOT_IMAGE` | Runtime image override. Unset chooses the public tag when a token and a hostname are both set |
 | `CASTBOT_REF` | Branch, tag, or commit. The default is `main` |
 | `CASTBOT_WORKSPACE` | Workspace name. The default is `Personal` |
