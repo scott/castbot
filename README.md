@@ -59,7 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.
 
 The script installs the control plane, creates the first account, and creates the first agent. Prompts are read from the terminal. Each question explains what it is for. It asks for an email, a display name, and a password of 12 to 1024 characters, then an optional public hostname.
 
-With a hostname, it installs a reverse proxy, opens ports 80 and 443, and sets the public URL to `https://` that name. Do not include a scheme or a port. Point DNS at the host so the proxy can obtain a certificate. Sign in at `https://<hostname>/login`.
+With a hostname, it installs a reverse proxy, opens ports 80 and 443, writes the proxy config, and reloads the proxy. It sets the public URL to `https://` that name. Do not include a scheme or a port. Point the DNS A record at the host, and leave that record unproxied, so the proxy can obtain a certificate. The install prints success only after `https://<hostname>/login` answers with a valid certificate. Sign in there.
 
 Without a hostname, castbot listens on `127.0.0.1:8080` only. From your computer, tunnel port 8080 and open `http://127.0.0.1:8080/login`.
 

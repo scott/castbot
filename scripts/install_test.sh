@@ -9,7 +9,57 @@ fail() {
   exit 1
 }
 
+assert_cmd_order() {
+  local file=$1
+  local prev=0 line needle
+  shift
+  for needle in "$@"; do
+    line=$(grep -n -F -m 1 -- "$needle" "$file" | cut -d: -f1 || true)
+    [[ -n "$line" ]] || fail "missing command: $needle"
+    [[ "$line" -gt "$prev" ]] || fail "command out of order: $needle"
+    prev=$line
+  done
+}
+
+cmd_count() {
+  local n
+  n=$(grep -c -F -- "$1" "$2" || true)
+  printf '%s\n' "$n"
+}
+
+write_user_stub() {
+  local stub=$1
+  cat > "$stub" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CASTBOT_STUB_LOG"
+if [ "$1" = "create-user" ]; then
+  read -r _ || true
+  echo "Authenticator secret: TESTSECRET234567"
+  echo "otpauth://totp/castbot:admin?secret=TESTSECRET234567"
+  exit 0
+fi
+if [ "$1" = "create-assistant" ]; then
+  echo "created CastBot abcdef"
+  exit 0
+fi
+echo "unknown command" >&2
+exit 2
+EOF
+  chmod 0755 "$stub"
+}
+
 bash -n "$install"
+
+awk '
+  /systemctl daemon-reload/ { seen = 1 }
+  /systemctl stop castbot/ && !seen { exit 1 }
+' "$install" || fail "daemon-reload before stop"
+awk '
+  /caddy validate --config/ { v = NR }
+  /systemctl enable caddy$/ { e = NR }
+  /systemctl reload-or-restart caddy$/ { r = NR }
+  END { if (v == 0 || e == 0 || r == 0 || v > e || e > r) exit 1 }
+' "$install" || fail "caddy command order"
 
 help=$(bash "$install" --help)
 printf '%s\n' "$help" | grep -q 'curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh' || fail "help missing curl"
@@ -229,6 +279,23 @@ if grep -q "$session" "$caddy" || grep -q "$token" "$caddy"; then
   fail "secret in caddy"
 fi
 
+printf '%s\n' "$out" | grep -q 'castbot is installed.' || fail "success banner"
+cmdlog="$prefix/host-cmd.log"
+assert_cmd_order "$cmdlog" \
+  'systemctl daemon-reload' \
+  'systemctl enable --now castbot.service' \
+  'systemctl enable caddy' \
+  'systemctl reload-or-restart caddy' \
+  'curl -fsS --max-time 2 http://127.0.0.1:8080/login' \
+  'curl -fsS --max-time 5 https://bot.example.com/login'
+if grep -q 'caddy validate' "$cmdlog"; then
+  fail "validated without caddy"
+fi
+if grep -E -q '(^|[[:space:]])(-k|--insecure)([[:space:]]|$)' "$cmdlog"; then
+  fail "https check skips certificate verification"
+fi
+[[ "$(cmd_count 'systemctl reload-or-restart caddy' "$cmdlog")" -eq 1 ]] || fail "caddy reload count"
+
 grep -q 'create-user --email admin@example.com --name Ada Owner --workspace Personal' "$prefix/stub.log" || fail "create-user args"
 grep -q 'create-assistant --email admin@example.com' "$prefix/stub.log" || fail "create-assistant args"
 grep -q 'pw-len 15' "$prefix/stub.log" || fail "password length"
@@ -250,6 +317,11 @@ if printf '%s\n' "$out" | grep -q "$session" || printf '%s\n' "$out2" | grep -q 
 fi
 [[ "$(sha256sum "$envfile")" == "$sum_before" ]] || fail "env file changed"
 grep -q 'account-exists' "$prefix/stub.log" || fail "second create-user"
+printf '%s\n' "$out2" | grep -q 'castbot is installed.' || fail "re-run success banner"
+[[ "$(cmd_count 'systemctl reload-or-restart caddy' "$prefix/host-cmd.log")" -eq 2 ]] || fail "caddy not reloaded on re-run"
+assert_cmd_order "$prefix/host-cmd.log" \
+  'systemctl daemon-reload' \
+  'systemctl reload-or-restart caddy'
 rm -rf "$prefix"
 
 prefix=$(mktemp -d)
@@ -273,7 +345,12 @@ chmod 0755 "$stub"
 : > "$prefix/stub.log"
 out=$(run_install "$prefix" CASTBOT_BINARY="$stub")
 printf '%s\n' "$out" | grep -q '127.0.0.1:8080' || fail "local listen"
+printf '%s\n' "$out" | grep -q 'castbot is installed.' || fail "local success banner"
 [[ ! -e "$prefix/etc/caddy/Caddyfile" ]] || fail "caddy without a host"
+if grep -q 'reload-or-restart caddy' "$prefix/host-cmd.log" || grep -q 'https://' "$prefix/host-cmd.log"; then
+  fail "public proxy without a host"
+fi
+grep -q 'curl -fsS --max-time 2 http://127.0.0.1:8080/login' "$prefix/host-cmd.log" || fail "local health check"
 envfile="$prefix/etc/castbot/castbot.env"
 if grep -q 'CASTBOT_PUBLIC_URL=' "$envfile" || grep -q 'CASTBOT_TRUSTED_PROXIES=' "$envfile" || grep -q 'CASTBOT_DO_TOKEN=' "$envfile"; then
   fail "local env has public settings"
@@ -787,6 +864,166 @@ fi
 envfile="$prefix/etc/castbot/castbot.env"
 if grep -q "$model_key" "$envfile" || grep -q 'CASTBOT_MODEL' "$envfile" || grep -q 'CASTBOT_PROVIDER_KEY_' "$envfile"; then
   fail "interactive model key stored in env"
+fi
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+write_user_stub "$stub"
+: > "$prefix/stub.log"
+mkdir -p "$prefix/stubs"
+cat > "$prefix/stubs/caddy" <<'EOF'
+#!/bin/sh
+if [ "$1" = "validate" ] && [ "$2" = "--config" ]; then
+  exit 0
+fi
+echo "unexpected caddy args" >&2
+exit 2
+EOF
+chmod 0755 "$prefix/stubs/caddy"
+out=$(run_install "$prefix" \
+  CASTBOT_PUBLIC_HOST='bot.example.com' \
+  CASTBOT_BINARY="$stub" \
+  CASTBOT_HOST_STUB_DIR="$prefix/stubs")
+printf '%s\n' "$out" | grep -q 'castbot is installed.' || fail "validate success banner"
+assert_cmd_order "$prefix/host-cmd.log" \
+  "caddy validate --config ${prefix}/etc/caddy/Caddyfile" \
+  'systemctl enable caddy' \
+  'systemctl reload-or-restart caddy' \
+  'curl -fsS --max-time 5 https://bot.example.com/login'
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+write_user_stub "$stub"
+: > "$prefix/stub.log"
+mkdir -p "$prefix/stubs"
+printf '%s\n' '#!/bin/sh' 'exit 1' > "$prefix/stubs/caddy"
+chmod 0755 "$prefix/stubs/caddy"
+set +e
+run_install "$prefix" \
+  CASTBOT_PUBLIC_HOST='bot.example.com' \
+  CASTBOT_BINARY="$stub" \
+  CASTBOT_HOST_STUB_DIR="$prefix/stubs" >/tmp/castbot-install-fail.out 2>/tmp/castbot-install-fail.err
+code=$?
+set -e
+[[ "$code" -ne 0 ]] || fail "invalid caddy config should refuse"
+grep -q 'caddy config is not valid' /tmp/castbot-install-fail.err || fail "invalid caddy message"
+if grep -q 'castbot is installed.' /tmp/castbot-install-fail.out; then
+  fail "success banner after invalid caddy config"
+fi
+if grep -q 'systemctl reload-or-restart caddy' "$prefix/host-cmd.log" || grep -q 'systemctl enable caddy' "$prefix/host-cmd.log"; then
+  fail "caddy reloaded after an invalid config"
+fi
+grep -q "caddy validate --config ${prefix}/etc/caddy/Caddyfile" "$prefix/host-cmd.log" || fail "caddy was not validated"
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+write_user_stub "$stub"
+: > "$prefix/stub.log"
+mkdir -p "$prefix/stubs"
+cat > "$prefix/stubs/curl" <<'EOF'
+#!/bin/sh
+url=
+for arg in "$@"; do
+  case "$arg" in
+    http://*|https://*) url=$arg ;;
+  esac
+done
+case "$url" in
+  http://127.0.0.1:8080/login) exit 0 ;;
+esac
+exit 1
+EOF
+chmod 0755 "$prefix/stubs/curl"
+set +e
+run_install "$prefix" \
+  CASTBOT_PUBLIC_HOST='bot.example.com' \
+  CASTBOT_HTTPS_WAIT_SECONDS=0 \
+  CASTBOT_BINARY="$stub" \
+  CASTBOT_HOST_STUB_DIR="$prefix/stubs" >/tmp/castbot-install-fail.out 2>/tmp/castbot-install-fail.err
+code=$?
+set -e
+[[ "$code" -ne 0 ]] || fail "https failure should be non-zero"
+grep -q 'DNS A record points at this host and is not proxied' /tmp/castbot-install-fail.err || fail "https dns hint"
+grep -q 'ports 80 and 443 are open' /tmp/castbot-install-fail.err || fail "https port hint"
+grep -q 'journalctl -u caddy' /tmp/castbot-install-fail.err || fail "https journal hint"
+if grep -q 'castbot is installed.' /tmp/castbot-install-fail.out || grep -q 'Sign in at https://bot.example.com/login' /tmp/castbot-install-fail.out; then
+  fail "success banner when https is down"
+fi
+if grep -q 'TESTSECRET234567' /tmp/castbot-install-fail.out; then
+  fail "secret printed when https is down"
+fi
+assert_cmd_order "$prefix/host-cmd.log" \
+  'systemctl reload-or-restart caddy' \
+  'curl -fsS --max-time 2 http://127.0.0.1:8080/login' \
+  'curl -fsS --max-time 5 https://bot.example.com/login'
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+write_user_stub "$stub"
+: > "$prefix/stub.log"
+mkdir -p "$prefix/stubs"
+printf '%s\n' '#!/bin/sh' 'exit 1' > "$prefix/stubs/curl"
+chmod 0755 "$prefix/stubs/curl"
+set +e
+run_install "$prefix" \
+  CASTBOT_PUBLIC_HOST='bot.example.com' \
+  CASTBOT_BINARY="$stub" \
+  CASTBOT_HOST_STUB_DIR="$prefix/stubs" >/tmp/castbot-install-fail.out 2>/tmp/castbot-install-fail.err
+code=$?
+set -e
+[[ "$code" -ne 0 ]] || fail "local health failure should be non-zero"
+grep -q 'castbot did not answer on /login' /tmp/castbot-install-fail.err || fail "local health message"
+if grep -q 'castbot is installed.' /tmp/castbot-install-fail.out; then
+  fail "success banner when local health fails"
+fi
+if grep -q 'https://bot.example.com/login' "$prefix/host-cmd.log"; then
+  fail "https check ran before local health passed"
+fi
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+write_user_stub "$stub"
+: > "$prefix/stub.log"
+set +e
+run_install "$prefix" \
+  CASTBOT_PUBLIC_HOST='bot.example.com' \
+  CASTBOT_HTTPS_WAIT_SECONDS=nope \
+  CASTBOT_BINARY="$stub" >/tmp/castbot-install-fail.out 2>/tmp/castbot-install-fail.err
+code=$?
+set -e
+[[ "$code" -ne 0 ]] || fail "bad https wait should refuse"
+grep -q 'CASTBOT_HTTPS_WAIT_SECONDS must be a number of seconds' /tmp/castbot-install-fail.err || fail "bad https wait message"
+if grep -q 'castbot is installed.' /tmp/castbot-install-fail.out; then
+  fail "success banner after a bad https wait"
+fi
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+stub="$prefix/castbot"
+write_user_stub "$stub"
+: > "$prefix/stub.log"
+mkdir -p "$prefix/stubs"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$prefix/stubs/systemctl"
+chmod 0755 "$prefix/stubs/systemctl"
+out=$(run_install "$prefix" \
+  CASTBOT_PUBLIC_HOST='bot.example.com' \
+  CASTBOT_BINARY="$stub" \
+  CASTBOT_HOST_STUB_DIR="$prefix/stubs")
+printf '%s\n' "$out" | grep -q 'castbot is installed.' || fail "active service success banner"
+assert_cmd_order "$prefix/host-cmd.log" \
+  'systemctl daemon-reload' \
+  'systemctl is-active --quiet castbot' \
+  'systemctl stop castbot' \
+  'systemctl enable --now castbot.service' \
+  'systemctl enable caddy' \
+  'systemctl reload-or-restart caddy'
+if grep -q 'systemctl start castbot.service' "$prefix/host-cmd.log"; then
+  fail "restarted castbot after a successful start"
 fi
 rm -rf "$prefix"
 

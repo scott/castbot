@@ -69,9 +69,11 @@ DigitalOcean there asks for a model access key. After the program is
 installed, the key is used to list that provider's models. The key is
 stored in the vault. It is not printed. Set CASTBOT_MODEL_PROVIDER,
 CASTBOT_MODEL_KEY, and CASTBOT_MODEL together, or leave all three unset.
-Without a hostname, castbot listens on 127.0.0.1:8080 only. The script
-chooses the runtime image when both the token and the hostname are set.
-Set CASTBOT_IMAGE to use a different one. The service still starts when
+Without a hostname, castbot listens on 127.0.0.1:8080 only. With a
+hostname, the script reloads the proxy and waits until https for that
+name answers on /login with a valid certificate. The script chooses
+the runtime image when both the token and the hostname are set. Set
+CASTBOT_IMAGE to use a different one. The service still starts when
 the machine host stays off. Sign-in is the email and the password.
 Two-factor can be turned on later in Settings.
 
@@ -87,6 +89,7 @@ Non-interactive settings:
   CASTBOT_IMAGE                runtime image override
   CASTBOT_REF                  git branch, tag, or commit (default main)
   CASTBOT_WORKSPACE            workspace name (default Personal)
+  CASTBOT_HTTPS_WAIT_SECONDS   seconds to wait for https (default 90)
 
 Set CASTBOT_INSTALL_NONINTERACTIVE=1 to skip prompts on a terminal.
 The script refuses to run under xtrace.
@@ -110,7 +113,7 @@ cleanup() {
     rm -f "$LAST_ERR"
   fi
   if [[ "$RESTART_ON_EXIT" == "1" ]]; then
-    systemctl start castbot.service || true
+    host_cmd systemctl start castbot.service || true
   fi
   exit "$status"
 }
@@ -1008,6 +1011,7 @@ ${PUBLIC_HOST} {
 }
 EOF
   chmod 0644 "$CADDY_FILE"
+  # start_services validates this file and reloads caddy once the firewall is open.
 }
 
 run_castbot() {
@@ -1046,9 +1050,14 @@ write_note() {
 }
 
 onboard() {
-  if [[ -z "$PREFIX" ]] && command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet castbot; then
-    systemctl stop castbot
-    RESTART_ON_EXIT=1
+  # The unit file is already written. Reload systemd before any later
+  # systemctl command so a re-run does not warn about a changed unit.
+  if systemd_available; then
+    host_cmd systemctl daemon-reload
+    if host_cmd systemctl is-active --quiet castbot; then
+      RESTART_ON_EXIT=1
+      host_cmd systemctl stop castbot
+    fi
   fi
   LAST_ERR=$(mktemp)
   local out code secret url line
@@ -1109,10 +1118,111 @@ onboard() {
   LAST_ERR=""
 }
 
-start_services() {
+# host_cmd runs a host program. CASTBOT_INSTALL_PREFIX is the test
+# harness: the command is recorded and the real host is left alone.
+# CASTBOT_HOST_STUB_DIR can supply a replacement program for that harness.
+host_cmd() {
   if [[ -n "$PREFIX" ]]; then
+    printf '%s\n' "$*" >> "${PREFIX}/host-cmd.log"
+    if [[ -n "${CASTBOT_HOST_STUB_DIR:-}" ]]; then
+      local name=$1
+      shift
+      if [[ -x "${CASTBOT_HOST_STUB_DIR}/${name}" ]]; then
+        "${CASTBOT_HOST_STUB_DIR}/${name}" "$@"
+        return
+      fi
+    fi
     return 0
   fi
+  command "$@"
+}
+
+systemd_available() {
+  if [[ -n "$PREFIX" ]]; then
+    if [[ -n "${CASTBOT_HOST_STUB_DIR:-}" && -x "${CASTBOT_HOST_STUB_DIR}/systemctl" ]]; then
+      return 0
+    fi
+    return 1
+  fi
+  command -v systemctl >/dev/null 2>&1
+}
+
+caddy_bin_available() {
+  if [[ -n "$PREFIX" ]]; then
+    if [[ -n "${CASTBOT_HOST_STUB_DIR:-}" && -x "${CASTBOT_HOST_STUB_DIR}/caddy" ]]; then
+      return 0
+    fi
+    return 1
+  fi
+  command -v caddy >/dev/null 2>&1
+}
+
+# Package install starts caddy with its default config. enable alone does
+# not load the file this script writes. Validate when caddy is installed,
+# then enable and reload-or-restart. A later run uses the same path.
+reload_caddy() {
+  if [[ -z "$PUBLIC_HOST" ]]; then
+    return 0
+  fi
+  if caddy_bin_available; then
+    if ! host_cmd caddy validate --config "$CADDY_FILE"; then
+      die "caddy config is not valid"
+    fi
+  fi
+  host_cmd systemctl enable caddy
+  host_cmd systemctl reload-or-restart caddy
+}
+
+wait_local() {
+  local tries i
+  tries=30
+  if [[ -n "$PREFIX" ]]; then
+    tries=1
+  fi
+  i=0
+  while [[ "$i" -lt "$tries" ]]; do
+    if host_cmd curl -fsS --max-time 2 http://127.0.0.1:8080/login >/dev/null 2>&1; then
+      return 0
+    fi
+    i=$((i + 1))
+    if [[ "$i" -lt "$tries" ]]; then
+      sleep 1
+    fi
+  done
+  return 1
+}
+
+# /login is the page the server answers with 200. curl checks the
+# certificate and the hostname because --insecure is not set.
+wait_https() {
+  local budget deadline url
+  url="https://${PUBLIC_HOST}/login"
+  if [[ -n "${CASTBOT_HTTPS_WAIT_SECONDS:-}" ]]; then
+    budget=$CASTBOT_HTTPS_WAIT_SECONDS
+    if [[ ! "$budget" =~ ^[0-9]+$ ]]; then
+      die "CASTBOT_HTTPS_WAIT_SECONDS must be a number of seconds"
+    fi
+  elif [[ -n "$PREFIX" ]]; then
+    budget=0
+  else
+    budget=90
+  fi
+  if [[ -z "$PREFIX" ]]; then
+    printf 'Waiting for https://%s/login\n' "$PUBLIC_HOST" >&2
+  fi
+  deadline=$((SECONDS + 10#$budget))
+  while true; do
+    if host_cmd curl -fsS --max-time 5 "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    if ((SECONDS >= deadline)); then
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+start_services() {
   if [[ -n "$PUBLIC_HOST" ]]; then
     local port
     port=22
@@ -1122,28 +1232,22 @@ start_services() {
     if [[ ! "$port" =~ ^[0-9]+$ ]]; then
       die "could not read the ssh port"
     fi
-    ufw allow "${port}/tcp"
-    ufw allow 80/tcp
-    ufw allow 443/tcp
-    ufw --force enable
+    host_cmd ufw allow "${port}/tcp"
+    host_cmd ufw allow 80/tcp
+    host_cmd ufw allow 443/tcp
+    host_cmd ufw --force enable
   fi
-  systemctl daemon-reload
-  systemctl enable --now castbot.service
+  host_cmd systemctl daemon-reload
+  host_cmd systemctl enable --now castbot.service
   RESTART_ON_EXIT=0
   if [[ -n "$PUBLIC_HOST" ]]; then
-    systemctl enable --now caddy.service
+    reload_caddy
   fi
-  systemctl enable --now fail2ban.service
-  local i
-  i=0
-  while [[ "$i" -lt 30 ]]; do
-    if curl -fsS --max-time 2 http://127.0.0.1:8080/login >/dev/null 2>&1; then
-      return 0
-    fi
-    i=$((i + 1))
-    sleep 1
-  done
-  if command -v journalctl >/dev/null 2>&1; then
+  host_cmd systemctl enable --now fail2ban.service
+  if wait_local; then
+    return 0
+  fi
+  if [[ -z "$PREFIX" ]] && command -v journalctl >/dev/null 2>&1; then
     journalctl -u castbot -n 40 --no-pager -o cat 2>/dev/null \
       | grep -E 'machine host|castbot listening|trusted proxies' \
       | tail -n 5 >&2 || true
@@ -1152,6 +1256,11 @@ start_services() {
 }
 
 finish() {
+  if [[ -n "$PUBLIC_HOST" ]]; then
+    if ! wait_https; then
+      die "https://${PUBLIC_HOST}/login did not respond over TLS with a valid certificate. Check that the DNS A record points at this host and is not proxied, that ports 80 and 443 are open, and run: journalctl -u caddy"
+    fi
+  fi
   printf 'castbot is installed.\n'
   if [[ -n "$PUBLIC_HOST" ]]; then
     printf 'Sign in at https://%s/login\n' "$PUBLIC_HOST"
