@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Install the castbot control plane on a new host and create the first agent.
-# Prompts are read from the terminal. Secrets are not traced or logged.
+# Prompts are read from the terminal. Each question explains what it is for.
+# Secrets are not traced or logged.
 #
 #   curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh | bash
 if [[ $- == *x* ]]; then
@@ -30,6 +31,9 @@ PASSWORD=""
 PUBLIC_HOST=""
 TOKEN=""
 IMAGE=""
+MODEL_PROVIDER=""
+MODEL=""
+MODEL_SAVED=0
 WORKSPACE="Personal"
 REF="main"
 SHA=""
@@ -53,12 +57,21 @@ On a new host, as root:
 
   curl -fsSL https://raw.githubusercontent.com/scott/castbot/main/scripts/install.sh | bash
 
-A terminal asks for the account email, name, and password, and for an
-optional public hostname and an optional machine token. Without a
-hostname, castbot listens on 127.0.0.1:8080 only. The script chooses
-the runtime image when both the token and the hostname are set. Set
-CASTBOT_IMAGE to use a different one. The service still starts when
-the machine host stays off.
+A terminal explains each question. It asks for the account email, the
+display name, and a password of 12 to 1024 characters. It then asks for
+an optional public hostname and an optional machine token. The machine
+token step lists the supported providers. DigitalOcean is supported.
+It then asks for an optional model provider and a model key. The model
+provider step lists OpenRouter, DigitalOcean, OpenAI, Anthropic,
+Google Gemini, and xAI. After the program is installed, the key is used
+to list that provider's models. The key is stored in the vault. It is
+not printed. Set CASTBOT_MODEL_PROVIDER, CASTBOT_MODEL_KEY, and
+CASTBOT_MODEL together, or leave all three unset.
+Without a hostname, castbot listens on 127.0.0.1:8080 only. The script
+chooses the runtime image when both the token and the hostname are set.
+Set CASTBOT_IMAGE to use a different one. The service still starts when
+the machine host stays off. Sign-in is the email and the password.
+Two-factor can be turned on later in Settings.
 
 Non-interactive settings:
   CASTBOT_ADMIN_EMAIL
@@ -66,6 +79,9 @@ Non-interactive settings:
   CASTBOT_ADMIN_PASSWORD
   CASTBOT_PUBLIC_HOST          optional hostname
   CASTBOT_DO_TOKEN             optional machine token
+  CASTBOT_MODEL_PROVIDER       optional inference provider id
+  CASTBOT_MODEL_KEY            optional model key for that provider
+  CASTBOT_MODEL                model id from that provider
   CASTBOT_IMAGE                runtime image override
   CASTBOT_REF                  git branch, tag, or commit (default main)
   CASTBOT_WORKSPACE            workspace name (default Personal)
@@ -168,6 +184,382 @@ prompt_secret() {
   printf '%s' "$value"
 }
 
+say() {
+  if [[ "$INTERACTIVE" != "1" ]]; then
+    return 0
+  fi
+  printf '%s\n' "$*" >/dev/tty
+}
+
+say_intro() {
+  say "castbot installer"
+  say ""
+  say "This installs the control plane on this host and creates the first agent, CastBot."
+  say "CastBot is your personal assistant, knows how to use castbot, and can hand work to other agents."
+  say ""
+  say "You will choose a sign-in email, a display name, and a password."
+  say "A public hostname and a machine token are optional."
+  say "You can also choose a model provider and paste a key. After the program is installed, the installer lists the models that key can use."
+  say "Sign-in uses the email and the password. Two-factor can be turned on later in Settings."
+}
+
+ask_email() {
+  local try=0 value
+  say ""
+  say "Email"
+  say "This is the address you use to sign in. It stays on this host."
+  while [[ "$try" -lt 5 ]]; do
+    value=$(prompt "Email: ")
+    if valid_email "$value"; then
+      EMAIL=$value
+      return 0
+    fi
+    say "Enter an email address, up to 254 characters, with no spaces."
+    try=$((try + 1))
+  done
+  die "email is missing or not valid"
+}
+
+ask_name() {
+  local try=0 value
+  say ""
+  say "Display name"
+  say "This name appears in the sidebar. You can change it later in Settings."
+  while [[ "$try" -lt 5 ]]; do
+    value=$(prompt "Display name: ")
+    if valid_name "$value"; then
+      NAME=$value
+      return 0
+    fi
+    say "Enter a name, up to 80 characters, on one line."
+    try=$((try + 1))
+  done
+  die "display name is missing or too long"
+}
+
+ask_password() {
+  local try=0 first again
+  say ""
+  say "Password"
+  say "Use 12 to 1024 characters on one line. The characters are hidden as you type."
+  while [[ "$try" -lt 5 ]]; do
+    first=$(prompt_secret "Password: ")
+    again=$(prompt_secret "Password again: ")
+    if [[ "$first" == "$again" && ${#first} -ge 12 && ${#first} -le 1024 && "$first" != *$'\n'* && "$first" != *$'\r'* ]]; then
+      PASSWORD=$first
+      unset first again
+      return 0
+    fi
+    unset first again
+    say "Use 12 to 1024 characters on one line, and enter the same password twice."
+    try=$((try + 1))
+  done
+  unset PASSWORD
+  die "password must be 12 to 1024 characters"
+}
+
+ask_host() {
+  local try=0 raw norm
+  say ""
+  say "Public hostname (optional)"
+  say "Leave this blank to keep castbot on this machine only. Open it through an ssh tunnel to 127.0.0.1:8080."
+  say "A hostname turns on https for that name. Do not include https:// or a port. Example: bot.example.com"
+  while [[ "$try" -lt 5 ]]; do
+    raw=$(prompt "Public hostname: ")
+    if [[ -z "$raw" ]]; then
+      PUBLIC_HOST=""
+      return 0
+    fi
+    if norm=$(normalize_host "$raw") && valid_host "$norm"; then
+      PUBLIC_HOST=$norm
+      return 0
+    fi
+    say "Enter a hostname such as bot.example.com, with no port, or press Enter to skip."
+    try=$((try + 1))
+  done
+  die "public hostname is not a hostname"
+}
+
+ask_token() {
+  local try=0 choice picked use
+  TOKEN=${CASTBOT_DO_TOKEN:-}
+  if [[ -n "$TOKEN" ]]; then
+    say ""
+    say "Machine token"
+    say "A machine token is already set in the environment."
+    say "It lets castbot start, pause, and delete the machines that agents run on."
+    use=$(prompt "Use the token that is already set? [y/N] ")
+    case "$use" in
+      y|Y) return 0 ;;
+    esac
+    TOKEN=""
+  fi
+  while [[ "$try" -lt 5 ]]; do
+    say ""
+    say "Machine token (optional)"
+    say "A machine token lets castbot start, pause, and delete the small cloud machines that agents run on."
+    say "You can skip this and add a token later. The control plane still runs without one."
+    say ""
+    say "Supported providers:"
+    say "  1) DigitalOcean"
+    say ""
+    say "Enter a number, or press Enter to skip."
+    choice=$(prompt "Provider: ")
+    case "$choice" in
+      ""|skip|Skip)
+        TOKEN=""
+        return 0
+        ;;
+      1|digitalocean|DigitalOcean)
+        say ""
+        say "DigitalOcean token"
+        say "Create a token that can manage machines, then paste it here. It is stored on this host and is not printed."
+        picked=$(prompt_secret "Token: ")
+        if [[ -z "$picked" ]]; then
+          TOKEN=""
+          unset picked
+          return 0
+        fi
+        if valid_token "$picked"; then
+          TOKEN=$picked
+          unset picked
+          return 0
+        fi
+        unset picked
+        say "The token must be one line, with no spaces."
+        ;;
+      *)
+        say "Enter 1 for DigitalOcean, or press Enter to skip."
+        ;;
+    esac
+    try=$((try + 1))
+  done
+  unset TOKEN
+  die "machine token is not a single token"
+}
+
+# model-providers:start
+model_provider_lines() {
+  cat <<'EOF'
+openrouter	OpenRouter
+digitalocean	DigitalOcean
+openai-api	OpenAI
+anthropic-api	Anthropic
+gemini	Google Gemini
+xai	xAI
+EOF
+}
+# model-providers:end
+
+model_provider_known() {
+  local want=$1 key name
+  while IFS=$'\t' read -r key name; do
+    if [[ "$key" == "$want" ]]; then
+      return 0
+    fi
+  done < <(model_provider_lines)
+  return 1
+}
+
+model_provider_name() {
+  local want=$1 key name
+  while IFS=$'\t' read -r key name; do
+    if [[ "$key" == "$want" ]]; then
+      printf '%s' "$name"
+      return 0
+    fi
+  done < <(model_provider_lines)
+  printf '%s' "$want"
+}
+
+match_model_provider() {
+  local choice=$1 n=0 key name
+  while IFS=$'\t' read -r key name; do
+    [[ -z "$key" ]] && continue
+    n=$((n + 1))
+    if [[ "$choice" == "$n" || "$choice" == "$key" || "$choice" == "$name" ]]; then
+      printf '%s' "$key"
+      return 0
+    fi
+  done < <(model_provider_lines)
+  return 1
+}
+
+ask_model() {
+  local try=0 choice picked key name n
+  say ""
+  say "Model provider (optional)"
+  say "A model key lets CastBot call a model. It is stored in your vault and is not printed."
+  say "You can skip this and add a key later in Settings."
+  say ""
+  say "Supported providers:"
+  n=0
+  while IFS=$'\t' read -r key name; do
+    [[ -z "$key" ]] && continue
+    n=$((n + 1))
+    say "  ${n}) ${name}"
+  done < <(model_provider_lines)
+  say ""
+  say "Enter a number, or press Enter to skip."
+  while [[ "$try" -lt 5 ]]; do
+    choice=$(prompt "Provider: ")
+    if [[ -z "$choice" || "$choice" == "skip" || "$choice" == "Skip" ]]; then
+      MODEL_PROVIDER=""
+      MODEL=""
+      unset MODEL_KEY
+      return 0
+    fi
+    if key=$(match_model_provider "$choice"); then
+      say ""
+      say "Model key"
+      say "Paste the key for $(model_provider_name "$key"). It is hidden as you type. Press Enter to skip."
+      picked=$(prompt_secret "Model key: ")
+      if [[ -z "$picked" ]]; then
+        say "Skipping the model key. You can add one later in Settings."
+        MODEL_PROVIDER=""
+        MODEL=""
+        unset picked MODEL_KEY
+        return 0
+      fi
+      if valid_token "$picked"; then
+        MODEL_PROVIDER=$key
+        MODEL_KEY=$picked
+        MODEL=""
+        unset picked
+        return 0
+      fi
+      unset picked
+      say "The key must be one line, with no spaces."
+    else
+      say "Enter a provider number, or press Enter to skip."
+    fi
+    try=$((try + 1))
+  done
+  unset MODEL_KEY
+  die "model provider was not chosen"
+}
+
+pick_model_list() {
+  local out=$1
+  local -a ids labels
+  local line id label n shown i try choice j
+  n=0
+  while IFS=$'\t' read -r id label; do
+    [[ -z "$id" ]] && continue
+    ids+=("$id")
+    if [[ -n "$label" ]]; then
+      labels+=("$label")
+    else
+      labels+=("$id")
+    fi
+    n=$((n + 1))
+  done <<<"$out"
+  if [[ "$n" -eq 0 ]]; then
+    return 1
+  fi
+  shown=$n
+  if [[ "$shown" -gt 40 ]]; then
+    shown=40
+  fi
+  say ""
+  say "Models for this key"
+  say "These are the models the provider returned for that key. Press Enter to use the first one."
+  for ((i = 0; i < shown; i++)); do
+    say "  $((i + 1))) ${labels[$i]}"
+  done
+  if [[ "$n" -gt 40 ]]; then
+    say "Showing 40 of ${n}. Enter a number, or paste a model id."
+  fi
+  try=0
+  while [[ "$try" -lt 5 ]]; do
+    choice=$(prompt "Model: ")
+    if [[ -z "$choice" ]]; then
+      MODEL=${ids[0]}
+      return 0
+    fi
+    if [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le "$n" ]]; then
+      MODEL=${ids[$((choice - 1))]}
+      return 0
+    fi
+    for ((j = 0; j < n; j++)); do
+      if [[ "$choice" == "${ids[$j]}" || "$choice" == "${labels[$j]}" ]]; then
+        MODEL=${ids[$j]}
+        return 0
+      fi
+    done
+    say "Enter a number from the list, or press Enter to use the first one."
+    try=$((try + 1))
+  done
+  return 1
+}
+
+choose_model() {
+  local try=0 out code err again
+  if [[ -z "$MODEL_PROVIDER" || -z "${MODEL_KEY:-}" || -n "$MODEL" ]]; then
+    return 0
+  fi
+  if [[ "$INTERACTIVE" != "1" ]]; then
+    unset MODEL_KEY
+    die "model is missing"
+  fi
+  while [[ "$try" -lt 5 ]]; do
+    err=$(mktemp)
+    set +e
+    out=$(printf '%s\n' "$MODEL_KEY" | run_castbot list-models --provider "$MODEL_PROVIDER" 2>"$err")
+    code=$?
+    set -e
+    rm -f "$err"
+    if [[ "$code" -eq 0 ]] && pick_model_list "$out"; then
+      return 0
+    fi
+    say "The provider did not return a model list. Check the key, or press Enter to skip."
+    again=$(prompt_secret "Model key: ")
+    if [[ -z "$again" ]]; then
+      say "Skipping the model. You can add a key later in Settings."
+      MODEL_PROVIDER=""
+      MODEL=""
+      unset MODEL_KEY again
+      return 0
+    fi
+    if valid_token "$again"; then
+      MODEL_KEY=$again
+    else
+      say "The key must be one line, with no spaces."
+    fi
+    unset again
+    try=$((try + 1))
+  done
+  say "Skipping the model. You can add a key later in Settings."
+  MODEL_PROVIDER=""
+  MODEL=""
+  unset MODEL_KEY
+}
+
+model_choice_ok() {
+  if [[ -z "$MODEL_PROVIDER" && -z "${MODEL_KEY:-}" && -z "$MODEL" ]]; then
+    return 0
+  fi
+  if [[ "$INTERACTIVE" == "1" && -n "$MODEL_PROVIDER" && -n "${MODEL_KEY:-}" && -z "$MODEL" ]]; then
+    return 0
+  fi
+  if [[ -z "$MODEL_PROVIDER" || -z "${MODEL_KEY:-}" || -z "$MODEL" ]]; then
+    unset MODEL_KEY
+    die "model provider, key, and model must be set together"
+  fi
+  if ! model_provider_known "$MODEL_PROVIDER"; then
+    unset MODEL_KEY
+    die "model provider is not supported"
+  fi
+  if [[ -z "$MODEL_KEY" ]] || ! valid_token "$MODEL_KEY"; then
+    unset MODEL_KEY
+    die "model key is not a single token"
+  fi
+  if [[ "$MODEL" != "$MODEL_PROVIDER/"* || ${#MODEL} -gt 200 || "$MODEL" == *" "* || "$MODEL" == *$'\t'* || "$MODEL" == *$'\n'* || "$MODEL" == *$'\r'* ]]; then
+    unset MODEL_KEY
+    die "model is not valid"
+  fi
+}
+
 read_settings() {
   if [[ -t 1 && -r /dev/tty && -z "${CASTBOT_INSTALL_NONINTERACTIVE:-}" ]]; then
     INTERACTIVE=1
@@ -175,44 +567,34 @@ read_settings() {
   WORKSPACE=${CASTBOT_WORKSPACE:-Personal}
   REF=${CASTBOT_REF:-main}
   if [[ "$INTERACTIVE" == "1" ]]; then
+    say_intro
     if [[ -z "${CASTBOT_ADMIN_EMAIL:-}" ]]; then
-      EMAIL=$(prompt "Email: ")
+      ask_email
     else
       EMAIL=$CASTBOT_ADMIN_EMAIL
     fi
     if [[ -z "${CASTBOT_ADMIN_NAME:-}" ]]; then
-      NAME=$(prompt "Display name: ")
+      ask_name
     else
       NAME=$CASTBOT_ADMIN_NAME
     fi
     if [[ -z "${CASTBOT_ADMIN_PASSWORD:-}" ]]; then
-      PASSWORD=$(prompt_secret "Password: ")
-      local again
-      again=$(prompt_secret "Password again: ")
-      if [[ "$PASSWORD" != "$again" ]]; then
-        unset PASSWORD again
-        die "passwords did not match"
-      fi
-      unset again
+      ask_password
     else
       PASSWORD=$CASTBOT_ADMIN_PASSWORD
     fi
     if [[ -z "${CASTBOT_PUBLIC_HOST+x}" ]]; then
-      PUBLIC_HOST=$(prompt "Public hostname (optional): ")
+      ask_host
     else
       PUBLIC_HOST=$CASTBOT_PUBLIC_HOST
     fi
-    TOKEN=${CASTBOT_DO_TOKEN:-}
-    if [[ -n "$TOKEN" ]]; then
-      local use
-      use=$(prompt "A machine token is already set. Use it? [y/N] ")
-      case "$use" in
-        y|Y) ;;
-        *) TOKEN="" ;;
-      esac
-    fi
-    if [[ -z "$TOKEN" ]]; then
-      TOKEN=$(prompt_secret "Machine token (optional): ")
+    ask_token
+    if [[ -z "${CASTBOT_MODEL_PROVIDER+x}" ]]; then
+      ask_model
+    else
+      MODEL_PROVIDER=$CASTBOT_MODEL_PROVIDER
+      MODEL_KEY=${CASTBOT_MODEL_KEY:-}
+      MODEL=${CASTBOT_MODEL:-}
     fi
     IMAGE=${CASTBOT_IMAGE:-}
   else
@@ -221,6 +603,9 @@ read_settings() {
     PASSWORD=${CASTBOT_ADMIN_PASSWORD:-}
     PUBLIC_HOST=${CASTBOT_PUBLIC_HOST:-}
     TOKEN=${CASTBOT_DO_TOKEN:-}
+    MODEL_PROVIDER=${CASTBOT_MODEL_PROVIDER:-}
+    MODEL_KEY=${CASTBOT_MODEL_KEY:-}
+    MODEL=${CASTBOT_MODEL:-}
     IMAGE=${CASTBOT_IMAGE:-}
   fi
   if ! valid_email "$EMAIL"; then
@@ -258,7 +643,8 @@ read_settings() {
   if ! valid_ref "$REF"; then
     die "source ref is not valid"
   fi
-  unset CASTBOT_ADMIN_PASSWORD
+  model_choice_ok
+  unset CASTBOT_ADMIN_PASSWORD CASTBOT_MODEL_KEY
 }
 
 prepare_os() {
@@ -649,18 +1035,31 @@ onboard() {
         otpauth://*) url=$line ;;
       esac
     done <<<"$out"
-    if [[ -z "$secret" ]]; then
-      install -d -m 0700 "${PREFIX}/root"
-      printf '%s\n' "$out" > "$NOTE"
-      chmod 0600 "$NOTE"
-      die "the account command did not print an authenticator secret"
+    if [[ -n "$secret" ]]; then
+      write_note "$secret" "$url"
     fi
-    write_note "$secret" "$url"
     unset secret url out
     ACCOUNT_NEW=1
   fi
+  if [[ -n "$MODEL_PROVIDER" && -n "${MODEL_KEY:-}" ]]; then
+    set +e
+    out=$(printf '%s\n' "$MODEL_KEY" | run_castbot save-provider-key --email "$EMAIL" --provider "$MODEL_PROVIDER" 2>"$LAST_ERR")
+    code=$?
+    set -e
+    unset MODEL_KEY
+    if [[ "$code" -ne 0 ]]; then
+      cat "$LAST_ERR" >&2
+      die "could not save the model key"
+    fi
+    MODEL_SAVED=1
+  fi
+  unset MODEL_KEY
   set +e
-  out=$(run_castbot create-assistant --email "$EMAIL" 2>"$LAST_ERR")
+  if [[ -n "$MODEL" ]]; then
+    out=$(run_castbot create-assistant --email "$EMAIL" --model "$MODEL" 2>"$LAST_ERR")
+  else
+    out=$(run_castbot create-assistant --email "$EMAIL" 2>"$LAST_ERR")
+  fi
   code=$?
   set -e
   if [[ "$code" -ne 0 ]]; then
@@ -728,8 +1127,14 @@ finish() {
     printf '\n'
     cat "$NOTE"
     printf '\n'
+  elif [[ "$ACCOUNT_NEW" == "1" ]]; then
+    printf 'Sign in with this email and the password. Two-factor can be turned on later in Settings.\n'
   fi
-  printf 'CastBot is the first agent. Add a model key, then start its machine.\n'
+  if [[ "$MODEL_SAVED" == "1" ]]; then
+    printf 'CastBot is the first agent. The model key is saved. Start its machine.\n'
+  else
+    printf 'CastBot is the first agent. Add a model key, then start its machine.\n'
+  fi
 }
 
 main() {
@@ -746,6 +1151,8 @@ main() {
   read_settings
   prepare_os
   install_binary
+  choose_model
+  model_choice_ok
   resolve_image
   write_env
   write_unit

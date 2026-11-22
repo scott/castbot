@@ -216,6 +216,19 @@ func (h *harness) login(email, password, secret, ip string, trust bool) {
 	}
 }
 
+func (h *harness) loginPassword(email, password, ip string) {
+	h.t.Helper()
+	h.do(http.MethodGet, "/login", "", ip, nil)
+	code, body, hdr := h.do(http.MethodPost, "/login", h.form(url.Values{"email": {email}, "password": {password}, "remember": {"1"}}), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/" {
+		h.t.Fatalf("password sign-in %d %s %s", code, hdr.Get("Location"), body)
+	}
+	code, _, _ = h.do(http.MethodGet, "/?list=1", "", ip, nil)
+	if code != http.StatusOK {
+		h.t.Fatalf("agent list %d", code)
+	}
+}
+
 func cookieLine(hdr http.Header, name string) string {
 	for _, line := range hdr.Values("Set-Cookie") {
 		if strings.HasPrefix(line, name+"=") {

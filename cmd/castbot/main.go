@@ -45,10 +45,14 @@ func main() {
 		seedDemo(args)
 	case "create-assistant":
 		createAssistant(args)
+	case "list-models":
+		listModels(args)
+	case "save-provider-key":
+		saveProviderKey(args)
 	case "admin":
 		os.Exit(adminCmd(args))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo|create-assistant|admin]")
+		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo|create-assistant|list-models|save-provider-key|admin]")
 		os.Exit(2)
 	}
 }
@@ -216,20 +220,15 @@ func createUser(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	secret, err := auth.NewTOTPSecret()
-	if err != nil {
-		log.Fatal(err)
-	}
 	user, err := st.CreateUser(context.Background(), store.NewUser{
 		Email: *email, DisplayName: *name, Workspace: *workspace,
-		PasswordHash: hash, TOTPSecret: secret, Theme: "dark",
+		PasswordHash: hash, Theme: "dark",
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("created %s\n", user.Email)
-	fmt.Printf("Authenticator secret: %s\n", secret)
-	fmt.Printf("%s\n", auth.OTPAuthURL(user.Email, secret))
+	fmt.Println("Sign in with this email and the password. Two-factor can be turned on later in Settings.")
 	_ = cfg
 }
 
@@ -251,6 +250,7 @@ func seedDemo(args []string) {
 func createAssistant(args []string) {
 	fs := flag.NewFlagSet("create-assistant", flag.ExitOnError)
 	email := fs.String("email", "", "account email")
+	model := fs.String("model", "", "model id")
 	_ = fs.Parse(args)
 	if *email == "" {
 		log.Fatal("create-assistant needs --email")
@@ -264,10 +264,13 @@ func createAssistant(args []string) {
 		}
 		log.Fatal("could not read the account")
 	}
-	res, err := assistant.Ensure(context.Background(), st, user.ID)
+	res, err := assistant.EnsureWithModel(context.Background(), st, user.ID, *model)
 	if err != nil {
 		if errors.Is(err, assistant.ErrInUse) {
 			log.Fatal("an agent already exists")
+		}
+		if errors.Is(err, store.ErrInvalid) {
+			log.Fatal("model is not valid")
 		}
 		log.Fatalf("could not create CastBot: %v", err)
 	}

@@ -54,6 +54,15 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		s.startSession(w, r, att.User, remember)
 		return
 	}
+	has, err := s.store.HasTOTP(r.Context(), att.User.ID)
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	if !has {
+		s.startSession(w, r, att.User, remember)
+		return
+	}
 	ch, err := s.store.BeginChallenge(r.Context(), att.User, remember)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)

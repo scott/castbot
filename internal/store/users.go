@@ -33,13 +33,18 @@ type NewUser struct {
 	Timezone     string
 }
 
-// CreateUser inserts a workspace, the user, password and TOTP credentials, and the Pinned and Agents sections.
+// CreateUser inserts a workspace, the user, a password credential, and the Pinned and Agents sections.
+// A TOTP credential is inserted only when TOTPSecret is set. Two-factor can be turned on later.
 // It does not take a caller id because it is the bootstrap path used by the first-user command and tests.
 func (s *Store) CreateUser(ctx context.Context, in NewUser) (User, error) {
 	email := normalizeEmail(in.Email)
 	name := strings.TrimSpace(in.DisplayName)
 	ws := strings.TrimSpace(in.Workspace)
-	if email == "" || !strings.Contains(email, "@") || len(email) > 254 || name == "" || len(name) > 80 || ws == "" || in.PasswordHash == "" || in.TOTPSecret == "" {
+	totp := strings.TrimSpace(in.TOTPSecret)
+	if email == "" || !strings.Contains(email, "@") || len(email) > 254 || name == "" || len(name) > 80 || ws == "" || in.PasswordHash == "" {
+		return User{}, ErrInvalid
+	}
+	if strings.ContainsAny(totp, " \t\r\n") {
 		return User{}, ErrInvalid
 	}
 	role := in.Role
@@ -87,7 +92,11 @@ func (s *Store) CreateUser(ctx context.Context, in NewUser) (User, error) {
 		}
 		return User{}, err
 	}
-	for _, kind := range []struct{ k, data string }{{"password", in.PasswordHash}, {"totp", in.TOTPSecret}} {
+	kinds := []struct{ k, data string }{{"password", in.PasswordHash}}
+	if totp != "" {
+		kinds = append(kinds, struct{ k, data string }{"totp", totp})
+	}
+	for _, kind := range kinds {
 		cid, err := newID()
 		if err != nil {
 			return User{}, err

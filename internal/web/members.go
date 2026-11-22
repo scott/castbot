@@ -159,12 +159,7 @@ func (s *Server) invitePost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	secret, err := auth.NewTOTPSecret()
-	if err != nil {
-		http.Error(w, "Error", http.StatusInternalServerError)
-		return
-	}
-	user, err := s.store.AcceptInvite(r.Context(), r.PathValue("token"), hash, secret)
+	user, err := s.store.AcceptInvite(r.Context(), r.PathValue("token"), hash, "")
 	if errors.Is(err, store.ErrNotFound) {
 		writeText(w, http.StatusNotFound, "Not found\n")
 		return
@@ -184,11 +179,7 @@ func (s *Server) invitePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setCookie(w, cookieSession, seal("session", sess.ID, s.key), "/", 0)
-	done := page{
-		Title: "Save your authenticator secret", Email: user.Email,
-		InviteSecret: secret, InviteURL: auth.OTPAuthURL(user.Email, secret),
-	}
-	s.render(w, http.StatusOK, "inviteSecret", authPage(from(r), done))
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) pendingInvite(w http.ResponseWriter, r *http.Request) (store.Invite, store.User, bool) {
