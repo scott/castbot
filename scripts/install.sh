@@ -59,14 +59,16 @@ On a new host, as root:
 
 A terminal explains each question. It asks for the account email, the
 display name, and a password of 12 to 1024 characters. It then asks for
-an optional public hostname and an optional machine token. The machine
-token step lists the supported providers. DigitalOcean is supported.
-It then asks for an optional model provider and a model key. The model
-provider step lists OpenRouter, DigitalOcean, OpenAI, Anthropic,
-Google Gemini, and xAI. After the program is installed, the key is used
-to list that provider's models. The key is stored in the vault. It is
-not printed. Set CASTBOT_MODEL_PROVIDER, CASTBOT_MODEL_KEY, and
-CASTBOT_MODEL together, or leave all three unset.
+an optional public hostname and an optional machine host. The machine
+host is where agent machines run. The prompt says Machine host.
+DigitalOcean is supported and asks for an API token, which is a
+personal access token. It then asks for an optional model provider and
+a model key. The prompt says Model provider. That list is OpenRouter,
+DigitalOcean, OpenAI, Anthropic, Google Gemini, and xAI. Choosing
+DigitalOcean there asks for a model access key. After the program is
+installed, the key is used to list that provider's models. The key is
+stored in the vault. It is not printed. Set CASTBOT_MODEL_PROVIDER,
+CASTBOT_MODEL_KEY, and CASTBOT_MODEL together, or leave all three unset.
 Without a hostname, castbot listens on 127.0.0.1:8080 only. The script
 chooses the runtime image when both the token and the hostname are set.
 Set CASTBOT_IMAGE to use a different one. The service still starts when
@@ -198,7 +200,8 @@ say_intro() {
   say "CastBot is your personal assistant, knows how to use castbot, and can hand work to other agents."
   say ""
   say "You will choose a sign-in email, a display name, and a password."
-  say "A public hostname and a machine token are optional."
+  say "A public hostname is optional."
+  say "A machine host is optional. It is where agent machines run. The model provider is a separate question."
   say "You can also choose a model provider and paste a key. After the program is installed, the installer lists the models that key can use."
   say "Sign-in uses the email and the password. Two-factor can be turned on later in Settings."
 }
@@ -280,13 +283,34 @@ ask_host() {
   die "public hostname is not a hostname"
 }
 
+# machine-hosts:start
+machine_host_lines() {
+  cat <<'EOF'
+digitalocean	DigitalOcean	token	cloud machines, needs an API token
+EOF
+}
+# machine-hosts:end
+
+match_machine_host() {
+  local choice=$1 n=0 key name kind _blurb
+  while IFS=$'\t' read -r key name kind _blurb; do
+    [[ -z "$key" ]] && continue
+    n=$((n + 1))
+    if [[ "$choice" == "$n" || "$choice" == "$key" || "$choice" == "$name" ]]; then
+      printf '%s\t%s\t%s' "$key" "$kind" "$name"
+      return 0
+    fi
+  done < <(machine_host_lines)
+  return 1
+}
+
 ask_token() {
-  local try=0 choice picked use
+  local try=0 choice picked use row key kind name n host_key host_name _host_kind host_blurb
   TOKEN=${CASTBOT_DO_TOKEN:-}
   if [[ -n "$TOKEN" ]]; then
     say ""
-    say "Machine token"
-    say "A machine token is already set in the environment."
+    say "Machine host"
+    say "A DigitalOcean API token is already set in the environment."
     say "It lets castbot start, pause, and delete the machines that agents run on."
     use=$(prompt "Use the token that is already set? [y/N] ")
     case "$use" in
@@ -296,46 +320,55 @@ ask_token() {
   fi
   while [[ "$try" -lt 5 ]]; do
     say ""
-    say "Machine token (optional)"
-    say "A machine token lets castbot start, pause, and delete the small cloud machines that agents run on."
-    say "You can skip this and add a token later. The control plane still runs without one."
+    say "Machine host (optional)"
+    say "This is where agent machines run. The model provider is the next question."
+    say "You can skip this and add a host later. The site still runs, and agent machines stay off."
     say ""
-    say "Supported providers:"
-    say "  1) DigitalOcean"
+    say "Supported machine hosts:"
+    n=0
+    while IFS=$'\t' read -r host_key host_name _host_kind host_blurb; do
+      [[ -z "$host_key" ]] && continue
+      n=$((n + 1))
+      say "  ${n}) ${host_name}    ${host_blurb}"
+    done < <(machine_host_lines)
     say ""
     say "Enter a number, or press Enter to skip."
-    choice=$(prompt "Provider: ")
-    case "$choice" in
-      ""|skip|Skip)
-        TOKEN=""
-        return 0
-        ;;
-      1|digitalocean|DigitalOcean)
-        say ""
-        say "DigitalOcean token"
-        say "Create a token that can manage machines, then paste it here. It is stored on this host and is not printed."
-        picked=$(prompt_secret "Token: ")
-        if [[ -z "$picked" ]]; then
-          TOKEN=""
-          unset picked
-          return 0
-        fi
-        if valid_token "$picked"; then
-          TOKEN=$picked
-          unset picked
-          return 0
-        fi
-        unset picked
-        say "The token must be one line, with no spaces."
-        ;;
-      *)
-        say "Enter 1 for DigitalOcean, or press Enter to skip."
-        ;;
-    esac
+    choice=$(prompt "Machine host: ")
+    if [[ -z "$choice" || "$choice" == "skip" || "$choice" == "Skip" ]]; then
+      TOKEN=""
+      return 0
+    fi
+    if ! row=$(match_machine_host "$choice"); then
+      say "Enter a machine host number, or press Enter to skip."
+      try=$((try + 1))
+      continue
+    fi
+    IFS=$'\t' read -r key kind name <<<"$row"
+    if [[ "$kind" != "token" || "$key" != "digitalocean" ]]; then
+      say "That machine host is not available yet."
+      try=$((try + 1))
+      continue
+    fi
+    say ""
+    say "${name} API token"
+    say "In the DigitalOcean control panel this is a personal access token that can manage machines. It is stored on this host and is not printed."
+    picked=$(prompt_secret "DigitalOcean API token: ")
+    if [[ -z "$picked" ]]; then
+      TOKEN=""
+      unset picked
+      return 0
+    fi
+    if valid_token "$picked"; then
+      TOKEN=$picked
+      unset picked
+      return 0
+    fi
+    unset picked
+    say "The token must be one line, with no spaces."
     try=$((try + 1))
   done
   unset TOKEN
-  die "machine token is not a single token"
+  die "machine host was not chosen"
 }
 
 # model-providers:start
@@ -402,7 +435,7 @@ ask_model() {
   say ""
   say "Enter a number, or press Enter to skip."
   while [[ "$try" -lt 5 ]]; do
-    choice=$(prompt "Provider: ")
+    choice=$(prompt "Model provider: ")
     if [[ -z "$choice" || "$choice" == "skip" || "$choice" == "Skip" ]]; then
       MODEL_PROVIDER=""
       MODEL=""
@@ -412,8 +445,13 @@ ask_model() {
     if key=$(match_model_provider "$choice"); then
       say ""
       say "Model key"
-      say "Paste the key for $(model_provider_name "$key"). It is hidden as you type. Press Enter to skip."
-      picked=$(prompt_secret "Model key: ")
+      if [[ "$key" == "digitalocean" ]]; then
+        say "Paste the model access key for DigitalOcean. It is hidden as you type. Press Enter to skip."
+        picked=$(prompt_secret "Model access key: ")
+      else
+        say "Paste the key for $(model_provider_name "$key"). It is hidden as you type. Press Enter to skip."
+        picked=$(prompt_secret "Model key: ")
+      fi
       if [[ -z "$picked" ]]; then
         say "Skipping the model key. You can add one later in Settings."
         MODEL_PROVIDER=""
