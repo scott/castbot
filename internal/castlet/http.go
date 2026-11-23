@@ -484,15 +484,12 @@ func (s *Supervisor) importMemory(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		f, err := tooliso.CreateUnder(s.cfg.AgentDir, memRel, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, uint32(agentFileMode))
+		f, err := openShared(s.cfg.AgentDir, memRel, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, uint32(agentFileMode))
 		if err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 		n, err := io.Copy(f, io.LimitReader(tr, hdr.Size))
-		if ferr := finishShared(f, uint32(agentFileMode)); ferr != nil && err == nil {
-			err = ferr
-		}
 		cerr := f.Close()
 		if err != nil || cerr != nil || n != hdr.Size {
 			http.Error(w, "bad request", http.StatusBadRequest)

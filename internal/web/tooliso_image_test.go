@@ -236,6 +236,45 @@ os.write(fd, b"osopen")
 os.close(fd)
 if (os.stat("/app/agent/workspace/made/sub/via-os.txt").st_mode & 0o777) != 0o660:
     raise SystemExit("osopen mode")
+mem = "/app/agent/memory"
+os.makedirs(mem, exist_ok=True)
+os.chown(mem, 65534, 998)
+os.chmod(mem, 0o2770)
+notes = os.path.join(mem, "notes.md")
+with open(notes, "w", encoding="utf-8") as fh:
+    fh.write("agent notes\n")
+os.chown(notes, 999, 998)
+os.chmod(notes, 0o660)
+subprocess.check_call(["/opt/cast/bin/python", "-c", r'''
+import os
+os.setgid(998)
+os.setuid(65534)
+path = "/app/agent/memory/notes.md"
+with open(path, "a", encoding="utf-8") as fh:
+    fh.write("more\n")
+with open(path, encoding="utf-8") as fh:
+    if fh.read() != "agent notes\nmore\n":
+        raise SystemExit("append")
+with open(path, "r+", encoding="utf-8") as fh:
+    if fh.read() != "agent notes\nmore\n":
+        raise SystemExit("r+")
+fd = os.open(path, os.O_RDWR)
+os.close(fd)
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write("rewritten\n")
+with open(path, encoding="utf-8") as fh:
+    if fh.read() != "rewritten\n":
+        raise SystemExit("rewrite")
+st = os.stat(path)
+if st.st_uid != 999 or (st.st_mode & 0o777) != 0o660 or st.st_size == 0:
+    raise SystemExit("notes " + repr((st.st_uid, oct(st.st_mode), st.st_size)))
+own = "/app/agent/memory/own.md"
+with open(own, "w", encoding="utf-8") as fh:
+    fh.write("own")
+with open(own, "r+", encoding="utf-8") as fh:
+    if fh.read() != "own":
+        raise SystemExit("own r+")
+'''])
 print("env-ok")
 PY
 echo isolation-ok

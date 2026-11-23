@@ -21,7 +21,7 @@ func TestRuntimeWriteStaysInTheAgentTree(t *testing.T) {
 }
 
 const runtimeWriteScript = `
-import os, pathlib, stat, sys, tempfile, types
+import ctypes, os, pathlib, stat, sys, tempfile, types
 
 root = tempfile.mkdtemp()
 agent = os.path.join(root, "agent")
@@ -129,5 +129,65 @@ except AgentConfigError:
     pass
 else:
     raise SystemExit("seal link loaded")
+
+def give_away(path, gid):
+    spec = ("65534:%d" % gid).encode()
+    pid = os.fork()
+    if pid == 0:
+        libc = ctypes.CDLL(None, use_errno=True)
+        argv = (ctypes.c_char_p * 6)(b"sudo", b"-n", b"chown", spec, os.fsencode(path), None)
+        envp = (ctypes.c_char_p * 2)(b"PATH=/usr/bin:/bin", None)
+        libc.execve(b"/usr/bin/sudo", argv, envp)
+        os._exit(127)
+    _, status = os.waitpid(pid, 0)
+    if os.waitstatus_to_exitcode(status) != 0:
+        raise SystemExit("chown " + path)
+notes = os.path.join(memory, "notes.md")
+with open(notes, "w", encoding="utf-8") as fh:
+    fh.write("agent notes\n")
+os.chmod(notes, 0o660)
+give_away(notes, os.getgid())
+with open(notes, "a", encoding="utf-8") as fh:
+    fh.write("more\n")
+with open(notes, encoding="utf-8") as fh:
+    if fh.read() != "agent notes\nmore\n":
+        raise SystemExit("append")
+with open(notes, "r+", encoding="utf-8") as fh:
+    if fh.read() != "agent notes\nmore\n":
+        raise SystemExit("r+")
+    fh.write("!")
+fd = os.open(notes, os.O_RDWR)
+os.close(fd)
+with open(notes, "w", encoding="utf-8") as fh:
+    fh.write("rewritten\n")
+with open(notes, encoding="utf-8") as fh:
+    if fh.read() != "rewritten\n":
+        raise SystemExit("rewrite")
+st = os.stat(notes)
+if st.st_uid == os.geteuid() or stat.S_IMODE(st.st_mode) != 0o660:
+    raise SystemExit("notes owner")
+own = os.path.join(memory, "own.md")
+with open(own, "w", encoding="utf-8") as fh:
+    fh.write("own")
+with open(own, "r+", encoding="utf-8") as fh:
+    if fh.read() != "own":
+        raise SystemExit("own r+")
+fd = os.open(own, os.O_RDWR)
+os.close(fd)
+locked = os.path.join(memory, "locked.md")
+with open(locked, "w", encoding="utf-8") as fh:
+    fh.write("stay")
+os.chmod(locked, 0o006)
+give_away(locked, 65534)
+try:
+    with open(locked, "w", encoding="utf-8") as fh:
+        fh.write("gone")
+except OSError:
+    pass
+else:
+    raise SystemExit("locked write")
+with open(locked, encoding="utf-8") as fh:
+    if fh.read() != "stay":
+        raise SystemExit("locked emptied")
 print("write-ok")
 `

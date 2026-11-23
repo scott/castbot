@@ -303,14 +303,11 @@ func (s *Supervisor) extractEntry(tr *tar.Reader, hdr *tar.Header, limit int64) 
 				return 0, 0, err
 			}
 			mode := uint32(agentSharedMode(fileMode(hdr.Mode)))
-			f, err := tooliso.CreateUnder(s.cfg.AgentDir, relPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+			f, err := openShared(s.cfg.AgentDir, relPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 			if err != nil {
 				return 0, 0, err
 			}
 			n, err := io.Copy(f, io.LimitReader(tr, hdr.Size))
-			if ferr := finishShared(f, mode); ferr != nil && err == nil {
-				err = ferr
-			}
 			cerr := f.Close()
 			if err != nil || cerr != nil || n != hdr.Size {
 				if err == nil {

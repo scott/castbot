@@ -175,6 +175,44 @@ def _share_fd(fd, directory):
         pass
 
 
+def _shared_group(gid):
+    """True when gid is the castwork group.
+
+    Without that group, the process group is the shared group.
+    """
+    named = _castwork_gid()
+    if named is None:
+        return gid == os.getgid()
+    return gid == named
+
+
+def _prepare_write(fd, truncate):
+    """Finish a write fd before any truncation.
+
+    A file this process owns becomes mode 0660. A file someone else owns
+    is left unchanged when it is already group-writable by the shared
+    group. Anything else is refused, and the file is not shortened.
+    """
+    import stat
+
+    st = os.fstat(fd)
+    if st.st_uid == os.geteuid():
+        _share_fd(fd, False)
+    elif stat.S_IMODE(st.st_mode) & 0o020 and _shared_group(st.st_gid):
+        pass
+    else:
+        raise OSError(errno.EPERM, "mode")
+    if truncate:
+        os.ftruncate(fd, 0)
+
+
+def _create_mode(flags, mode):
+    creat = os.O_CREAT | getattr(os, "O_TMPFILE", 0)
+    if flags & creat:
+        return mode
+    return 0
+
+
 def _mkdir_under(rel):
     parent_rel, name = os.path.split(rel)
     parent_fd = _root_fd() if parent_rel in ("", ".") else _open_under(parent_rel, os.O_RDONLY | os.O_DIRECTORY, 0)
@@ -219,10 +257,11 @@ def _share_agent_writes():
             rel = _write_rel(file)
             if rel not in (None, ""):
                 flags = os.O_CLOEXEC
+                truncate = False
                 if "w" in mode or "a" in mode or "x" in mode:
                     flags |= os.O_CREAT
                 if "w" in mode:
-                    flags |= os.O_TRUNC
+                    truncate = True
                 if "x" in mode:
                     flags |= os.O_EXCL
                 if "a" in mode:
@@ -231,9 +270,9 @@ def _share_agent_writes():
                     flags |= os.O_RDWR
                 else:
                     flags |= os.O_WRONLY
-                fd = _open_under(rel, flags, 0o660)
+                fd = _open_under(rel, flags, _create_mode(flags, 0o660))
                 try:
-                    _share_fd(fd, False)
+                    _prepare_write(fd, truncate)
                     return os.fdopen(fd, mode, buffering, encoding, errors, newline)
                 except Exception:
                     os.close(fd)
@@ -248,9 +287,11 @@ def _share_agent_writes():
         if dir_fd is None and _writing_flags(flags):
             rel = _write_rel(path)
             if rel not in (None, ""):
-                fd = _open_under(rel, flags, 0o660)
+                truncate = bool(flags & os.O_TRUNC)
+                flags = flags & ~os.O_TRUNC
+                fd = _open_under(rel, flags, _create_mode(flags, 0o660))
                 try:
-                    _share_fd(fd, False)
+                    _prepare_write(fd, truncate)
                 except Exception:
                     os.close(fd)
                     raise

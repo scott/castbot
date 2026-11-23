@@ -66,16 +66,23 @@ func ListUnder(root, pattern string) ([]string, error) {
 }
 
 // CreateUnder opens one file inside root without following a symlink.
-// flags are the open flags, such as O_WRONLY|O_CREAT|O_TRUNC. The mode is
-// the creation mode. Callers still fchmod the descriptor, because the
-// process umask is applied at creation.
+// flags are the open flags, such as O_WRONLY|O_CREAT. O_TRUNC is not passed
+// to the kernel. Callers shorten the file with ftruncate after the mode
+// check. mode is the creation mode and is zero unless O_CREAT is set.
+// Callers still fchmod a descriptor they own, because the process umask is
+// applied at creation.
 func CreateUnder(root, rel string, flags int, mode uint32) (*os.File, error) {
 	rootFile, rel, err := openRoot(root, rel)
 	if err != nil {
 		return nil, ErrPath
 	}
 	defer rootFile.Close()
-	return openAt(rootFile, rel, flags|unix.O_CLOEXEC|unix.O_NOFOLLOW, mode)
+	flags |= unix.O_CLOEXEC | unix.O_NOFOLLOW
+	flags &^= unix.O_TRUNC
+	if flags&(unix.O_CREAT|unix.O_TMPFILE) == 0 {
+		mode = 0
+	}
+	return openAt(rootFile, rel, flags, mode)
 }
 
 // OpenDirUnder opens one directory inside root without following a symlink.

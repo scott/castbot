@@ -42,6 +42,54 @@ func foreignDir(t *testing.T, path string) {
 	}
 }
 
+func foreignFile(t *testing.T, path string, body []byte, mode os.FileMode, gid int) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Fatal("ownership test must not run as root")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+	spec := fmt.Sprintf("65534:%d", gid)
+	out, err := exec.Command("sudo", "-n", "chown", spec, path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("chown %s: %v", out, err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(st.Uid) == os.Getuid() {
+		t.Fatalf("owner stayed with the test user: %v", info.Sys())
+	}
+}
+
+func assertForeignFile(t *testing.T, path, body string, mode os.FileMode) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != body {
+		t.Fatalf("body %q %v", got, err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != mode {
+		t.Fatalf("mode %v", info.Mode())
+	}
+	st := info.Sys().(*syscall.Stat_t)
+	if int(st.Uid) == os.Getuid() {
+		t.Fatal("file owner changed")
+	}
+}
+
 func assertForeignUnchanged(t *testing.T, path string) {
 	t.Helper()
 	info, err := os.Lstat(path)
@@ -148,6 +196,54 @@ func TestMemoryImportDoesNotFollowAPlantedLink(t *testing.T) {
 	}
 }
 
+func TestMemoryImportOverAnOwnedFile(t *testing.T) {
+	dir := t.TempDir()
+	note := filepath.Join(dir, "memory", "notes.md")
+	foreignFile(t, note, []byte("agent notes\n"), 0o660, os.Getgid())
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	body := []byte("rewritten\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "notes.md", Mode: 0o644, Size: int64(len(body))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sup := readySup(t, dir)
+	rec := authed(t, sup, http.MethodPut, "/castlet/memory", bytes.NewReader(buf.Bytes()))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("import %d %s", rec.Code, rec.Body.String())
+	}
+	assertForeignFile(t, note, "rewritten\n", 0o660)
+}
+
+func TestMemoryImportLeavesAnUnsharedFile(t *testing.T) {
+	dir := t.TempDir()
+	note := filepath.Join(dir, "memory", "notes.md")
+	foreignFile(t, note, []byte("stay"), 0o006, 65534)
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	body := []byte("gone")
+	if err := tw.WriteHeader(&tar.Header{Name: "notes.md", Mode: 0o644, Size: int64(len(body))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sup := readySup(t, dir)
+	rec := authed(t, sup, http.MethodPut, "/castlet/memory", bytes.NewReader(buf.Bytes()))
+	if rec.Code == http.StatusNoContent {
+		t.Fatal("import changed a file the writer cannot share")
+	}
+	assertForeignFile(t, note, "stay", 0o006)
+}
+
 func TestArchiveImportIntoAForeignDirectory(t *testing.T) {
 	dir := t.TempDir()
 	agent := filepath.Join(dir, "agent")
@@ -168,4 +264,18 @@ func TestArchiveImportIntoAForeignDirectory(t *testing.T) {
 		t.Fatalf("mode %v %v", info, err)
 	}
 	assertForeignUnchanged(t, foreign)
+}
+
+func TestArchiveRestoreOverAnOwnedFile(t *testing.T) {
+	dir := t.TempDir()
+	agent := filepath.Join(dir, "agent")
+	note := filepath.Join(agent, "workspace", "notes.md")
+	foreignFile(t, note, []byte("agent notes\n"), 0o660, os.Getgid())
+	raw := tarBytes(t, &tar.Header{Name: "workspace/notes.md", Mode: 0o644, Size: 10, Typeflag: tar.TypeReg, Format: tar.FormatPAX}, []byte("rewritten\n"))
+	sup := testSup(t, agent)
+	rec := authed(t, sup, http.MethodPut, "/castlet/archive", bytes.NewReader(raw))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import %d %s", rec.Code, rec.Body.String())
+	}
+	assertForeignFile(t, note, "rewritten\n", 0o660)
 }
