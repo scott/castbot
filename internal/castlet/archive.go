@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/scott/castbot/internal/tooliso"
 )
 
 // archiveCap is the small machine disk. A larger header is cut down to this.
@@ -263,18 +265,18 @@ func (s *Supervisor) extractEntry(tr *tar.Reader, hdr *tar.Header, limit int64) 
 		if err := existingLink(full); err != nil {
 			return 0, 0, err
 		}
+		if relPath, ok := agentRel(s.cfg.AgentDir, full); ok {
+			if err := tooliso.MkdirAllUnder(s.cfg.AgentDir, relPath, uint32(agentDirMode)); err != nil {
+				return 0, 0, err
+			}
+			return 0, 0, nil
+		}
 		mode := dirMode(hdr.Mode)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			return 0, 0, err
 		}
 		if err := os.MkdirAll(full, mode); err != nil {
 			return 0, 0, err
-		}
-		if under(s.cfg.AgentDir, full) {
-			mode = agentDirMode
-			if err := shareAgentDir(s.cfg.AgentDir, full); err != nil {
-				return 0, 0, err
-			}
 		}
 		if err := os.Chmod(full, mode); err != nil {
 			return 0, 0, err
@@ -296,6 +298,34 @@ func (s *Supervisor) extractEntry(tr *tar.Reader, hdr *tar.Header, limit int64) 
 		if err := existingLink(full); err != nil {
 			return 0, 0, err
 		}
+		if relPath, ok := agentRel(s.cfg.AgentDir, full); ok {
+			if err := tooliso.MkdirAllUnder(s.cfg.AgentDir, filepath.Dir(relPath), uint32(agentDirMode)); err != nil {
+				return 0, 0, err
+			}
+			mode := uint32(agentSharedMode(fileMode(hdr.Mode)))
+			f, err := tooliso.CreateUnder(s.cfg.AgentDir, relPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+			if err != nil {
+				return 0, 0, err
+			}
+			n, err := io.Copy(f, io.LimitReader(tr, hdr.Size))
+			if ferr := finishShared(f, mode); ferr != nil && err == nil {
+				err = ferr
+			}
+			cerr := f.Close()
+			if err != nil || cerr != nil || n != hdr.Size {
+				if err == nil {
+					err = io.ErrUnexpectedEOF
+				}
+				return 0, 0, err
+			}
+			if key == "workspace" {
+				files = 1
+			}
+			if key == "memory" {
+				memory = n
+			}
+			return files, memory, nil
+		}
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			return 0, 0, err
 		}
@@ -303,12 +333,6 @@ func (s *Supervisor) extractEntry(tr *tar.Reader, hdr *tar.Header, limit int64) 
 			return 0, 0, err
 		}
 		mode := fileMode(hdr.Mode)
-		if under(s.cfg.AgentDir, full) {
-			if err := os.MkdirAll(filepath.Dir(full), 0o770); err != nil {
-				return 0, 0, err
-			}
-			mode = agentSharedMode(mode)
-		}
 		f, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, mode)
 		if err != nil {
 			return 0, 0, err
@@ -321,11 +345,7 @@ func (s *Supervisor) extractEntry(tr *tar.Reader, hdr *tar.Header, limit int64) 
 			}
 			return 0, 0, err
 		}
-		if under(s.cfg.AgentDir, full) {
-			if err := shareAgentFile(s.cfg.AgentDir, full, mode); err != nil {
-				return 0, 0, err
-			}
-		} else if err := os.Chmod(full, mode); err != nil {
+		if err := os.Chmod(full, mode); err != nil {
 			return 0, 0, err
 		}
 		if key == "workspace" {

@@ -3,38 +3,19 @@ package castlet
 import (
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 )
 
-// Files the runtime creates under the agent directory are group-readable
-// by castwork. Private state outside that directory stays mode 0700.
+// Files castlet writes under the agent directory are group-readable by
+// castwork. Private state outside that directory stays mode 0700.
 const (
 	agentFileMode = 0o660
 	agentDirMode  = 0o2770
 )
-
-func shareAgentDir(agentDir, path string) error {
-	return chmodAgentDirs(agentDir, path)
-}
-
-func shareAgentFile(agentDir, path string, mode os.FileMode) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("path")
-	}
-	if err := chmodAgentDirs(agentDir, filepath.Dir(path)); err != nil {
-		return err
-	}
-	if mode == 0 {
-		mode = agentFileMode
-	}
-	return os.Chmod(path, mode)
-}
 
 func agentSharedMode(archived os.FileMode) os.FileMode {
 	mode := os.FileMode(agentFileMode)
@@ -44,42 +25,52 @@ func agentSharedMode(archived os.FileMode) os.FileMode {
 	return mode
 }
 
-func chmodAgentDirs(agentDir, path string) error {
-	root := filepath.Clean(agentDir)
-	path = filepath.Clean(path)
-	if root == "." || root == "" || root == string(filepath.Separator) {
+func agentRel(agentDir, full string) (string, bool) {
+	agentDir = filepath.Clean(agentDir)
+	full = filepath.Clean(full)
+	if agentDir == "." || agentDir == "" || agentDir == string(filepath.Separator) {
+		return "", false
+	}
+	if full == agentDir {
+		return ".", true
+	}
+	if !strings.HasPrefix(full, agentDir+string(os.PathSeparator)) {
+		return "", false
+	}
+	return full[len(agentDir)+1:], true
+}
+
+// finishShared sets the mode on the descriptor that was just written.
+// When the castwork group exists, the file's group is that group.
+// The path is not used, so a swapped link cannot receive the mode.
+func finishShared(f *os.File, mode uint32) error {
+	if f == nil {
 		return errors.New("path")
 	}
-	if path != root && !strings.HasPrefix(path, root+string(os.PathSeparator)) {
+	if mode == 0 {
+		mode = uint32(agentFileMode)
+	}
+	if err := syscall.Fchmod(int(f.Fd()), mode); err != nil {
+		return err
+	}
+	gid, ok := castworkGID()
+	if !ok {
 		return nil
 	}
-	var chain []string
-	cur := path
-	for {
-		chain = append(chain, cur)
-		if cur == root {
-			break
-		}
-		next := filepath.Dir(cur)
-		if next == cur {
-			break
-		}
-		cur = next
-	}
-	for i := len(chain) - 1; i >= 0; i-- {
-		info, err := os.Lstat(chain[i])
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("path")
-		}
-		if !info.IsDir() {
-			continue
-		}
-		if err := syscall.Chmod(chain[i], uint32(agentDirMode)); err != nil {
-			return err
-		}
+	if err := syscall.Fchown(int(f.Fd()), -1, gid); err != nil && !errors.Is(err, syscall.EPERM) {
+		return err
 	}
 	return nil
+}
+
+func castworkGID() (int, bool) {
+	grp, err := user.LookupGroup("castwork")
+	if err != nil {
+		return 0, false
+	}
+	id, err := strconv.Atoi(grp.Gid)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
 }

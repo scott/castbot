@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import signal
+import stat
 import sys
 import threading
 
@@ -389,19 +390,34 @@ def _patch_mcp(mod):
 
 def _patch_agent_config(mod):
     def _load(self):
+        # The sealed copy is the only one that loads. A missing or unusable
+        # copy does not fall back to the workspace file.
         protected = os.path.join(os.path.dirname(os.path.abspath(self.path)), ".cast", "agent.yaml")
-        config_path = protected if os.path.isfile(protected) else os.path.join(self.path, "agent.yaml")
-        if not os.path.isfile(config_path):
-            return {}
+        try:
+            info = os.lstat(protected)
+        except OSError as exc:
+            raise mod.AgentConfigError("sealed config") from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise mod.AgentConfigError("sealed config")
+        try:
+            fd = os.open(protected, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError as exc:
+            raise mod.AgentConfigError("sealed config") from exc
         import yaml
 
         try:
-            with open(config_path, "r", encoding="utf-8") as handle:
+            with os.fdopen(fd, "r", encoding="utf-8") as handle:
+                fd = None
                 text = handle.read()
             loaded = yaml.safe_load(text)
             version = mod.read_agent_yaml_version(text).version
         except yaml.YAMLError as exc:
             raise mod.AgentConfigError(str(exc)) from exc
+        except OSError as exc:
+            raise mod.AgentConfigError("sealed config") from exc
+        finally:
+            if fd is not None:
+                os.close(fd)
         if loaded is None:
             loaded = {}
         if not isinstance(loaded, dict):

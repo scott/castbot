@@ -158,10 +158,17 @@ func Install(dir string, raw []byte) error {
 	}
 	for _, sub := range []string{"workspace", "memory"} {
 		path := filepath.Join(dir, sub)
-		if err := os.MkdirAll(path, 0o770); err != nil {
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			if err := os.Mkdir(path, 0o770); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
+		} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return errors.New("bundle path")
 		}
-		if err := syscall.Chmod(path, 0o2770); err != nil {
+		if err := fchmodOwned(path, 0o2770); err != nil {
 			return err
 		}
 	}
@@ -213,14 +220,14 @@ func writeUnder(root, name string, body []byte, mode os.FileMode) error {
 			if err := os.Mkdir(next, mode); err != nil {
 				return err
 			}
-			if err := os.Chmod(next, mode); err != nil {
+			if err := fchmodOwned(next, uint32(mode)); err != nil {
 				return err
 			}
 		} else if err != nil {
 			return err
 		} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return errors.New("bundle path")
-		} else if err := os.Chmod(next, mode); err != nil {
+		} else if err := fchmodOwned(next, uint32(mode)); err != nil {
 			return err
 		}
 		cur = next
@@ -258,10 +265,39 @@ func writeNoFollow(path string, body []byte, mode os.FileMode) error {
 		f.Close()
 		return werr
 	}
-	if err := f.Close(); err != nil {
+	if err := syscall.Fchmod(int(f.Fd()), uint32(mode.Perm())); err != nil {
+		f.Close()
 		return err
 	}
-	return os.Chmod(path, mode)
+	return f.Close()
+}
+
+// fchmodOwned changes a directory this process owns. A directory owned by
+// someone else, or a path that cannot be opened without following a link,
+// is left as it is. That does not fail the install.
+func fchmodOwned(path string, mode uint32) error {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	var st syscall.Stat_t
+	if err := syscall.Fstat(int(f.Fd()), &st); err != nil {
+		return err
+	}
+	if int(st.Uid) != os.Getuid() {
+		return nil
+	}
+	if uint32(st.Mode)&0o7777 == mode&0o7777 {
+		return nil
+	}
+	if err := syscall.Fchmod(int(f.Fd()), mode); err != nil && !errors.Is(err, syscall.EPERM) {
+		return err
+	}
+	return nil
 }
 
 // Sum is the sha256 of the bundle bytes.

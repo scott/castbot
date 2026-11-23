@@ -3,6 +3,7 @@
 package tooliso
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -62,6 +63,158 @@ func ListUnder(root, pattern string) ([]string, error) {
 		return nil, ErrPath
 	}
 	return out, nil
+}
+
+// CreateUnder opens one file inside root without following a symlink.
+// flags are the open flags, such as O_WRONLY|O_CREAT|O_TRUNC. The mode is
+// the creation mode. Callers still fchmod the descriptor, because the
+// process umask is applied at creation.
+func CreateUnder(root, rel string, flags int, mode uint32) (*os.File, error) {
+	rootFile, rel, err := openRoot(root, rel)
+	if err != nil {
+		return nil, ErrPath
+	}
+	defer rootFile.Close()
+	return openAt(rootFile, rel, flags|unix.O_CLOEXEC|unix.O_NOFOLLOW, mode)
+}
+
+// OpenDirUnder opens one directory inside root without following a symlink.
+// An empty relative path opens the root itself.
+func OpenDirUnder(root, rel string) (*os.File, error) {
+	if rel == "" || rel == "." {
+		f, err := os.Open(root)
+		if err != nil {
+			return nil, ErrPath
+		}
+		info, err := f.Stat()
+		if err != nil || !info.IsDir() {
+			f.Close()
+			return nil, ErrPath
+		}
+		return f, nil
+	}
+	rootFile, rel, err := openRoot(root, rel)
+	if err != nil {
+		return nil, ErrPath
+	}
+	defer rootFile.Close()
+	return openAt(rootFile, rel, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+}
+
+// MkdirAllUnder creates missing directories inside root. A symlink anywhere
+// in the relative path is not followed. A directory this process owns is
+// given mode when its mode differs. A directory owned by someone else is
+// left alone.
+func MkdirAllUnder(root, rel string, mode uint32) error {
+	rel = filepath.Clean(rel)
+	if rel == "." || rel == "" {
+		return nil
+	}
+	rel = cleanRel(rel)
+	if rel == "" {
+		return ErrPath
+	}
+	rootFile, err := os.Open(root)
+	if err != nil {
+		return ErrPath
+	}
+	defer rootFile.Close()
+	info, err := rootFile.Stat()
+	if err != nil || !info.IsDir() {
+		return ErrPath
+	}
+	parent := rootFile
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." || part == ".." {
+			if parent != rootFile {
+				parent.Close()
+			}
+			return ErrPath
+		}
+		next, err := openAt(parent, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			if mkErr := unix.Mkdirat(int(parent.Fd()), part, mode); mkErr != nil && !errors.Is(mkErr, unix.EEXIST) {
+				if parent != rootFile {
+					parent.Close()
+				}
+				return ErrPath
+			}
+			next, err = openAt(parent, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+			if err != nil {
+				if parent != rootFile {
+					parent.Close()
+				}
+				return ErrPath
+			}
+		}
+		chmodOwned(next, mode)
+		if parent != rootFile {
+			parent.Close()
+		}
+		parent = next
+	}
+	if parent != rootFile {
+		parent.Close()
+	}
+	return nil
+}
+
+// RenameUnder renames one file inside a directory of root. Both paths must
+// sit in that same directory. The final names are not followed.
+func RenameUnder(root, oldRel, newRel string) error {
+	oldDir, oldName := splitFinal(oldRel)
+	newDir, newName := splitFinal(newRel)
+	if oldDir != newDir || oldName == "" || newName == "" || oldName == "." || newName == "." || oldName == ".." || newName == ".." {
+		return ErrPath
+	}
+	dir, err := OpenDirUnder(root, oldDir)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	if err := unix.Renameat(int(dir.Fd()), oldName, int(dir.Fd()), newName); err != nil {
+		return ErrPath
+	}
+	return nil
+}
+
+// RemoveUnder removes one file inside root. A symlink is removed, not followed.
+func RemoveUnder(root, rel string) error {
+	dirRel, name := splitFinal(rel)
+	if name == "" || name == "." || name == ".." {
+		return ErrPath
+	}
+	dir, err := OpenDirUnder(root, dirRel)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	if err := unix.Unlinkat(int(dir.Fd()), name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		return ErrPath
+	}
+	return nil
+}
+
+func chmodOwned(f *os.File, mode uint32) {
+	var st unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
+		return
+	}
+	if int(st.Uid) != os.Getuid() {
+		return
+	}
+	if uint32(st.Mode)&0o7777 == mode&0o7777 {
+		return
+	}
+	_ = unix.Fchmod(int(f.Fd()), mode)
+}
+
+func splitFinal(rel string) (string, string) {
+	rel = filepath.Clean(rel)
+	if rel == "." || rel == "" {
+		return ".", ""
+	}
+	return filepath.Dir(rel), filepath.Base(rel)
 }
 
 func openRoot(root, rel string) (*os.File, string, error) {

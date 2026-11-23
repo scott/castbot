@@ -203,6 +203,39 @@ with open("/app/agent/workspace/made/sub/note.txt", "w", encoding="utf-8") as fh
 seen = subprocess.check_output(["/bin/cat", "/app/agent/workspace/made/sub/note.txt"], text=True)
 if seen.strip() != "from-runtime":
     raise SystemExit("runtime dir " + repr(seen))
+import pathlib
+planted = "/app/.cast/planted"
+os.makedirs("/app/.cast", exist_ok=True)
+with open(planted, "w", encoding="utf-8") as fh:
+    fh.write("sealed")
+link = "/app/agent/memory/via-link"
+os.makedirs("/app/agent/memory", exist_ok=True)
+os.symlink(planted, link)
+def refused(label, fn):
+    try:
+        fn()
+    except OSError:
+        return
+    raise SystemExit("followed " + label)
+refused("open", lambda: open(link, "w", encoding="utf-8").write("pwned"))
+refused("pathlib", lambda: pathlib.Path(link).write_text("pwned"))
+def os_open():
+    fd = os.open(link, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o660)
+    os.write(fd, b"pwned")
+    os.close(fd)
+refused("os.open", os_open)
+with open(planted, encoding="utf-8") as fh:
+    if fh.read() != "sealed":
+        raise SystemExit("sealed changed")
+via = pathlib.Path("/app/agent/workspace/made/sub/via-path.txt")
+via.write_text("pathlib")
+if (via.stat().st_mode & 0o777) != 0o660:
+    raise SystemExit("pathlib mode")
+fd = os.open("/app/agent/workspace/made/sub/via-os.txt", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+os.write(fd, b"osopen")
+os.close(fd)
+if (os.stat("/app/agent/workspace/made/sub/via-os.txt").st_mode & 0o777) != 0o660:
+    raise SystemExit("osopen mode")
 print("env-ok")
 PY
 echo isolation-ok

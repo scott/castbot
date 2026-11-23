@@ -23,54 +23,241 @@ except Exception:
     subprocess.Popen = _refuse
 
 
+import errno
+
+_RAW_OPEN = os.open
+_RAW_MKDIR = os.mkdir
+
+try:
+    import ctypes
+
+    _LIBC = ctypes.CDLL(None, use_errno=True)
+except Exception:
+    _LIBC = None
+
+# Linux openat2. The numbers match the kernel on the architectures this
+# image is built for. A missing call falls back to a no-follow walk.
+_SYS_OPENAT2 = 437
+_RESOLVE_NO_MAGICLINKS = 0x02
+_RESOLVE_NO_SYMLINKS = 0x04
+_RESOLVE_BENEATH = 0x08
+
+
+if _LIBC is not None:
+    class _OpenHow(ctypes.Structure):
+        _fields_ = [
+            ("flags", ctypes.c_uint64),
+            ("mode", ctypes.c_uint64),
+            ("resolve", ctypes.c_uint64),
+            ("reserved", ctypes.c_uint64 * 7),
+        ]
+
+    _LIBC.syscall.restype = ctypes.c_long
+
+
 def _agent_root():
     raw = os.environ.get("CAST_AGENT_DIR") or "/app/agent"
     try:
-        return os.path.realpath(raw)
+        root = os.path.realpath(raw)
     except OSError:
         return ""
+    if root == "" or not os.path.isdir(root):
+        return ""
+    return root
 
 
-def _share_agent(path, directory):
-    """Files and directories the runtime creates under the agent tree stay
-    readable by the agent user. Private files outside that tree do not.
+def _write_rel(path):
+    """Relative path of a write that stays inside the agent tree.
+
+    None means the path is not in that tree. OSError means the path aimed
+    at the tree and then left it, or a component is empty.
     """
     root = _agent_root()
-    if root == "" or not isinstance(path, str) or path == "":
+    if root == "" or path is None:
+        return None
+    text = os.fspath(path)
+    if text == "":
+        return None
+    if not os.path.isabs(text):
+        text = os.path.join(os.getcwd(), text)
+    aimed = text == root or text.startswith(root + os.sep)
+    norm = os.path.normpath(text)
+    inside = norm == root or norm.startswith(root + os.sep)
+    if aimed and not inside:
+        raise OSError(errno.EPERM, "path")
+    if not inside:
+        return None
+    if norm == root:
+        return ""
+    rel = norm[len(root) + 1:]
+    parts = rel.split(os.sep)
+    if any(part in ("", ".", "..") for part in parts):
+        raise OSError(errno.EPERM, "path")
+    return rel
+
+
+def _openat2(dirfd, rel, flags, mode):
+    if _LIBC is None:
+        raise OSError(errno.ENOSYS, "openat2")
+    how = _OpenHow(
+        flags=flags,
+        mode=mode,
+        resolve=_RESOLVE_NO_MAGICLINKS | _RESOLVE_NO_SYMLINKS | _RESOLVE_BENEATH,
+    )
+    fd = _LIBC.syscall(
+        ctypes.c_long(_SYS_OPENAT2),
+        ctypes.c_int(dirfd),
+        ctypes.c_char_p(os.fsencode(rel)),
+        ctypes.byref(how),
+        ctypes.c_size_t(ctypes.sizeof(how)),
+    )
+    if fd < 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err), rel)
+    return fd
+
+
+def _root_fd():
+    return _RAW_OPEN(_agent_root(), os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+
+
+def _open_under(rel, flags, mode):
+    """Open rel beneath the agent root without following a symlink."""
+    rootfd = _root_fd()
+    try:
+        try:
+            return _openat2(rootfd, rel, flags | os.O_CLOEXEC | os.O_NOFOLLOW, mode)
+        except OSError as exc:
+            if exc.errno != errno.ENOSYS:
+                raise
+        return _open_walk(rootfd, rel, flags, mode)
+    finally:
+        os.close(rootfd)
+
+
+def _open_walk(rootfd, rel, flags, mode):
+    dirfd = os.dup(rootfd)
+    try:
+        parts = rel.split(os.sep)
+        for index, part in enumerate(parts):
+            last = index == len(parts) - 1
+            open_flags = (flags if last else os.O_RDONLY | os.O_DIRECTORY) | os.O_NOFOLLOW | os.O_CLOEXEC
+            nxt = _RAW_OPEN(part, open_flags, mode if last else 0, dir_fd=dirfd)
+            os.close(dirfd)
+            dirfd = nxt
+            if last:
+                return dirfd
+    except Exception:
+        os.close(dirfd)
+        raise
+    os.close(dirfd)
+    raise OSError(errno.EINVAL, "path")
+
+
+def _castwork_gid():
+    try:
+        import grp
+
+        return grp.getgrnam("castwork").gr_gid
+    except Exception:
+        return None
+
+
+def _share_fd(fd, directory):
+    mode = 0o2770 if directory else 0o660
+    os.fchmod(fd, mode)
+    gid = _castwork_gid()
+    if gid is None:
         return
     try:
-        if os.path.islink(path):
-            return
-        real = os.path.realpath(path)
-    except OSError:
-        return
-    if real != root and not real.startswith(root + os.sep):
-        return
-    try:
-        os.chmod(path, 0o2770 if directory else 0o660)
+        os.fchown(fd, -1, gid)
     except OSError:
         pass
 
 
+def _mkdir_under(rel):
+    parent_rel, name = os.path.split(rel)
+    parent_fd = _root_fd() if parent_rel in ("", ".") else _open_under(parent_rel, os.O_RDONLY | os.O_DIRECTORY, 0)
+    try:
+        _RAW_MKDIR(name, 0o770, dir_fd=parent_fd)
+        child = _RAW_OPEN(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+    try:
+        _share_fd(child, True)
+    finally:
+        os.close(child)
+
+
+def _writing_mode(mode):
+    return isinstance(mode, str) and any(ch in mode for ch in "wax+")
+
+
+def _writing_flags(flags):
+    if flags & (os.O_DIRECTORY | getattr(os, "O_PATH", 0)):
+        return False
+    access = flags & os.O_ACCMODE
+    return access in (os.O_WRONLY, os.O_RDWR) or bool(flags & (os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+
+
 def _share_agent_writes():
     import builtins
+    import io
 
-    mkdir = os.mkdir
-
-    def shared_mkdir(path, mode=0o777, *args, **kwargs):
-        mkdir(path, mode, *args, **kwargs)
-        _share_agent(path if isinstance(path, str) else os.fspath(path), True)
+    def shared_mkdir(path, mode=0o777, *args, dir_fd=None, **kwargs):
+        if dir_fd is None:
+            rel = _write_rel(path)
+            if rel not in (None, ""):
+                _mkdir_under(rel)
+                return None
+        return _RAW_MKDIR(path, mode, *args, dir_fd=dir_fd, **kwargs)
 
     os.mkdir = shared_mkdir
-    builtin_open = builtins.open
 
-    def shared_open(file, mode="r", *args, **kwargs):
-        handle = builtin_open(file, mode, *args, **kwargs)
-        if isinstance(file, (str, os.PathLike)) and any(ch in mode for ch in "wax+"):
-            _share_agent(os.fspath(file), False)
-        return handle
+    def shared_open(file, mode="r", buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None):
+        if isinstance(file, (str, os.PathLike)) and _writing_mode(mode):
+            rel = _write_rel(file)
+            if rel not in (None, ""):
+                flags = os.O_CLOEXEC
+                if "w" in mode or "a" in mode or "x" in mode:
+                    flags |= os.O_CREAT
+                if "w" in mode:
+                    flags |= os.O_TRUNC
+                if "x" in mode:
+                    flags |= os.O_EXCL
+                if "a" in mode:
+                    flags |= os.O_APPEND
+                if "+" in mode:
+                    flags |= os.O_RDWR
+                else:
+                    flags |= os.O_WRONLY
+                fd = _open_under(rel, flags, 0o660)
+                try:
+                    _share_fd(fd, False)
+                    return os.fdopen(fd, mode, buffering, encoding, errors, newline)
+                except Exception:
+                    os.close(fd)
+                    raise
+        return builtins_open(file, mode, buffering, encoding, errors, newline, closefd, opener)
 
+    builtins_open = builtins.open
     builtins.open = shared_open
+    io.open = shared_open
+
+    def shared_os_open(path, flags, mode=0o777, *, dir_fd=None):
+        if dir_fd is None and _writing_flags(flags):
+            rel = _write_rel(path)
+            if rel not in (None, ""):
+                fd = _open_under(rel, flags, 0o660)
+                try:
+                    _share_fd(fd, False)
+                except Exception:
+                    os.close(fd)
+                    raise
+                return fd
+        return _RAW_OPEN(path, flags, mode, dir_fd=dir_fd)
+
+    os.open = shared_os_open
 
 
 _share_agent_writes()

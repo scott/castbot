@@ -294,6 +294,42 @@ func TestContainerBootsFromBundle(t *testing.T) {
 	if err != nil || strings.TrimSpace(remembered) != "remember this" {
 		t.Fatalf("agent memory %q %v", remembered, err)
 	}
+	if out, err := guest.OutputAs(readCtx, "999:998", "/bin/mkdir", "-p", "/app/agent/workspace/project", "/app/agent/memory/box"); err != nil {
+		t.Fatalf("agent mkdir %s %v", out, err)
+	}
+	if out, err := guest.OutputAs(readCtx, "999:998", "/bin/chmod", "2770", "/app/agent/workspace/project", "/app/agent/memory/box"); err != nil {
+		t.Fatalf("agent chmod %s %v", out, err)
+	}
+	owned := castletReq(t, http.MethodPut, guest.URL()+"/castlet/files/project/owned.txt", token, strings.NewReader("owned file"))
+	if owned.StatusCode != http.StatusNoContent {
+		t.Fatalf("owned put %d", owned.StatusCode)
+	}
+	owned.Body.Close()
+	seenOwned, err := guest.OutputAs(readCtx, "999:998", "/bin/cat", "/app/agent/workspace/project/owned.txt")
+	if err != nil || strings.TrimSpace(seenOwned) != "owned file" {
+		t.Fatalf("agent owned upload %q %v", seenOwned, err)
+	}
+	var box bytes.Buffer
+	boxw := tar.NewWriter(&box)
+	boxNote := []byte("boxed")
+	if err := boxw.WriteHeader(&tar.Header{Name: "box/note.txt", Mode: 0o644, Size: int64(len(boxNote))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boxw.Write(boxNote); err != nil {
+		t.Fatal(err)
+	}
+	if err := boxw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	boxed := castletReq(t, http.MethodPut, guest.URL()+"/castlet/memory", token, bytes.NewReader(box.Bytes()))
+	if boxed.StatusCode != http.StatusNoContent {
+		t.Fatalf("owned memory %d", boxed.StatusCode)
+	}
+	boxed.Body.Close()
+	seenBox, err := guest.OutputAs(readCtx, "999:998", "/bin/cat", "/app/agent/memory/box/note.txt")
+	if err != nil || strings.TrimSpace(seenBox) != "boxed" {
+		t.Fatalf("agent owned memory %q %v", seenBox, err)
+	}
 
 	logs := castletText(t, http.MethodGet, guest.URL()+"/castlet/logs", token, nil)
 	if !strings.Contains(logs, "stand-in ready name=Atlas") || !strings.Contains(logs, "secrets=1") || !strings.Contains(logs, "turn") {
@@ -315,6 +351,11 @@ func TestContainerBootsFromBundle(t *testing.T) {
 		t.Fatal("rejected request reached the runtime")
 	}
 
+	dirCtx, dirCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer dirCancel()
+	if out, err := guest.OutputAs(dirCtx, "999:998", "/bin/sh", "-c", "rm -rf /app/agent/workspace /app/agent/memory && mkdir -p /app/agent/workspace /app/agent/memory && chmod 2770 /app/agent/workspace /app/agent/memory"); err != nil {
+		t.Fatalf("agent dirs %s %v", out, err)
+	}
 	if _, err := h.st.PutBundle(ctx, owner.ID, agent.ID, "2", "name: Birch\n", instructions); err != nil {
 		t.Fatal(err)
 	}
