@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -66,14 +67,12 @@ func writeModelConfig(agentDir, base string) error {
 	if parent == "" || parent == "." || parent == string(filepath.Separator) {
 		return nil
 	}
+	tooliso.PrepareLayout(agentDir)
 	dir := filepath.Join(parent, ".cast")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() {
+		return errors.New("model config")
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return err
-	}
-	tooliso.OwnRuntime(dir)
 	var b strings.Builder
 	b.WriteString("providers:\n")
 	for _, p := range castcfg.ProxyProviders() {
@@ -83,12 +82,7 @@ func writeModelConfig(agentDir, base string) error {
 		}
 		fmt.Fprintf(&b, "  %s:\n    base_url: %q\n", name, base)
 	}
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
-		return err
-	}
-	tooliso.OwnRuntime(path)
-	return nil
+	return tooliso.WriteFresh(dir, "config.yaml", []byte(b.String()), 0o600)
 }
 
 func configSection(configKey string) string {

@@ -16,8 +16,8 @@ func (s *Store) migrateV36() error {
 }
 
 // ModelProxy reports whether this machine has called models through the host.
-// vmID is the calling machine. An empty id reads the live row, which is the
-// token that was not bound to one machine.
+// vmID is the calling machine. An empty id reads every live row for the agent.
+// That is correct only when the agent has exactly one live machine row.
 func (s *Store) ModelProxy(ctx context.Context, userID, agentID, vmID string) (bool, error) {
 	q := `SELECT model_proxy FROM agent_vms WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`
 	args := []any{userID, agentID}
@@ -37,9 +37,10 @@ func (s *Store) ModelProxy(ctx context.Context, userID, agentID, vmID string) (b
 }
 
 // MarkModelProxy records that the calling machine calls models through the host.
-// vmID limits the update to that row. Another machine, including one a failed
-// replacement did not replace, is left unchanged. The bool is false when no
-// row was updated.
+// vmID limits the update to that row. An empty id updates every live row for
+// the agent, which is correct only when the agent has exactly one live machine
+// row. A different machine, including one a failed replacement did not replace,
+// is left unchanged when vmID is set. The bool is false when no row was updated.
 func (s *Store) MarkModelProxy(ctx context.Context, userID, agentID, vmID string) (bool, error) {
 	q := `UPDATE agent_vms SET model_proxy = 1 WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`
 	args := []any{userID, agentID}

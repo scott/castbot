@@ -82,6 +82,63 @@ func TestModelKeyStaysOffTheRuntime(t *testing.T) {
 	}
 }
 
+func TestModelConfigReplacesALink(t *testing.T) {
+	root := t.TempDir()
+	agent := filepath.Join(root, "agent")
+	if err := os.MkdirAll(agent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".cast"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(root, ".cast", "config.yaml")
+	if err := os.Symlink(target, cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeModelConfig(agent, "http://127.0.0.1:8090/model/v1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "target" {
+		t.Fatalf("target %q %v", got, err)
+	}
+	info, err := os.Lstat(cfgPath)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("config %v %v", info, err)
+	}
+	body, err := os.ReadFile(cfgPath)
+	if err != nil || !strings.Contains(string(body), "base_url:") {
+		t.Fatalf("config %q %v", body, err)
+	}
+
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, "marker"), []byte("marker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root2 := t.TempDir()
+	agent2 := filepath.Join(root2, "agent")
+	if err := os.MkdirAll(agent2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, filepath.Join(root2, ".cast")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeModelConfig(agent2, "http://127.0.0.1:8090/model/v1"); err == nil {
+		t.Fatal("wrote through a directory link")
+	}
+	marker, err := os.ReadFile(filepath.Join(other, "marker"))
+	if err != nil || string(marker) != "marker" {
+		t.Fatalf("marker %q %v", marker, err)
+	}
+	if _, err := os.Lstat(filepath.Join(other, "config.yaml")); !os.IsNotExist(err) {
+		t.Fatal("config was written through the directory link")
+	}
+}
+
 func TestEgressModelStreamsAndDropsTheGuestToken(t *testing.T) {
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer agent-token" {
