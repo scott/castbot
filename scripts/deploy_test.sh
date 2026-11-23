@@ -1191,6 +1191,25 @@ EOF
   assert_no_secrets "$dir"
 }
 
+image_helper_change() {
+  local info dir repo
+  info=$(prepare)
+  dir=$(printf '%s\n' "$info" | sed -n '1p')
+  repo=$(printf '%s\n' "$info" | sed -n '2p')
+  mkdir -p "$repo/cmd/castbot-toolrun"
+  printf 'package main\nfunc main() {}\n' >"$repo/cmd/castbot-toolrun/main.go"
+  git -C "$repo" add cmd/castbot-toolrun/main.go
+  git -C "$repo" commit -m "helper" >/dev/null
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+  if run_deploy "$dir"; then
+    printf 'helper change did not abort\n' >&2
+    return 1
+  fi
+  grep -q 'refusing to deploy ahead of the runtime image' "$dir/stderr"
+  grep -q 'cmd/castbot-toolrun/main.go' "$dir/stderr"
+  assert_no_secrets "$dir"
+}
+
 image_test_only() {
   local info dir repo
   info=$(prepare)
@@ -1395,6 +1414,7 @@ run_case already-live already_live
 run_case short-image-tag short_image_tag
 run_case guest-dir-ignored guest_dir_ignored
 run_case image-dep image_dep_change
+run_case image-helper image_helper_change
 run_case image-test-only image_test_only
 run_case dry-prune dry_prune
 run_case downgrade downgrade

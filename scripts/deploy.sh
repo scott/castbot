@@ -353,7 +353,13 @@ guest_rel_paths() {
   set +e
   (
     cd "$wt"
-    GOOS=linux GOARCH=amd64 go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/castlet ./cmd/castbot-guest ./cmd/cast-standin
+    bins=(./cmd/castlet ./cmd/castbot-guest ./cmd/cast-standin)
+    # Older image commits do not have the helper. Name it when it exists so
+    # packages it alone imports are image inputs.
+    if [[ -d ./cmd/castbot-toolrun ]]; then
+      bins+=(./cmd/castbot-toolrun)
+    fi
+    GOOS=linux GOARCH=amd64 go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' "${bins[@]}"
   ) >"$out"
   status=$?
   set -e
@@ -384,7 +390,7 @@ image_gate() {
   # Guest inputs are the same set scripts/runtime-image.sh compares.
   paths=$(
     {
-      printf '%s\n' Dockerfile deploy go.mod go.sum cmd/castlet cmd/castbot-guest cmd/cast-standin internal/castlet
+      printf '%s\n' Dockerfile deploy go.mod go.sum cmd/castlet cmd/castbot-guest cmd/cast-standin cmd/castbot-toolrun internal/castlet
       guest_rel_paths "$commit"
       guest_rel_paths "$SHA"
     } | awk 'NF && !seen[$0]++'
