@@ -72,10 +72,13 @@ type Server struct {
 	devEcho         bool
 	explicitRuntime bool
 	log             *slog.Logger
-	recMu           sync.Mutex
-	recKind         string
-	recDelay        time.Duration
-	recEvery        time.Duration
+	// modelProxyUpstream replaces the provider base URL. Tests set it.
+	// An empty value uses the manifest URL.
+	modelProxyUpstream string
+	recMu              sync.Mutex
+	recKind            string
+	recDelay           time.Duration
+	recEvery           time.Duration
 
 	approvalFor time.Duration
 	expireMu    sync.Mutex
@@ -477,6 +480,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/castlet/agents/{id}/bootstrap", s.bootstrap)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/bundle", s.machineBundle)
 	mux.HandleFunc("GET /api/castlet/agents/{id}/secrets", s.machineSecrets)
+	mux.HandleFunc("GET /api/castlet/agents/{id}/model/{path...}", s.machineModel)
+	mux.HandleFunc("POST /api/castlet/agents/{id}/model/{path...}", s.machineModel)
 	mux.HandleFunc("GET /runs/{id}/events", s.runEvents)
 	mux.HandleFunc("GET /runs/{id}", s.getRun)
 	mux.HandleFunc("POST /runs/{id}/retry", s.retryRun)

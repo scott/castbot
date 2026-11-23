@@ -33,7 +33,9 @@ type provider struct {
 	LLMDefault     string   `json:"llmDefaultModel"`
 	Impl           string   `json:"impl"`
 	EnvVar         string   `json:"envVar"`
+	ConfigKey      string   `json:"configKey"`
 	BaseURL        string   `json:"baseUrl"`
+	BaseURLEnv     string   `json:"baseUrlEnv"`
 	Keyless        bool     `json:"keyless"`
 }
 

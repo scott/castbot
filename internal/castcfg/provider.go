@@ -209,6 +209,103 @@ func manifestProviders() []provider {
 	return list
 }
 
+// ModelProxyHeader is sent by a castlet that calls models through the host.
+// The host then omits the provider key from the secrets response.
+const ModelProxyHeader = "X-Castbot-Model-Proxy"
+
+// ModelProxyValue is the header value that selects that path.
+const ModelProxyValue = "1"
+
+// ModelPlaceholder is the non-secret token the runtime presents to the proxy.
+// The host replaces it. It is not a provider key.
+const ModelPlaceholder = "castbot-proxy"
+
+// ProxyProvider is one keyed provider the host can call on the machine's behalf.
+type ProxyProvider struct {
+	Key        string
+	EnvVar     string
+	BaseURL    string
+	BaseURLEnv string
+	ConfigKey  string
+	Impl       string
+	Prefixes   []string
+}
+
+// ProxyProviders returns keyed providers with a base URL. Keyless and reserved
+// rows are left out, so a local model is not redirected through the host.
+func ProxyProviders() []ProxyProvider {
+	var out []ProxyProvider
+	for _, p := range manifestProviders() {
+		if p.Impl == "reserved" || p.Keyless || p.Key == "" {
+			continue
+		}
+		if strings.TrimSpace(p.EnvVar) == "" || strings.TrimSpace(p.BaseURL) == "" {
+			continue
+		}
+		out = append(out, ProxyProvider{
+			Key: p.Key, EnvVar: strings.TrimSpace(p.EnvVar),
+			BaseURL:    strings.TrimRight(strings.TrimSpace(p.BaseURL), "/"),
+			BaseURLEnv: strings.TrimSpace(p.BaseURLEnv),
+			ConfigKey:  strings.TrimSpace(p.ConfigKey),
+			Impl:       p.Impl, Prefixes: append([]string(nil), p.Prefixes...),
+		})
+	}
+	return out
+}
+
+// ProxyProviderFor returns the keyed provider for a manifest key.
+func ProxyProviderFor(key string) (ProxyProvider, bool) {
+	key = strings.TrimSpace(key)
+	for _, p := range ProxyProviders() {
+		if p.Key == key {
+			return p, true
+		}
+	}
+	return ProxyProvider{}, false
+}
+
+// APIModelID splits a saved model id into the provider key and the id that
+// provider expects. digitalocean/deepseek-3.2 becomes deepseek-3.2.
+func APIModelID(model string) (providerKey, apiModel string, ok bool) {
+	model = strings.TrimSpace(model)
+	inf, found := InferenceFor(model)
+	if !found || inf.Keyless {
+		return "", "", false
+	}
+	p, found := ProxyProviderFor(inf.Key)
+	if !found {
+		return "", "", false
+	}
+	best := ""
+	for _, prefix := range p.Prefixes {
+		if prefix != "" && strings.HasPrefix(model, prefix) && len(prefix) > len(best) {
+			best = prefix
+		}
+	}
+	api := strings.TrimPrefix(model, best)
+	if api == "" || api == model && best == "" {
+		return "", "", false
+	}
+	return p.Key, api, true
+}
+
+// ModelAllowed reports whether a request model is this agent's model.
+// The saved id and the provider id are both accepted.
+func ModelAllowed(agentModel, requestModel string) (apiModel string, ok bool) {
+	key, api, found := APIModelID(agentModel)
+	if !found || strings.TrimSpace(requestModel) == "" {
+		return "", false
+	}
+	req := strings.TrimSpace(requestModel)
+	if req != agentModel && req != api {
+		return "", false
+	}
+	if reqKey, _, reqFound := APIModelID(req); reqFound && reqKey != key {
+		return "", false
+	}
+	return api, true
+}
+
 // GuestEnvVars is every provider environment name in the manifest, including
 // keyless and reserved rows. Those names stay on the host. A command inside
 // the machine does not receive them.
