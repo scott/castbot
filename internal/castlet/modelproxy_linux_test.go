@@ -14,7 +14,7 @@ import (
 
 func TestEgressModelAllowsTheRuntimeAndRefusesOthers(t *testing.T) {
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer agent-token" {
+		if r.Header.Get("Authorization") != "Bearer agent-token" || r.Header.Get("X-Api-Key") != "" {
 			http.Error(w, "auth", http.StatusUnauthorized)
 			return
 		}
@@ -69,6 +69,14 @@ func TestEgressModelAllowsTheRuntimeAndRefusesOthers(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, "data: one") || !strings.Contains(body, "data: two") {
 		t.Fatalf("allow %d %s", code, body)
 	}
+	code, body = callKey(client, ln.Addr().String(), sup.modelGate, "/model/v1/messages")
+	if code != http.StatusOK || !strings.Contains(body, "data: one") {
+		t.Fatalf("provider header %d %s", code, body)
+	}
+	code, _ = callKey(client, ln.Addr().String(), "not-the-gate", "/model/v1/messages")
+	if code != http.StatusNotFound {
+		t.Fatalf("wrong provider header %d", code)
+	}
 	code, _ = call("not-the-gate", "/model/v1/chat/completions")
 	if code != http.StatusNotFound {
 		t.Fatalf("wrong placeholder %d", code)
@@ -81,4 +89,21 @@ func TestEgressModelAllowsTheRuntimeAndRefusesOthers(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("path %d", code)
 	}
+}
+
+func callKey(client *http.Client, addr, token, path string) (int, string) {
+	req, err := http.NewRequest(http.MethodPost, "http://"+addr+path, strings.NewReader(`{"model":"m"}`))
+	if err != nil {
+		return 0, err.Error()
+	}
+	req.Header.Set("X-Api-Key", token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	res, err := client.Do(req)
+	if err != nil {
+		return 0, err.Error()
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(raw)
 }

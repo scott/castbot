@@ -130,7 +130,9 @@ func (s *Supervisor) egressModel(w http.ResponseWriter, r *http.Request) {
 		writePlain(w, http.StatusBadGateway, "model unavailable")
 		return
 	}
+	// The guest placeholder is not sent upstream. The host adds the provider key.
 	up.Header.Set("Authorization", "Bearer "+token)
+	up.Header.Del("X-Api-Key")
 	copyModelHeader(up.Header, r.Header, "Content-Type")
 	copyModelHeader(up.Header, r.Header, "Accept")
 	copyModelHeader(up.Header, r.Header, "anthropic-version")
@@ -155,6 +157,13 @@ func (s *Supervisor) egressModel(w http.ResponseWriter, r *http.Request) {
 	flushCopy(w, res.Body)
 }
 
+// GuestGate is the per-boot placeholder the runtime presents to the forwarder.
+func (s *Supervisor) GuestGate() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.modelGate
+}
+
 func (s *Supervisor) modelGateMatches(r *http.Request) bool {
 	s.mu.Lock()
 	gate := s.modelGate
@@ -162,8 +171,13 @@ func (s *Supervisor) modelGateMatches(r *http.Request) bool {
 	if gate == "" {
 		return false
 	}
-	got := modelBearer(r.Header.Get("Authorization"))
-	if len(got) != len(gate) {
+	bearer := gateEqual(modelBearer(r.Header.Get("Authorization")), gate)
+	apiKey := gateEqual(strings.TrimSpace(r.Header.Get("X-Api-Key")), gate)
+	return bearer || apiKey
+}
+
+func gateEqual(got, gate string) bool {
+	if got == "" || len(got) != len(gate) {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(gate)) == 1

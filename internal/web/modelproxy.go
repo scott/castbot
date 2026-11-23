@@ -80,6 +80,7 @@ func (s *Server) machineModel(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusTooManyRequests, "Slow down\n")
 		return
 	}
+	defer s.finishModelCall(agent.ID)
 	_, value, missing := s.effectiveModelSecret(r.Context(), userID, agent.Model)
 	if missing != "" || value == "" {
 		writeText(w, http.StatusConflict, "No key for this model.\n")
@@ -134,6 +135,7 @@ func (s *Server) machineModel(w http.ResponseWriter, r *http.Request) {
 }
 
 const defaultModelRate = 60
+const defaultModelConc = 4
 
 func (s *Server) allowModelCall(id string, now time.Time) bool {
 	s.modelMu.Lock()
@@ -141,9 +143,19 @@ func (s *Server) allowModelCall(id string, now time.Time) bool {
 	if s.modelHits == nil {
 		s.modelHits = map[string][]time.Time{}
 	}
+	if s.modelInflight == nil {
+		s.modelInflight = map[string]int{}
+	}
 	limit := s.modelRate
 	if limit <= 0 {
 		limit = defaultModelRate
+	}
+	conc := s.modelConc
+	if conc <= 0 {
+		conc = defaultModelConc
+	}
+	if s.modelInflight[id] >= conc {
+		return false
 	}
 	window := s.modelWindow
 	if window <= 0 {
@@ -162,7 +174,16 @@ func (s *Server) allowModelCall(id string, now time.Time) bool {
 		return false
 	}
 	s.modelHits[id] = append(kept, now)
+	s.modelInflight[id]++
 	return true
+}
+
+func (s *Server) finishModelCall(id string) {
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+	if s.modelInflight[id] > 0 {
+		s.modelInflight[id]--
+	}
 }
 
 func methodAllows(method, provider, cleaned string) bool {

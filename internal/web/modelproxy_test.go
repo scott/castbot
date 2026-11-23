@@ -279,6 +279,72 @@ func TestModelProxyRateLimit(t *testing.T) {
 	}
 }
 
+func TestModelProxyConcurrency(t *testing.T) {
+	const key = "fixture-proxy-value"
+	hold := make(chan struct{})
+	entered := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-hold
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(up.Close)
+	h := newHarness(t)
+	h.srv.modelProxyUpstream = up.URL + "/v1"
+	h.srv.modelConc = 1
+	t.Setenv("CASTBOT_PROVIDER_KEY_DIGITALOCEAN", key)
+	ctx := context.Background()
+	user, _ := h.account("ada-conc@example.com", "Ada", "correct-horse-1")
+	sec, err := h.st.CreateSection(ctx, user.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := h.st.CreateAgent(ctx, user.ID, store.AgentInput{
+		SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready",
+		Model: "digitalocean/deepseek-3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := proxyGuestToken(t, h, user.ID, agent.ID)
+	body := `{"model":"digitalocean/deepseek-3.2","messages":[{"role":"user","content":"fixture-prompt-body"}]}`
+	hdr := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+	ip := "203.0.113.90:9"
+	path := "/api/castlet/agents/" + agent.ID + "/model/v1/chat/completions"
+	done := make(chan int, 1)
+	go func() {
+		code, _, _ := h.do(http.MethodPost, path, body, ip, hdr)
+		done <- code
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first call did not reach the provider")
+	}
+	code, text, _ := h.do(http.MethodPost, path, body, ip, hdr)
+	if code != http.StatusTooManyRequests || strings.Contains(text, key) {
+		t.Fatalf("extra call %d %s", code, text)
+	}
+	close(hold)
+	select {
+	case code := <-done:
+		if code != http.StatusOK {
+			t.Fatalf("first call %d", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first call did not finish")
+	}
+	code, _, _ = h.do(http.MethodPost, path, body, ip, hdr)
+	if code != http.StatusOK {
+		t.Fatalf("later call %d", code)
+	}
+}
+
 func proxyGuestToken(t *testing.T, h *harness, userID, agentID string) string {
 	t.Helper()
 	plain, err := h.st.IssueBootstrap(context.Background(), userID, agentID)

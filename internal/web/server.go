@@ -77,8 +77,10 @@ type Server struct {
 	modelProxyUpstream string
 	modelMu            sync.Mutex
 	modelHits          map[string][]time.Time
+	modelInflight      map[string]int
 	modelRate          int
 	modelWindow        time.Duration
+	modelConc          int
 	recMu              sync.Mutex
 	recKind            string
 	recDelay           time.Duration
