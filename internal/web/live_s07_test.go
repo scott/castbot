@@ -25,7 +25,8 @@ import (
 
 // The live tests read CASTBOT_DO_TOKEN and no other DigitalOcean token.
 // CASTBOT_PUBLIC_URL must be an https URL the guest can reach that forwards
-// to CASTBOT_LISTEN (default 127.0.0.1:18080), including /s07-infer/.
+// to CASTBOT_LISTEN (default 127.0.0.1:18080). The fixture is on that
+// listener at /s07-infer/, and the host model proxy is pointed at it.
 // CASTBOT_IMAGE is the S07 runtime image.
 //
 //	CASTBOT_DO_TOKEN=... CASTBOT_IMAGE=... CASTBOT_PUBLIC_URL=https://... \
@@ -295,13 +296,11 @@ func s07Live(t *testing.T, name string, quiet time.Duration) *liveRig {
 	if err := h.st.SetAgentModel(ctx, user.ID, agent.ID, "digitalocean/deepseek-v3.2"); err != nil {
 		t.Fatal(err)
 	}
-	secretRow, err := h.st.PutSecret(ctx, user.ID, "DIGITALOCEAN_INFERENCE_BASE_URL", publicURL+"/s07-infer/v1")
+	_, port, err := net.SplitHostPort(ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.st.GrantSecret(ctx, user.ID, agent.ID, secretRow.ID); err != nil {
-		t.Fatal(err)
-	}
+	h.srv.modelProxyUpstream = "http://127.0.0.1:" + port + "/s07-infer/v1"
 	named := &namedHost{MicroVM: client, name: name, note: func(id string) {
 		rig.mu.Lock()
 		rig.id = id
