@@ -24,6 +24,7 @@ func PrepareLayout(agentDir string) {
 			continue
 		}
 		_ = os.Chmod(dir, 0o700)
+		OwnRuntime(dir)
 	}
 	if err := os.MkdirAll(StateDir(agentDir), 0o700); err == nil {
 		_ = os.Chmod(StateDir(agentDir), 0o700)
@@ -103,6 +104,7 @@ func writePrivate(path string, body []byte) error {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
+	OwnRuntime(dir)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil && (errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EEXIST)) {
 		if rm := os.Remove(path); rm != nil && !os.IsNotExist(rm) {
@@ -120,5 +122,9 @@ func writePrivate(path string, body []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	if err := os.Chmod(path, 0o600); err != nil {
+		return err
+	}
+	OwnRuntime(path)
+	return nil
 }

@@ -1,17 +1,18 @@
 // Command castbot-toolrun starts one command as the tool account.
-// The runtime image installs it setuid and setgid to that account.
-// This process stays as the parent so the runtime can signal it, and the
-// command runs in its own process group. The parent scrubs the environment
-// before the command starts. It does not print the environment.
+// The supervisor is root and is the process that changes accounts.
+// The runtime asks for a command on the local socket. This process stays
+// so the runtime can signal it, and the command runs in its own process
+// group. The parent scrubs the environment before the command starts.
+// It does not print the environment.
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -22,19 +23,98 @@ import (
 func main() {
 	_ = tooliso.SetNonDumpable()
 	args := os.Args[1:]
-	if len(args) > 0 && args[0] == "--file" {
-		os.Exit(tooliso.RunFile(args[1:]))
+	if len(args) == 0 {
+		os.Exit(2)
 	}
-	if len(args) > 0 && args[0] == "--dropped" {
+	switch args[0] {
+	case "--serve":
+		if err := tooliso.EnsureServe(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr, "tool server did not start")
+			os.Exit(1)
+		}
+		select {}
+	case "--as-runtime":
+		os.Exit(asRuntime(args[1:]))
+	case "--file":
+		os.Exit(dispatch(true, args[1:]))
+	case "--dropped":
 		os.Exit(dropped(args[1:]))
-	}
-	if len(args) > 0 && args[0] == "--" {
+	case "--":
 		args = args[1:]
 	}
 	if len(args) == 0 || args[0] == "" {
 		os.Exit(2)
 	}
-	os.Exit(supervise(args))
+	os.Exit(dispatch(false, args))
+}
+
+func dispatch(file bool, args []string) int {
+	if len(args) == 0 || args[0] == "" {
+		fmt.Fprintln(os.Stderr, "command refused")
+		return 126
+	}
+	if tooliso.DirectRun() {
+		if file {
+			return tooliso.RunFile(args)
+		}
+		return supervise(args)
+	}
+	if os.Geteuid() == 0 {
+		return runAsAgent(file, args)
+	}
+	return tooliso.Proxy(file, args)
+}
+
+func asRuntime(args []string) int {
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 || args[0] == "" || os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "command refused")
+		return 126
+	}
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Env = os.Environ()
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := tooliso.ApplyRuntime(cmd); err != nil {
+		fmt.Fprintln(os.Stderr, "command refused")
+		return 126
+	}
+	return waitCommand(cmd)
+}
+
+func runAsAgent(file bool, args []string) int {
+	self, err := os.Executable()
+	if err != nil || self == "" {
+		fmt.Fprintln(os.Stderr, "command refused")
+		return 126
+	}
+	var childArgs []string
+	var env []string
+	if file {
+		childArgs = append([]string{self, "--file"}, args...)
+		env = tooliso.FileEnv(os.Environ())
+	} else {
+		env = tooliso.CommandEnv(os.Environ())
+		path := tooliso.Resolve(env, args[0])
+		if path == "" {
+			fmt.Fprintln(os.Stderr, "command refused")
+			return 126
+		}
+		childArgs = append([]string{self, "--dropped", "--", path}, args[1:]...)
+	}
+	cmd := exec.Command(childArgs[0], childArgs[1:]...)
+	cmd.Env = env
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := tooliso.ApplyTool(cmd); err != nil {
+		fmt.Fprintln(os.Stderr, "command refused")
+		return 126
+	}
+	return waitCommand(cmd)
 }
 
 func supervise(args []string) int {
@@ -42,17 +122,11 @@ func supervise(args []string) int {
 		fmt.Fprintln(os.Stderr, "command refused")
 		return 126
 	}
-	explicit := os.Getenv("CASTBOT_TOOL_EXPLICIT") == "1"
-	var env []string
-	if explicit {
-		env = tooliso.ToolEnvExplicit(os.Environ(), tooliso.ParseNames(os.Getenv(tooliso.ToolSecretEnv)))
-	} else {
-		env = tooliso.ToolEnv(os.Environ(), tooliso.ParseNames(os.Getenv(tooliso.ToolSecretEnv)))
+	env := tooliso.CommandEnv(os.Environ())
+	if os.Getenv("CASTBOT_TOOLRUN_TEST") == "1" {
+		env = append(env, "CASTBOT_TOOLRUN_TEST=1")
 	}
-	path := args[0]
-	if !filepath.IsAbs(path) {
-		path = look(env, path)
-	}
+	path := tooliso.Resolve(env, args[0])
 	if path == "" {
 		fmt.Fprintln(os.Stderr, "command refused")
 		return 126
@@ -63,16 +137,16 @@ func supervise(args []string) int {
 		return 126
 	}
 	childArgs := append([]string{self, "--dropped", "--", path}, args[1:]...)
-	childEnv := append([]string{}, env...)
-	if os.Getenv("CASTBOT_TOOLRUN_TEST") == "1" {
-		childEnv = append(childEnv, "CASTBOT_TOOLRUN_TEST=1")
-	}
 	cmd := exec.Command(childArgs[0], childArgs[1:]...)
-	cmd.Env = childEnv
+	cmd.Env = env
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
+	return waitCommand(cmd)
+}
+
+func waitCommand(cmd *exec.Cmd) int {
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "command refused")
 		return 126
@@ -104,6 +178,9 @@ func supervise(args []string) int {
 }
 
 func stopGroup(pid int) {
+	if pid <= 0 {
+		return
+	}
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
 	time.Sleep(200 * time.Millisecond)
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
@@ -138,28 +215,4 @@ func withoutTestFlag(env []string) []string {
 		out = append(out, item)
 	}
 	return out
-}
-
-func look(env []string, name string) string {
-	if name == "" || strings.ContainsAny(name, "/\x00") {
-		return ""
-	}
-	var path string
-	for _, item := range env {
-		if strings.HasPrefix(item, "PATH=") {
-			path = strings.TrimPrefix(item, "PATH=")
-		}
-	}
-	for _, dir := range filepath.SplitList(path) {
-		if dir == "" {
-			continue
-		}
-		cand := filepath.Join(dir, name)
-		info, err := os.Stat(cand)
-		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
-			continue
-		}
-		return cand
-	}
-	return ""
 }

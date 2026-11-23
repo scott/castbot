@@ -12,8 +12,10 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -269,6 +271,7 @@ func writeNoFollow(path string, body []byte, mode os.FileMode) error {
 		f.Close()
 		return err
 	}
+	shareCastwork(int(f.Fd()))
 	return f.Close()
 }
 
@@ -291,6 +294,7 @@ func fchmodOwned(path string, mode uint32) error {
 	if int(st.Uid) != os.Getuid() {
 		return nil
 	}
+	shareCastwork(int(f.Fd()))
 	if uint32(st.Mode)&0o7777 == mode&0o7777 {
 		return nil
 	}
@@ -298,6 +302,24 @@ func fchmodOwned(path string, mode uint32) error {
 		return err
 	}
 	return nil
+}
+
+// shareCastwork sets the group to castwork when this process is root.
+// The runtime image's tool account is in that group. A non-root process
+// keeps the group it already has.
+func shareCastwork(fd int) {
+	if os.Geteuid() != 0 || fd < 0 {
+		return
+	}
+	grp, err := user.LookupGroup("castwork")
+	if err != nil {
+		return
+	}
+	gid, err := strconv.Atoi(grp.Gid)
+	if err != nil || gid < 0 {
+		return
+	}
+	_ = syscall.Fchown(fd, -1, gid)
 }
 
 // Sum is the sha256 of the bundle bytes.

@@ -23,12 +23,13 @@ func TestRuntimeToolIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("docker", "run", "--rm", "-i", "--network", "none",
+		"--security-opt", "no-new-privileges",
 		"-e", "OPENROUTER_API_KEY=fixture-iso-model",
 		"-e", "NOTES_TOKEN=fixture-iso-notes",
 		"-e", "PUBLIC_TOKEN=fixture-public",
 		"-e", "CASTBOT_TOOL_SECRET_NAMES=PUBLIC_TOKEN,OPENROUTER_API_KEY",
 		"-e", "CAST_AGENT_DIR=/app/agent",
-		"--entrypoint", "/bin/sh", host.RuntimeImage)
+		"--entrypoint", "/bin/sh", host.RuntimeImage, "-c", toolBootWrapper)
 	cmd.Stdin = strings.NewReader(toolIsolationScript)
 	out, err := cmd.CombinedOutput()
 	if err != nil || !bytes.Contains(out, []byte("isolation-ok")) {
@@ -39,10 +40,26 @@ func TestRuntimeToolIsolation(t *testing.T) {
 	}
 }
 
+const toolBootWrapper = `set -eu
+test ! -u /usr/local/bin/castbot-toolrun
+test ! -g /usr/local/bin/castbot-toolrun
+cat >/tmp/castbot-test.sh
+/usr/local/bin/castbot-toolrun --serve >/tmp/tool-serve.log 2>&1 &
+i=0
+while [ ! -S /run/castbot-tool.sock ]; do
+  i=$((i + 1))
+  if [ "$i" -gt 50 ]; then
+    echo 'tool server did not start' >&2
+    cat /tmp/tool-serve.log >&2 || true
+    exit 1
+  fi
+  sleep 0.1
+done
+exec /usr/local/bin/castbot-toolrun --as-runtime -- /bin/sh /tmp/castbot-test.sh
+`
+
 const toolIsolationScript = `set -eu
 test -x /bin/bash
-test -u /usr/local/bin/castbot-toolrun
-test -g /usr/local/bin/castbot-toolrun
 grep -q '^agent:x:999:998:' /etc/passwd
 umask 077
 printf '%s\n' 'private-file' > /app/.castlet/env
@@ -267,5 +284,68 @@ with open(own, "r+", encoding="utf-8") as fh:
         raise SystemExit("own r+")
 print("env-ok")
 PY
+umask 007
+mkdir -p /app/agent/workspace
+chmod 2770 /app/agent/workspace
+cd /app/agent
+git init -b main >/dev/null
+git config user.email fixture@example.com
+git config user.name Fixture
+echo hello > README.md
+git add README.md
+git commit -m fixture >/dev/null
+if ! status=$(/opt/cast/bin/python -c 'from cast.tools.git import git_status; print(git_status.invoke({}))'); then
+  printf '%s\n' "$status" >&2
+  echo 'git_status failed' >&2
+  exit 1
+fi
+printf '%s\n' "$status" | grep -F 'Current branch: main' || {
+  printf '%s\n' "$status" >&2
+  echo 'git_status output' >&2
+  exit 1
+}
+printf '%s\n' 'boot file' > /app/agent/workspace/boot.txt
+chmod 660 /app/agent/workspace/boot.txt
+if ! seen=$(/usr/local/bin/castbot-toolrun -- /bin/cat /app/agent/workspace/boot.txt); then
+  echo 'file read failed' >&2
+  exit 1
+fi
+test "$seen" = "boot file" || {
+  printf '%s\n' "$seen" >&2
+  echo 'file body' >&2
+  exit 1
+}
+mkdir -p /app/.cast
+cat > /app/.cast/agent.yaml <<'YAML'
+name: Atlas
+version: "1"
+brain:
+  instructions_file: instructions.md
+tools:
+  builtin: []
+  mcp: []
+  custom: []
+YAML
+cp /app/.cast/agent.yaml /app/agent/agent.yaml
+printf '%s\n' 'Reply briefly.' > /app/agent/instructions.md
+/opt/cast/bin/python -m cast.runtime --agent-path /app/agent --port 8081 --host 127.0.0.1 >/tmp/runtime.log 2>&1 &
+echo $! >/tmp/runtime.pid
+i=0
+while ! /opt/cast/bin/python -c 'import socket;s=socket.create_connection(("127.0.0.1",8081),2);s.close()' >/dev/null 2>&1; do
+  if ! kill -0 "$(cat /tmp/runtime.pid)" 2>/dev/null; then
+    echo 'runtime exited' >&2
+    cat /tmp/runtime.log >&2
+    exit 1
+  fi
+  i=$((i + 1))
+  if [ "$i" -gt 150 ]; then
+    echo 'runtime did not listen' >&2
+    cat /tmp/runtime.log >&2
+    exit 1
+  fi
+  sleep 0.2
+done
+rtuid=$(awk '/^Uid:/{print $2}' /proc/"$(cat /tmp/runtime.pid)"/status)
+test "$rtuid" = "65534"
 echo isolation-ok
 `

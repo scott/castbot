@@ -13,11 +13,21 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// DirectRun reports that this process should run the command itself.
+// A test process does. The tool account does, because it is already that user.
+// The runtime account does not: it asks the supervisor, which is root.
+func DirectRun() bool {
+	if testBypass() {
+		return true
+	}
+	uid, _, err := toolIDs()
+	return err == nil && os.Geteuid() == uid
+}
+
 // DropToToolUser makes the current process the tool account.
-// Groups are not changed here. The image starts the runtime with only the
-// tool group, and this function refuses to continue when that is not true.
-// A setuid execution always drops. An ordinary test process drops only when
-// CASTBOT_TOOLRUN_TEST=1, and then it stays the caller.
+// Groups are not changed here. The caller must already have only the tool
+// group. Root and the tool account may drop. An ordinary test process
+// continues as itself when CASTBOT_TOOLRUN_TEST=1.
 func DropToToolUser() error {
 	runtime.LockOSThread()
 	if testBypass() {

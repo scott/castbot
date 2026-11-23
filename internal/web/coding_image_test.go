@@ -33,7 +33,7 @@ func TestRuntimeCodingImage(t *testing.T) {
 		t.Fatalf("inspect: %s", out)
 	}
 	fields := strings.Fields(string(out))
-	if len(fields) < 2 || fields[0] != "nobody" {
+	if len(fields) < 2 || fields[0] != "root" {
 		t.Fatalf("user %q", strings.TrimSpace(string(out)))
 	}
 	t.Logf("runtime image bytes %s", fields[1])
@@ -76,13 +76,14 @@ func TestRuntimeCodingImage(t *testing.T) {
 	}
 	script := codingScript
 	cmd := exec.Command("docker", "run", "--rm", "-i", "--network", "none",
+		"--security-opt", "no-new-privileges",
 		"-e", "GITHUB_TOKEN="+codingFixture,
 		"-e", "GH_TOKEN="+codingFixture,
 		"-e", "GITHUB_PERSONAL_ACCESS_TOKEN="+codingFixture,
 		"-e", "DIGITALOCEAN_ACCESS_TOKEN="+codingFixture,
 		"-e", "CAST_AGENT_DIR=/app/agent",
 		"-v", dir+":/app/agent",
-		"--entrypoint", "/bin/sh", host.RuntimeImage)
+		"--entrypoint", "/bin/sh", host.RuntimeImage, "-c", codingBootWrapper)
 	cmd.Stdin = strings.NewReader(script)
 	out, err = cmd.CombinedOutput()
 	if err != nil || bytes.Contains(out, []byte(codingFixture)) {
@@ -108,7 +109,7 @@ func TestRuntimePrefixSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := "castbot-prefix-" + hex.EncodeToString(buf)
-	run := exec.Command("docker", "run", "-d", "--name", name, "--network", "none", "--entrypoint", "sleep", host.RuntimeImage, "infinity")
+	run := exec.Command("docker", "run", "-d", "--name", name, "--network", "none", "--security-opt", "no-new-privileges", "--entrypoint", "sleep", host.RuntimeImage, "infinity")
 	if out, err := run.CombinedOutput(); err != nil {
 		t.Fatalf("run: %s", out)
 	}
@@ -129,6 +130,22 @@ func TestRuntimePrefixSurvivesRestart(t *testing.T) {
 		t.Fatalf("prefix: %s", out)
 	}
 }
+
+const codingBootWrapper = `set -eu
+cat >/tmp/castbot-test.sh
+/usr/local/bin/castbot-toolrun --serve >/tmp/tool-serve.log 2>&1 &
+i=0
+while [ ! -S /run/castbot-tool.sock ]; do
+  i=$((i + 1))
+  if [ "$i" -gt 50 ]; then
+    echo 'tool server did not start' >&2
+    cat /tmp/tool-serve.log >&2 || true
+    exit 1
+  fi
+  sleep 0.1
+done
+exec /usr/local/bin/castbot-toolrun --as-runtime -- /bin/sh /tmp/castbot-test.sh
+`
 
 const codingScript = `set -eu
 umask 007

@@ -6,6 +6,7 @@ package tooliso
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"strings"
 
 	"github.com/scott/castbot/internal/castcfg"
@@ -306,6 +307,74 @@ func reorderPath(value string) string {
 		add(&tail, dir)
 	}
 	return strings.Join(append(system, tail...), ":")
+}
+
+// CommandEnv is the environment a command may see. parent is the runtime
+// environment, including the explicit-call marks when the caller passed env=.
+func CommandEnv(parent []string) []string {
+	names := ParseNames(envValue(parent, ToolSecretEnv))
+	if envValue(parent, "CASTBOT_TOOL_EXPLICIT") == "1" {
+		return ToolEnvExplicit(parent, names)
+	}
+	return ToolEnv(parent, names)
+}
+
+// FileEnv is the environment a path read may see. It is the workspace roots
+// and PATH, not the runtime's secrets.
+func FileEnv(parent []string) []string {
+	keep := map[string]bool{
+		"PATH":               true,
+		"CAST_AGENT_DIR":     true,
+		"CAST_AGENT_PATH":    true,
+		"CASTBOT_READ_ROOTS": true,
+	}
+	var out []string
+	for _, item := range parent {
+		key, _, ok := strings.Cut(item, "=")
+		if ok && keep[key] {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// Resolve finds an executable on PATH from env. An absolute path is used as
+// given when it is a regular executable. A relative path is refused.
+func Resolve(env []string, name string) string {
+	if name == "" || strings.Contains(name, "\x00") {
+		return ""
+	}
+	if strings.Contains(name, "/") && !strings.HasPrefix(name, "/") {
+		return ""
+	}
+	if strings.HasPrefix(name, "/") {
+		info, err := os.Stat(name)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			return ""
+		}
+		return name
+	}
+	var path string
+	for _, item := range env {
+		if strings.HasPrefix(item, "PATH=") {
+			path = strings.TrimPrefix(item, "PATH=")
+		}
+	}
+	if path == "" {
+		path = commandPath()
+	}
+	for _, dir := range strings.Split(path, ":") {
+		if dir == "" {
+			continue
+		}
+		cand := dir + "/" + name
+		info, err := os.Stat(cand)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		return cand
+	}
+	return ""
 }
 
 func agentWritable(dir string) bool {

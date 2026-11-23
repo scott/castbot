@@ -210,6 +210,7 @@ func chmodOwned(f *os.File, mode uint32) {
 	if int(st.Uid) != os.Getuid() {
 		return
 	}
+	ShareCastwork(int(f.Fd()))
 	if uint32(st.Mode)&0o7777 == mode&0o7777 {
 		return
 	}

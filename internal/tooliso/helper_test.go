@@ -2,6 +2,7 @@ package tooliso
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,6 +164,36 @@ func commandStillRunning(name string) bool {
 		}
 	}
 	return false
+}
+
+func TestHelperRefusesWithoutTheServer(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "castbot-toolrun")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/castbot-toolrun")
+	build.Dir = root
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	run := exec.Command(bin, "--", "/bin/echo", "should-not-run")
+	run.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"CASTBOT_TOOL_SOCK=" + filepath.Join(t.TempDir(), "missing.sock"),
+	}
+	out, err := run.CombinedOutput()
+	if err == nil {
+		t.Fatalf("helper ran: %s", out)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 126 {
+		t.Fatalf("exit %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "should-not-run") {
+		t.Fatalf("command ran\n%s", out)
+	}
 }
 
 func TestPythonPathSelftest(t *testing.T) {

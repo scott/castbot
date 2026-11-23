@@ -75,8 +75,8 @@ RUN ln -sf castbot-guest /usr/local/bin/git \
  && ln -sf castbot-guest /usr/local/bin/doctl \
  && ln -sf castbot-guest /usr/local/bin/castbot-mcp \
  && ln -sf castbot-guest /usr/local/bin/castbot-git-credential \
- && chown 999:998 /usr/local/bin/castbot-toolrun \
- && chmod 6755 /usr/local/bin/castbot-toolrun
+ && chown root:root /usr/local/bin/castbot-toolrun \
+ && chmod 0755 /usr/local/bin/castbot-toolrun
 COPY --from=cast /opt/cast /opt/cast
 COPY deploy/mcp /opt/castbot/mcp
 COPY deploy/tooliso /opt/castbot/tooliso
@@ -107,6 +107,6 @@ ENV CASTLET_RUNTIME="/opt/cast/bin/python -m cast.runtime --agent-path /app/agen
 RUN git config --system --add safe.directory /app/agent \
  && git config --system --add safe.directory '/app/agent/*'
 EXPOSE 8080
-USER nobody
+USER root
 WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/castlet"]

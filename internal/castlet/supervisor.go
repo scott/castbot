@@ -360,6 +360,11 @@ func (s *Supervisor) controlClient() (*http.Client, error) {
 func (s *Supervisor) startRuntime(ctx context.Context) error {
 	_ = tooliso.SetNonDumpable()
 	tooliso.PrepareLayout(s.cfg.AgentDir)
+	if os.Geteuid() == 0 {
+		if err := tooliso.EnsureServe(ctx); err != nil {
+			return err
+		}
+	}
 	s.stopRuntime()
 	if len(s.cfg.RuntimeCmd) == 0 {
 		if err := s.waitReady(ctx); err != nil {
@@ -375,6 +380,9 @@ func (s *Supervisor) startRuntime(ctx context.Context) error {
 	cmd.Env = s.childEnv()
 	cmd.Stdout = s.logs
 	cmd.Stderr = s.logs
+	if err := tooliso.ApplyRuntime(cmd); err != nil {
+		return err
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}

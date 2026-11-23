@@ -83,6 +83,7 @@ func Run(ctx context.Context, opt RunOpt) (*Guest, error) {
 	id := "castbot-s03-" + hex.EncodeToString(buf)
 	args := []string{
 		"run", "--rm", "-d",
+		"--security-opt", "no-new-privileges",
 		"--name", id,
 		"--add-host", "host.docker.internal:host-gateway",
 		"-p", "127.0.0.1::8080",

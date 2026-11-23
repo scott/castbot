@@ -33,7 +33,7 @@ func TestRuntimeImageAndSmoke(t *testing.T) {
 		t.Fatalf("inspect: %s", out)
 	}
 	fields := strings.Fields(string(out))
-	if len(fields) < 2 || fields[0] != "nobody" {
+	if len(fields) < 2 || fields[0] != "root" {
 		t.Fatalf("user %q", strings.TrimSpace(string(out)))
 	}
 	t.Logf("runtime image bytes %s", fields[1])
