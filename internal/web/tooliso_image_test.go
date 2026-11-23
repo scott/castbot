@@ -139,6 +139,30 @@ for d in /proc/[0-9]*; do
   fi
 done
 test "$left" = 0
+run_stopped() {
+  /usr/local/bin/castbot-toolrun -- "$@" > /tmp/stop.out 2>/tmp/stop.err &
+  sp=$!
+  sleep 0.4
+  kill -TERM "$sp" 2>/dev/null || true
+  i=0
+  while kill -0 "$sp" 2>/dev/null; do
+    i=$((i + 1))
+    if [ "$i" -gt 30 ]; then
+      echo 'stopped command did not return' >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  wait "$sp" || true
+}
+run_stopped /bin/sh -c 'echo before-timeout; setsid sleep 600'
+grep -q before-timeout /tmp/stop.out
+run_stopped setsid sleep 600
+for d in /proc/[0-9]*; do
+  if grep -a -q 'sleep' "$d/cmdline" 2>/dev/null && grep -a -q '600' "$d/cmdline" 2>/dev/null; then
+    kill -KILL "${d#/proc/}" 2>/dev/null || true
+  fi
+done
 grep -q '^/usr/bin/cat$' /tmp/tool.cat
 test "$(cat /tmp/tool.done)" = "ok"
 /opt/cast/bin/python - <<'PY'

@@ -166,6 +166,97 @@ func commandStillRunning(name string) bool {
 	return false
 }
 
+func TestHelperReturnsWhenOutputStaysOpen(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "castbot-toolrun")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/castbot-toolrun")
+	build.Dir = root
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	t.Cleanup(func() { stopMatching("sleep", "600") })
+
+	prompt := exec.Command(bin, "--", "/bin/sh", "-c", "echo hi")
+	prompt.Env = append(os.Environ(), "CASTBOT_TOOLRUN_TEST=1")
+	started := time.Now()
+	out, err := prompt.CombinedOutput()
+	if err != nil {
+		t.Fatalf("echo: %v\n%s", err, out)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatalf("echo took %s", time.Since(started))
+	}
+	if !bytes.Contains(out, []byte("hi")) {
+		t.Fatalf("echo output %q", out)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "shell", args: []string{"/bin/sh", "-c", "echo before-timeout; setsid sleep 600"}, want: "before-timeout"},
+		{name: "setsid", args: []string{"setsid", "sleep", "600"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := exec.Command(bin, append([]string{"--"}, tc.args...)...)
+			run.Env = append(os.Environ(), "CASTBOT_TOOLRUN_TEST=1")
+			var buf bytes.Buffer
+			run.Stdout = &buf
+			run.Stderr = &buf
+			if err := run.Start(); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(300 * time.Millisecond)
+			if err := run.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- run.Wait() }()
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				_ = run.Process.Kill()
+				t.Fatal("helper still running")
+			}
+			if tc.want != "" && !bytes.Contains(buf.Bytes(), []byte(tc.want)) {
+				t.Fatalf("output %q", buf.Bytes())
+			}
+		})
+	}
+}
+
+func stopMatching(parts ...string) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		raw, err := os.ReadFile("/proc/" + entry.Name() + "/cmdline")
+		if err != nil {
+			continue
+		}
+		match := true
+		for _, part := range parts {
+			if !bytes.Contains(raw, []byte(part)) {
+				match = false
+				break
+			}
+		}
+		if match {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
+}
+
 func TestHelperRefusesWithoutTheServer(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {

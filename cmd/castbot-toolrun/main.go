@@ -10,10 +10,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -147,34 +149,92 @@ func supervise(args []string) int {
 }
 
 func waitCommand(cmd *exec.Cmd) int {
-	if err := cmd.Start(); err != nil {
+	outW := cmd.Stdout
+	errW := cmd.Stderr
+	if outW == nil {
+		outW = os.Stdout
+	}
+	if errW == nil {
+		errW = os.Stderr
+	}
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "command refused")
 		return 126
 	}
-	sigs := make(chan os.Signal, 4)
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case <-sigs:
-		stopGroup(cmd.Process.Pid)
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			<-done
-		}
-		return 128 + int(syscall.SIGTERM)
-	case err := <-done:
-		if err == nil {
-			return 0
-		}
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return exitErr.ExitCode()
-		}
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+		fmt.Fprintln(os.Stderr, "command refused")
 		return 126
 	}
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
+	if err := cmd.Start(); err != nil {
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+		_ = stderrR.Close()
+		_ = stderrW.Close()
+		fmt.Fprintln(os.Stderr, "command refused")
+		return 126
+	}
+	// The parent must not keep the write ends. The command's own ends
+	// close when it exits, so the copy can see the end of the output.
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
+	defer stdoutR.Close()
+	defer stderrR.Close()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(outW, stdoutR)
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(errW, stderrR)
+	}()
+	copied := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(copied)
+	}()
+
+	sigs := make(chan os.Signal, 4)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	proc := make(chan error, 1)
+	go func() { proc <- cmd.Wait() }()
+	select {
+	case err := <-proc:
+		// A child can keep a write end after the command exits.
+		// Close the read side after a short grace instead of waiting.
+		tooliso.FinishReads(copied, tooliso.ReadGrace, stdoutR, stderrR)
+		return commandStatus(err)
+	case <-sigs:
+		stopGroup(cmd.Process.Pid)
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		tooliso.FinishReads(copied, tooliso.ReadGrace, stdoutR, stderrR)
+		select {
+		case <-proc:
+		case <-time.After(tooliso.ReadGrace):
+		}
+		return 128 + int(syscall.SIGTERM)
+	}
+}
+
+func commandStatus(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return 126
 }
 
 func stopGroup(pid int) {

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -143,6 +144,9 @@ func handleTool(conn net.Conn) {
 		_ = writeExit(conn, 126)
 		return
 	}
+	defer run.stdin.Close()
+	defer run.stdout.Close()
+	defer run.stderr.Close()
 	var writeMu sync.Mutex
 	send := func(kind byte, payload []byte) error {
 		writeMu.Lock()
@@ -159,10 +163,46 @@ func handleTool(conn net.Conn) {
 		defer wg.Done()
 		copyPipe(run.stderr, frameErr, send)
 	}()
+	copied := make(chan struct{})
 	go func() {
-		// Wait closes the pipes. Reading them first keeps the output.
 		wg.Wait()
-		err := run.cmd.Wait()
+		close(copied)
+	}()
+	stopped := make(chan struct{})
+	var stopOnce sync.Once
+	var halted atomic.Bool
+	var finished atomic.Bool
+	halt := func() {
+		stopOnce.Do(func() {
+			halted.Store(true)
+			if !finished.Load() {
+				stopGroup(run.cmd.Process.Pid)
+				if run.cmd.Process != nil {
+					_ = run.cmd.Process.Kill()
+				}
+				_ = run.stdin.Close()
+			}
+			close(stopped)
+		})
+	}
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		select {
+		case <-copied:
+		case <-stopped:
+			// Wait closes the pipes. Reading them first keeps the output.
+			// After a stop, a remaining writer can hold the read open.
+			// Close it after a short grace and return what was copied.
+			FinishReads(copied, ReadGrace, run.stdout, run.stderr)
+		}
+		var err error
+		if halted.Load() {
+			err = WaitBounded(run.cmd, ReadGrace)
+		} else {
+			err = run.cmd.Wait()
+		}
+		finished.Store(true)
 		var buf [4]byte
 		code := exitCode(err)
 		if code < 0 {
@@ -174,7 +214,8 @@ func handleTool(conn net.Conn) {
 	for {
 		kind, payload, err := readFrame(br)
 		if err != nil {
-			stopGroup(run.cmd.Process.Pid)
+			halt()
+			<-exited
 			return
 		}
 		switch kind {
@@ -183,7 +224,9 @@ func handleTool(conn net.Conn) {
 		case frameEOF:
 			_ = run.stdin.Close()
 		case frameSig:
-			stopGroup(run.cmd.Process.Pid)
+			halt()
+			<-exited
+			return
 		}
 	}
 }
