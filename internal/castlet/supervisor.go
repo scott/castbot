@@ -91,6 +91,7 @@ type Supervisor struct {
 	permSession  map[string]string
 	token        string
 	runtimeToken string
+	modelGate    string
 	ready        bool
 	version      string
 	sha          string
@@ -166,6 +167,11 @@ func New(cfg Config) (*Supervisor, error) {
 		return nil, err
 	}
 	s.runtimeToken = hex.EncodeToString(buf)
+	gate := make([]byte, 32)
+	if _, err := rand.Read(gate); err != nil {
+		return nil, err
+	}
+	s.modelGate = hex.EncodeToString(gate)
 	return s, nil
 }
 
@@ -580,7 +586,7 @@ func (s *Supervisor) childEnv() []string {
 	if runtimeToken != "" {
 		out = append(out, "AUTH_TOKEN="+runtimeToken)
 	}
-	out = applyModelProxy(out, modelProxyBaseURL())
+	out = applyModelProxy(out, modelProxyBaseURL(), s.modelGate)
 	out = tooliso.RewriteRuntimePath(out)
 	names := tooliso.ParseNames(toolNameList(secrets))
 	out = append(out, tooliso.ToolSecretEnv+"="+strings.Join(names, ","))

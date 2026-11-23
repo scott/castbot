@@ -246,6 +246,7 @@ CREATE TABLE IF NOT EXISTS agent_vms (
   created_running_at TEXT,
   observe_boot INTEGER NOT NULL DEFAULT 1,
   state_gen INTEGER NOT NULL DEFAULT 0,
+  model_proxy INTEGER NOT NULL DEFAULT 0,
   deleted_at TEXT
 );
 
@@ -535,6 +536,12 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	}
 	// Version 35 lets the owner pass one secret to a command. The default is off.
 	if err := s.migrateV35(); err != nil {
+		return err
+	}
+	// Version 36 remembers that this machine calls models through the host.
+	// A new machine row starts off, so a replaced machine receives the key
+	// until it asks again.
+	if err := s.migrateV36(); err != nil {
 		return err
 	}
 	return nil

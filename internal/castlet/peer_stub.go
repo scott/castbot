@@ -4,4 +4,5 @@ package castlet
 
 import "net/http"
 
-func sameUserPeer(r *http.Request) bool { return true }
+// sameUserPeer refuses the call on a build that cannot see the caller.
+func sameUserPeer(r *http.Request) bool { return false }

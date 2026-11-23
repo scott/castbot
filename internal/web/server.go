@@ -75,6 +75,10 @@ type Server struct {
 	// modelProxyUpstream replaces the provider base URL. Tests set it.
 	// An empty value uses the manifest URL.
 	modelProxyUpstream string
+	modelMu            sync.Mutex
+	modelHits          map[string][]time.Time
+	modelRate          int
+	modelWindow        time.Duration
 	recMu              sync.Mutex
 	recKind            string
 	recDelay           time.Duration

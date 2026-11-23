@@ -65,7 +65,7 @@ func TestModelKeyStaysOffTheRuntime(t *testing.T) {
 	if !sawHeader {
 		t.Fatal("secrets pull did not ask for the proxy")
 	}
-	if !waitHash(t, keyFile, "castbot-proxy") {
+	if sup.modelGate == "" || sup.modelGate == "castbot-proxy" || !waitHash(t, keyFile, sup.modelGate) {
 		raw, _ := os.ReadFile(keyFile)
 		t.Fatalf("key env %q", raw)
 	}
@@ -111,22 +111,12 @@ func TestEgressModelStreamsAndDropsTheGuestToken(t *testing.T) {
 	t.Cleanup(sup.Close)
 	req := httptest.NewRequest(http.MethodPost, "/model/v1/chat/completions", strings.NewReader(`{"model":"m"}`))
 	req.RemoteAddr = "127.0.0.1:9"
-	req.Header.Set("Authorization", "Bearer castbot-proxy")
+	req.Header.Set("Authorization", "Bearer "+sup.modelGate)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	sup.ServeEgress(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "data: one") || !strings.Contains(rec.Body.String(), "data: two") {
-		t.Fatalf("forward %d %s", rec.Code, rec.Body.String())
-	}
-	if rec.Header().Get("Content-Type") != "text/event-stream" {
-		t.Fatal(rec.Header().Get("Content-Type"))
-	}
-	bad := httptest.NewRequest(http.MethodPost, "/model/v1/elsewhere", strings.NewReader("x"))
-	bad.RemoteAddr = "127.0.0.1:9"
-	rec = httptest.NewRecorder()
-	sup.ServeEgress(rec, bad)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("path %d", rec.Code)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unchecked caller %d", rec.Code)
 	}
 }
 

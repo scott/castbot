@@ -155,11 +155,21 @@ func (s *Server) writeSecrets(w http.ResponseWriter, r *http.Request, userID str
 		out.Secrets = append(out.Secrets, item{Name: sec.Name, Value: sec.Value, Tools: sec.Tools})
 	}
 	if agent, err := s.store.GetAgent(r.Context(), userID, r.PathValue("id")); err == nil {
-		proxyGuest := r.Header.Get(castcfg.ModelProxyHeader) == castcfg.ModelProxyValue
+		header := r.Header.Get(castcfg.ModelProxyHeader) == castcfg.ModelProxyValue
+		sticky, stickyErr := s.store.ModelProxy(r.Context(), userID, agent.ID)
+		if stickyErr != nil {
+			sticky = false
+		}
+		if header {
+			if ok, err := s.store.MarkModelProxy(r.Context(), userID, agent.ID); err == nil && ok {
+				sticky = true
+			}
+		}
+		omitKey := header || sticky
 		var modelName, modelValue string
 		if name, value, missing := s.effectiveModelSecret(r.Context(), userID, agent.Model); missing == "" && name != "" && value != "" {
 			modelName, modelValue = name, value
-			if !proxyGuest {
+			if !omitKey {
 				out.Secrets = append(out.Secrets, item{Name: name, Value: value})
 			}
 		}
@@ -167,7 +177,7 @@ func (s *Server) writeSecrets(w http.ResponseWriter, r *http.Request, userID str
 		for _, sec := range out.Secrets {
 			pairs = append(pairs, secretPair{name: sec.Name, value: sec.Value, tools: sec.Tools})
 		}
-		if proxyGuest && modelName != "" {
+		if omitKey && modelName != "" {
 			pairs = append(pairs, secretPair{name: modelName, value: modelValue})
 		}
 		sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })

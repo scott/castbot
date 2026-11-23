@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/store"
@@ -151,6 +152,130 @@ func TestModelProxyOmitsTheKeyAndStreams(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), key) || strings.Contains(logs.String(), prompt) {
 		t.Fatal("log contained a key or a prompt")
+	}
+}
+
+func TestModelProxyStaysOffAfterTheHeader(t *testing.T) {
+	const key = "fixture-proxy-value"
+	h := newHarness(t)
+	t.Setenv("CASTBOT_PROVIDER_KEY_DIGITALOCEAN", key)
+	ctx := context.Background()
+	owner, _ := h.account("ada-sticky@example.com", "Ada", "correct-horse-1")
+	other, _ := h.account("bea-sticky@example.com", "Bea", "correct-horse-1")
+	sec, err := h.st.CreateSection(ctx, owner.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := h.st.CreateAgent(ctx, owner.ID, store.AgentInput{
+		SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready",
+		Model: "digitalocean/deepseek-3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.BeginVM(ctx, owner.ID, agent.ID, "castbot-atlas", "example.invalid/castbot-runtime:test"); err != nil {
+		t.Fatal(err)
+	}
+	otherSec, err := h.st.CreateSection(ctx, other.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherAgent, _, err := h.st.CreateAgent(ctx, other.ID, store.AgentInput{
+		SectionID: otherSec.ID, Name: "Nova", Title: "Helper", Status: "ready",
+		Model: "digitalocean/deepseek-3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.BeginVM(ctx, other.ID, otherAgent.ID, "castbot-nova", "example.invalid/castbot-runtime:test"); err != nil {
+		t.Fatal(err)
+	}
+	token := proxyGuestToken(t, h, owner.ID, agent.ID)
+	otherToken := proxyGuestToken(t, h, other.ID, otherAgent.ID)
+	ip := "203.0.113.90:9"
+	secretsOf := func(header bool) (int, string) {
+		t.Helper()
+		hdr := map[string]string{"Authorization": "Bearer " + token}
+		if header {
+			hdr[castcfg.ModelProxyHeader] = castcfg.ModelProxyValue
+		}
+		code, body, _ := h.do(http.MethodGet, "/api/castlet/agents/"+agent.ID+"/secrets", "", ip, hdr)
+		return code, body
+	}
+	code, body := secretsOf(true)
+	if code != http.StatusOK || strings.Contains(body, key) {
+		t.Fatalf("header %d %s", code, body)
+	}
+	code, body = secretsOf(false)
+	if code != http.StatusOK || strings.Contains(body, key) || strings.Contains(body, "DIGITALOCEAN_MODEL_ACCESS_KEY") {
+		t.Fatalf("later read %d %s", code, body)
+	}
+	if ok, err := h.st.MarkModelProxy(ctx, other.ID, agent.ID); err != nil || ok {
+		t.Fatalf("other user mark %v %v", ok, err)
+	}
+	seen, err := h.st.ModelProxy(ctx, other.ID, agent.ID)
+	if err != nil || seen {
+		t.Fatalf("other user read %v %v", seen, err)
+	}
+	code, body, _ = h.do(http.MethodGet, "/api/castlet/agents/"+otherAgent.ID+"/secrets", "", ip, map[string]string{"Authorization": "Bearer " + otherToken})
+	if code != http.StatusOK || !strings.Contains(body, key) {
+		t.Fatalf("other machine %d %s", code, body)
+	}
+	if err := h.st.ReleaseVM(ctx, owner.ID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.BeginVM(ctx, owner.ID, agent.ID, "castbot-atlas", "example.invalid/castbot-runtime:test"); err != nil {
+		t.Fatal(err)
+	}
+	code, body = secretsOf(false)
+	if code != http.StatusOK || !strings.Contains(body, key) {
+		t.Fatalf("new machine %d %s", code, body)
+	}
+}
+
+func TestModelProxyRateLimit(t *testing.T) {
+	const key = "fixture-proxy-value"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(up.Close)
+	h := newHarness(t)
+	h.srv.modelProxyUpstream = up.URL + "/v1"
+	h.srv.modelRate = 2
+	h.srv.modelWindow = time.Minute
+	t.Setenv("CASTBOT_PROVIDER_KEY_DIGITALOCEAN", key)
+	ctx := context.Background()
+	user, _ := h.account("ada-rate@example.com", "Ada", "correct-horse-1")
+	sec, err := h.st.CreateSection(ctx, user.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := h.st.CreateAgent(ctx, user.ID, store.AgentInput{
+		SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready",
+		Model: "digitalocean/deepseek-3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := proxyGuestToken(t, h, user.ID, agent.ID)
+	body := `{"model":"digitalocean/deepseek-3.2","messages":[{"role":"user","content":"fixture-prompt-body"}]}`
+	ip := "203.0.113.90:9"
+	for i := 0; i < 2; i++ {
+		code, _, _ := h.do(http.MethodPost, "/api/castlet/agents/"+agent.ID+"/model/v1/chat/completions", body, ip, map[string]string{
+			"Authorization": "Bearer " + token,
+			"Content-Type":  "application/json",
+		})
+		if code != http.StatusOK {
+			t.Fatalf("call %d status %d", i, code)
+		}
+	}
+	code, text, _ := h.do(http.MethodPost, "/api/castlet/agents/"+agent.ID+"/model/v1/chat/completions", body, ip, map[string]string{
+		"Authorization": "Bearer " + token,
+		"Content-Type":  "application/json",
+	})
+	if code != http.StatusTooManyRequests || strings.Contains(text, key) {
+		t.Fatalf("limit %d %s", code, text)
 	}
 }
 

@@ -12,13 +12,20 @@ import (
 	"strings"
 )
 
-// sameUserPeer reports whether the caller is the castlet user.
-// A lookup that cannot see the socket allows the call, so tests without a
-// real connection still work. A socket owned by another user is refused.
+// procTCP and procTCP6 are the kernel tables that record a socket's owner.
+// Tests point them at a fixture.
+var (
+	procTCP  = "/proc/net/tcp"
+	procTCP6 = "/proc/net/tcp6"
+)
+
+// sameUserPeer reports whether the caller is this process's user.
+// The lookup uses the caller side of the socket. A missing row, a parse
+// error, or any other user is refused.
 func sameUserPeer(r *http.Request) bool {
 	uid, ok := socketUID(r)
 	if !ok {
-		return true
+		return false
 	}
 	return uid == os.Getuid()
 }
@@ -38,17 +45,35 @@ func socketUID(r *http.Request) (int, bool) {
 	}
 	lip := net.ParseIP(lhost)
 	rip := net.ParseIP(rhost)
-	if lip == nil || rip == nil || lip.To4() == nil || rip.To4() == nil {
+	if lip == nil || rip == nil {
 		return 0, false
 	}
-	wantLocal := hexIPv4(lip) + ":" + hexPort(lport)
-	wantRemote := hexIPv4(rip) + ":" + hexPort(rport)
-	return uidFromProc("/proc/net/tcp", wantLocal, wantRemote)
+	// The caller row lists the peer as local and this server as remote.
+	var table, wantLocal, wantRemote string
+	if lip.To4() != nil && rip.To4() != nil {
+		table = procTCP
+		wantLocal = hexIPv4(rip) + ":" + hexPort(rport)
+		wantRemote = hexIPv4(lip) + ":" + hexPort(lport)
+	} else {
+		table = procTCP6
+		wantLocal = hexIPv6(rip) + ":" + hexPort(rport)
+		wantRemote = hexIPv6(lip) + ":" + hexPort(lport)
+	}
+	return uidFromProc(table, wantLocal, wantRemote)
 }
 
 func hexIPv4(ip net.IP) string {
 	ip = ip.To4()
 	return fmt.Sprintf("%02X%02X%02X%02X", ip[3], ip[2], ip[1], ip[0])
+}
+
+func hexIPv6(ip net.IP) string {
+	ip = ip.To16()
+	var b strings.Builder
+	for i := 0; i < 16; i += 4 {
+		fmt.Fprintf(&b, "%02X%02X%02X%02X", ip[i+3], ip[i+2], ip[i+1], ip[i])
+	}
+	return b.String()
 }
 
 func hexPort(port string) string {

@@ -3,6 +3,7 @@ package castlet
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,9 +27,10 @@ func modelProxyBaseURL() string {
 }
 
 // applyModelProxy removes provider keys from the runtime environment and
-// points every proxied provider at the local forwarder. The placeholder is
-// not a key. A keyless provider is left alone.
-func applyModelProxy(env []string, base string) []string {
+// points every proxied provider at the local forwarder. gate is a per-boot
+// placeholder, not a key, and it is not copied into a command. A keyless
+// provider is left alone.
+func applyModelProxy(env []string, base, gate string) []string {
 	drop := map[string]bool{}
 	for _, p := range castcfg.ProxyProviders() {
 		if p.EnvVar != "" {
@@ -47,7 +49,7 @@ func applyModelProxy(env []string, base string) []string {
 		out = append(out, item)
 	}
 	for _, p := range castcfg.ProxyProviders() {
-		out = append(out, p.EnvVar+"="+castcfg.ModelPlaceholder)
+		out = append(out, p.EnvVar+"="+gate)
 		if p.BaseURLEnv != "" {
 			out = append(out, p.BaseURLEnv+"="+base)
 		}
@@ -92,7 +94,7 @@ func configSection(configKey string) string {
 }
 
 func (s *Supervisor) egressModel(w http.ResponseWriter, r *http.Request) {
-	if !sameUserPeer(r) {
+	if !sameUserPeer(r) || !s.modelGateMatches(r) {
 		http.NotFound(w, r)
 		return
 	}
@@ -151,6 +153,28 @@ func (s *Supervisor) egressModel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(res.StatusCode)
 	flushCopy(w, res.Body)
+}
+
+func (s *Supervisor) modelGateMatches(r *http.Request) bool {
+	s.mu.Lock()
+	gate := s.modelGate
+	s.mu.Unlock()
+	if gate == "" {
+		return false
+	}
+	got := modelBearer(r.Header.Get("Authorization"))
+	if len(got) != len(gate) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(gate)) == 1
+}
+
+func modelBearer(h string) string {
+	h = strings.TrimSpace(h)
+	if len(h) >= 7 && strings.EqualFold(h[:7], "bearer ") {
+		return strings.TrimSpace(h[7:])
+	}
+	return ""
 }
 
 func copyModelHeader(dst, src http.Header, name string) {

@@ -76,6 +76,10 @@ func (s *Server) machineModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if !s.allowModelCall(agent.ID, time.Now()) {
+		writeText(w, http.StatusTooManyRequests, "Slow down\n")
+		return
+	}
 	_, value, missing := s.effectiveModelSecret(r.Context(), userID, agent.Model)
 	if missing != "" || value == "" {
 		writeText(w, http.StatusConflict, "No key for this model.\n")
@@ -127,6 +131,38 @@ func (s *Server) machineModel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(res.StatusCode)
 	n := redactCopy(w, res.Body, value)
 	s.logger().Info("model_proxy", "provider", route.Key, "path", cleaned, "status", res.StatusCode, "req_bytes", len(body), "res_bytes", n)
+}
+
+const defaultModelRate = 60
+
+func (s *Server) allowModelCall(id string, now time.Time) bool {
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+	if s.modelHits == nil {
+		s.modelHits = map[string][]time.Time{}
+	}
+	limit := s.modelRate
+	if limit <= 0 {
+		limit = defaultModelRate
+	}
+	window := s.modelWindow
+	if window <= 0 {
+		window = time.Minute
+	}
+	cut := now.Add(-window)
+	prev := s.modelHits[id]
+	kept := make([]time.Time, 0, len(prev)+1)
+	for _, at := range prev {
+		if at.After(cut) {
+			kept = append(kept, at)
+		}
+	}
+	if len(kept) >= limit {
+		s.modelHits[id] = kept
+		return false
+	}
+	s.modelHits[id] = append(kept, now)
+	return true
 }
 
 func methodAllows(method, provider, cleaned string) bool {
