@@ -4,6 +4,8 @@
 package tooliso
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 
 	"github.com/scott/castbot/internal/castcfg"
@@ -42,7 +44,7 @@ var allowedExact = map[string]bool{
 	"TMPDIR": true, "TMP": true, "TEMP": true,
 	"USER": true, "LOGNAME": true, "SHELL": true, "SHLVL": true,
 	"CAST_AGENT_DIR": true, "CAST_AGENT_PATH": true,
-	"PYTHONPATH": true, "PYTHONUSERBASE": true, "PYTHONUNBUFFERED": true, "PYTHONDONTWRITEBYTECODE": true,
+	"PYTHONUSERBASE": true, "PYTHONUNBUFFERED": true, "PYTHONDONTWRITEBYTECODE": true,
 	"PIP_DISABLE_PIP_VERSION_CHECK": true, "PIP_NO_CACHE_DIR": true,
 	"NPM_CONFIG_PREFIX": true,
 	"GOROOT":            true, "GOPATH": true, "GOBIN": true, "GOCACHE": true,
@@ -116,21 +118,72 @@ func envNameOK(name string) bool {
 	return true
 }
 
+// ToolParentMark is set by the runtime when a caller passes its own
+// environment. The value is one "name<tab>sha256" line per parent variable.
+// It is not passed to the command.
+const ToolParentMark = "CASTBOT_TOOL_PARENT"
+
 // ToolEnv is the environment for one command. parent is the runtime
 // environment. extra is the owner opt-in list from ParseNames.
 func ToolEnv(parent []string, extra []string) []string {
-	return toolEnv(parent, extra, false)
+	return toolEnv(parent, extra)
 }
 
-// ToolEnvExplicit keeps every parent name that is not denied, then applies
-// the same forced names as ToolEnv. MCP servers pass an allowlisted
-// environment this way. A command that inherits the runtime environment
-// does not.
-func ToolEnvExplicit(parent []string, extra []string) []string {
-	return toolEnv(parent, extra, true)
+// ToolEnvExplicit is the environment for a caller that passed env=.
+// caller is that environment and includes ToolParentMark, the hashes of
+// the runtime environment. The command receives the allowlist, the owner
+// opt-in list, and names whose values are not already in the runtime
+// environment. A missing mark passes only the allowlist and the opt-in list.
+func ToolEnvExplicit(caller []string, extra []string) []string {
+	raw := envValue(caller, ToolParentMark)
+	if strings.TrimSpace(raw) == "" {
+		return toolEnv(caller, extra)
+	}
+	marks := parentMarks(raw)
+	var added []string
+	for _, item := range caller {
+		key, value, ok := strings.Cut(item, "=")
+		if !ok || key == "" || DeniedToolName(key) || !envNameOK(key) {
+			continue
+		}
+		sum := sha256hex(value)
+		prev, found := marks[key]
+		if !found || prev != sum {
+			added = append(added, key)
+		}
+	}
+	return toolEnv(caller, append(append([]string{}, extra...), added...))
 }
 
-func toolEnv(parent []string, extra []string, explicit bool) []string {
+func envValue(env []string, name string) string {
+	var value string
+	for _, item := range env {
+		key, rest, ok := strings.Cut(item, "=")
+		if ok && key == name {
+			value = rest
+		}
+	}
+	return value
+}
+
+func parentMarks(raw string) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(raw, "\n") {
+		key, sum, ok := strings.Cut(line, "\t")
+		if !ok || key == "" || sum == "" || strings.ContainsAny(key, "=\n\r\x00") {
+			continue
+		}
+		out[key] = sum
+	}
+	return out
+}
+
+func sha256hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func toolEnv(parent []string, extra []string) []string {
 	vals := map[string]string{}
 	var order []string
 	put := func(key, value string) {
@@ -152,7 +205,7 @@ func toolEnv(parent []string, extra []string, explicit bool) []string {
 		if !ok || key == "" || DeniedToolName(key) {
 			continue
 		}
-		if !allowed(key) && !allowedExtra[key] && !(explicit && !DeniedToolName(key)) {
+		if !allowed(key) && !allowedExtra[key] {
 			continue
 		}
 		if strings.ContainsAny(value, "\x00\n\r") {

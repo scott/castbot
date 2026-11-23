@@ -9,13 +9,17 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/scott/castbot/internal/runtime"
+	"github.com/scott/castbot/internal/tooliso"
 )
 
 func main() {
 	log.SetFlags(0)
+	_ = tooliso.SetNonDumpable()
+	syscall.Umask(0o077)
 	addr := flag.String("addr", "127.0.0.1:8081", "listen address")
 	agent := flag.String("agent", "/app/agent", "agent directory")
 	flag.Parse()

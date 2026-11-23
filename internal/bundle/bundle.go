@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/scott/castbot/internal/agentskill"
@@ -133,55 +134,120 @@ func Read(raw []byte) (string, string, error) {
 }
 
 // Install writes the bundle into dir and creates workspace and memory.
-// It leaves files already in those two directories alone.
+// It leaves files already in those two directories alone. A symlink at a
+// bundle path is replaced rather than followed.
 func Install(dir string, raw []byte) error {
-	yaml, instructions, err := Read(raw)
+	files, err := Files(raw)
 	if err != nil {
 		return err
+	}
+	if files[yamlName] == nil || files[instName] == nil {
+		return errors.New("bundle is missing agent.yaml or instructions.md")
+	}
+	info, err := os.Lstat(dir)
+	if err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.IsDir()) {
+		return errors.New("bundle path")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, yamlName), []byte(yaml), 0o644); err != nil {
-		return err
+	for name, body := range files {
+		if err := writeUnder(dir, name, body, 0o640); err != nil {
+			return err
+		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, instName), []byte(instructions), 0o644); err != nil {
-		return err
+	for _, sub := range []string{"workspace", "memory"} {
+		path := filepath.Join(dir, sub)
+		if err := os.MkdirAll(path, 0o770); err != nil {
+			return err
+		}
+		if err := os.Chmod(path, 0o2770); err != nil {
+			return err
+		}
 	}
-	if err := installExtras(dir, raw); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "workspace"), 0o755); err != nil {
-		return err
-	}
-	return os.MkdirAll(filepath.Join(dir, "memory"), 0o755)
+	return nil
 }
 
-func installExtras(dir string, raw []byte) error {
+// Files returns the regular files in a bundle, keyed by their tar names.
+func Files(raw []byte) (map[string][]byte, error) {
 	tr := tar.NewReader(bytes.NewReader(raw))
+	out := map[string][]byte{}
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			return out, nil
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if !safeExtra(hdr.Name) {
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != '\x00' {
+			continue
+		}
+		name := hdr.Name
+		if name != yamlName && name != instName && !safeExtra(name) {
 			continue
 		}
 		body, err := io.ReadAll(io.LimitReader(tr, 1<<20))
 		if err != nil {
-			return err
+			return nil, err
 		}
-		path := filepath.Join(dir, filepath.FromSlash(hdr.Name))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(path, body, 0o644); err != nil {
-			return err
-		}
+		out[name] = append([]byte(nil), body...)
 	}
+}
+
+func writeUnder(root, name string, body []byte, mode os.FileMode) error {
+	name = filepath.Clean(name)
+	if name == "." || name == "" || filepath.IsAbs(name) || strings.HasPrefix(name, "..") {
+		return errors.New("bundle path")
+	}
+	cur := root
+	parts := strings.Split(name, string(os.PathSeparator))
+	for _, part := range parts[:len(parts)-1] {
+		if part == "" || part == "." || part == ".." {
+			return errors.New("bundle path")
+		}
+		next := filepath.Join(cur, part)
+		info, err := os.Lstat(next)
+		if os.IsNotExist(err) {
+			if err := os.Mkdir(next, 0o700); err != nil {
+				return err
+			}
+			if err := os.Chmod(next, 0o700); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return errors.New("bundle path")
+		}
+		cur = next
+	}
+	part := parts[len(parts)-1]
+	if part == "" || part == "." || part == ".." {
+		return errors.New("bundle path")
+	}
+	return writeNoFollow(filepath.Join(cur, part), body, mode)
+}
+
+func writeNoFollow(path string, body []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
+	if err != nil && (errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EEXIST)) {
+		if rm := os.Remove(path); rm != nil && !os.IsNotExist(rm) {
+			return rm
+		}
+		f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
+	}
+	if err != nil {
+		return err
+	}
+	if _, werr := f.Write(body); werr != nil {
+		f.Close()
+		return werr
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
 }
 
 // Sum is the sha256 of the bundle bytes.

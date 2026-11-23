@@ -19,7 +19,7 @@ import (
 func main() {
 	log.SetFlags(0)
 	_ = tooliso.SetNonDumpable()
-	syscall.Umask(0o007)
+	syscall.Umask(0o077)
 	cfg := castlet.Config{
 		Addr:       env("CASTLET_ADDR", ":8080"),
 		ControlURL: os.Getenv("CASTBOT_URL"),

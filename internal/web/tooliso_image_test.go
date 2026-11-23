@@ -149,5 +149,55 @@ if not refused.startswith("Error"):
     raise SystemExit("proc " + refused[:40])
 print("read-ok")
 PY
+/opt/cast/bin/python -c 'import os,time; open("/tmp/py.pid","w").write(str(os.getpid())); time.sleep(30)' &
+i=0
+while [ ! -s /tmp/py.pid ]; do
+  i=$((i + 1))
+  if [ "$i" -gt 50 ]; then
+    echo 'runtime did not start' >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+if cat /proc/"$(cat /tmp/py.pid)"/environ >/dev/null 2>&1; then
+  echo runtime-dumpable >&2
+  exit 1
+fi
+kill "$(cat /tmp/py.pid)" 2>/dev/null || true
+NOTES_TOKEN=fixture-granted PUBLIC_TOKEN=fixture-public CASTBOT_TOOL_SECRET_NAMES=PUBLIC_TOKEN /opt/cast/bin/python - <<'PY'
+import os, stat, subprocess, git
+env = os.environ.copy()
+env["ADDED_MARKER"] = "added-ok"
+out = subprocess.check_output(
+    ["/bin/sh", "-c", 'printf "%s\\n%s\\n%s" "$NOTES_TOKEN" "$PUBLIC_TOKEN" "$ADDED_MARKER"'],
+    env=env,
+    text=True,
+)
+notes, public, added = out.split("\n")
+if notes != "" or public != "fixture-public" or added != "added-ok":
+    raise SystemExit("plain " + repr(out))
+path = "/tmp/gitfake"
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write('#!/bin/sh\nprintf "%s\\n%s" "$NOTES_TOKEN" "$PUBLIC_TOKEN"\n')
+os.chmod(path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+git.cmd.Git.GIT_PYTHON_GIT_EXECUTABLE = path
+text = git.cmd.Git("/tmp").execute(["--version"])
+parts = text.split("\n")
+if len(parts) < 2 or parts[0] != "" or parts[1] != "fixture-public":
+    raise SystemExit("git " + repr(text))
+agent = "/app/agent"
+os.makedirs(os.path.join(agent, "mcp"), exist_ok=True)
+with open(os.path.join(agent, "mcp", "notes.yaml"), "w", encoding="utf-8") as fh:
+    fh.write("command: /bin/true\nenv:\n  NOTES_TOKEN: x\n")
+sealed = "/app/.cast/mcp"
+os.makedirs(sealed, exist_ok=True)
+with open(os.path.join(sealed, "notes.yaml"), "w", encoding="utf-8") as fh:
+    fh.write("command: /bin/true\n")
+import cast.mcp.loader as loader
+found = loader._locate_config(agent, "notes", 0)
+if found is None or not found[1].endswith("/.cast/mcp/notes.yaml"):
+    raise SystemExit("mcp " + repr(found))
+print("env-ok")
+PY
 echo isolation-ok
 `

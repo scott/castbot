@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -53,22 +54,29 @@ func TestReadUnderRejectsASymlinkSwap(t *testing.T) {
 	}
 }
 
-func TestToolEnvExplicitKeepsDeclaredNames(t *testing.T) {
+func TestToolEnvExplicitDropsACopiedSecret(t *testing.T) {
 	parent := []string{
 		"PATH=/usr/bin",
 		"CAST_AGENT_DIR=/app/agent",
-		"MCP_SERVER_NAME=notes",
+		"NOTES_TOKEN=fixture-notes",
+		"PUBLIC_TOKEN=fixture-public",
+		"CASTBOT_TOOL_SECRET_NAMES=PUBLIC_TOKEN",
 		"OPENROUTER_API_KEY=fixture-model-key",
 	}
-	got := ToolEnvExplicit(parent, nil)
-	text := ""
-	for _, item := range got {
-		text += item + "\n"
+	var mark []string
+	for _, item := range parent {
+		key, value, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		mark = append(mark, key+"\t"+sha256hex(value))
 	}
-	if !bytes.Contains([]byte(text), []byte("MCP_SERVER_NAME=notes")) {
-		t.Fatalf("declared name missing\n%s", text)
+	caller := append(append([]string{}, parent...), "ADDED_MARKER=added-ok", ToolParentMark+"="+strings.Join(mark, "\n"))
+	got := strings.Join(ToolEnvExplicit(caller, ParseNames("PUBLIC_TOKEN")), "\n")
+	if strings.Contains(got, "fixture-notes") || strings.Contains(got, "fixture-model-key") {
+		t.Fatalf("copied secret reached the command\n%s", got)
 	}
-	if bytes.Contains([]byte(text), []byte("fixture-model-key")) {
-		t.Fatal("model key was copied")
+	if !strings.Contains(got, "PUBLIC_TOKEN=fixture-public") || !strings.Contains(got, "ADDED_MARKER=added-ok") {
+		t.Fatalf("opt-in or added name missing\n%s", got)
 	}
 }

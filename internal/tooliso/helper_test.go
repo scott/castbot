@@ -52,6 +52,58 @@ func TestHelperScrubsTheCommandEnvironment(t *testing.T) {
 	}
 }
 
+func TestCopiedEnvironmentDropsAGrantedSecret(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3")
+	}
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "castbot-toolrun")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/castbot-toolrun")
+	build.Dir = root
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	script := `
+import os, subprocess
+env = os.environ.copy()
+env["ADDED_MARKER"] = "added-ok"
+out = subprocess.check_output(
+    ["/bin/sh", "-c", 'printf "%s\\n%s\\n%s" "$NOTES_TOKEN" "$PUBLIC_TOKEN" "$ADDED_MARKER"'],
+    env=env,
+    text=True,
+)
+print(out)
+`
+	run := exec.Command("python3", "-c", script)
+	run.Dir = root
+	run.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"PYTHONPATH=" + filepath.Join(root, "deploy", "tooliso"),
+		"CASTBOT_TOOLRUN=" + bin,
+		"CASTBOT_TOOLRUN_TEST=1",
+		"NOTES_TOKEN=fixture-granted",
+		"PUBLIC_TOKEN=fixture-public",
+		"CASTBOT_TOOL_SECRET_NAMES=PUBLIC_TOKEN",
+		"HOME=/tmp",
+		"LANG=C",
+	}
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("python: %v\n%s", err, out)
+	}
+	text := string(out)
+	if strings.Contains(text, "fixture-granted") {
+		t.Fatalf("copied secret reached the command\n%s", text)
+	}
+	if !strings.Contains(text, "fixture-public") || !strings.Contains(text, "added-ok") {
+		t.Fatalf("opt-in or added name missing\n%s", text)
+	}
+}
+
 func TestHelperStopsTheCommandGroup(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {

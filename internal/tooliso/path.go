@@ -26,38 +26,6 @@ func DefaultRoots(agentDir string) []string {
 	return roots
 }
 
-// Allow reports whether path may be opened by a file tool.
-// Relative paths join the first root. Symlinks are resolved, and a link
-// that leaves the roots or enters /proc, /sys, or /dev is refused.
-// A missing final component inside a root is allowed so the tool can
-// report that the file is not there.
-func Allow(path string, roots []string) (string, error) {
-	path = strings.TrimSpace(path)
-	if path == "" || strings.ContainsRune(path, 0) || strings.ContainsAny(path, "\n\r") {
-		return "", ErrPath
-	}
-	cleanedRoots, err := cleanRoots(roots)
-	if err != nil || len(cleanedRoots) == 0 {
-		return "", ErrPath
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(cleanedRoots[0], path)
-	}
-	resolved, err := resolve(path)
-	if err != nil {
-		return "", ErrPath
-	}
-	if blockedFS(resolved) {
-		return "", ErrPath
-	}
-	for _, root := range cleanedRoots {
-		if inside(root, resolved) {
-			return resolved, nil
-		}
-	}
-	return "", ErrPath
-}
-
 func cleanRoots(roots []string) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}

@@ -86,6 +86,34 @@ def allow_path(file_path, allowed):
     raise OSError("path refused")
 
 
+def _explicit_env(caller):
+    """Environment for a caller that passed env=.
+
+    The helper receives hashes of the runtime environment and the owner's
+    opt-in list. A name that already has the same value is not a new value.
+    """
+    import hashlib
+
+    env = dict(caller)
+    lines = []
+    for key, value in os.environ.items():
+        if key in ("CASTBOT_TOOL_PARENT", "CASTBOT_TOOL_EXPLICIT"):
+            continue
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        if "\n" in key or "\t" in key or "=" in key:
+            continue
+        digest = hashlib.sha256(value.encode()).hexdigest()
+        lines.append(key + "\t" + digest)
+    env["CASTBOT_TOOL_PARENT"] = "\n".join(lines)
+    env["CASTBOT_TOOL_EXPLICIT"] = "1"
+    if "CASTBOT_TOOL_SECRET_NAMES" in os.environ:
+        env["CASTBOT_TOOL_SECRET_NAMES"] = os.environ["CASTBOT_TOOL_SECRET_NAMES"]
+    else:
+        env.pop("CASTBOT_TOOL_SECRET_NAMES", None)
+    return env
+
+
 def _helper():
     return os.environ.get("CASTBOT_TOOLRUN", _HELPER)
 
@@ -122,9 +150,7 @@ def _patch_subprocess():
             kwargs.pop("extra_groups", None)
             explicit = "env" in kwargs and kwargs.get("env") is not None
             if explicit:
-                env = dict(kwargs["env"])
-                env["CASTBOT_TOOL_EXPLICIT"] = "1"
-                kwargs["env"] = env
+                kwargs["env"] = _explicit_env(kwargs["env"])
             helper = _helper()
             if isinstance(args, (list, tuple)) and args and _is_helper(str(args[0])):
                 argv = list(args)
@@ -283,6 +309,49 @@ def _patch_file_tool(mod):
         obj.func = wrapped
 
 
+def _mcp_relative(entry):
+    hint = ""
+    relative = ""
+    if isinstance(entry, str):
+        hint = entry.strip()
+        if hint:
+            relative = os.path.join("mcp", hint + ".yaml")
+    elif isinstance(entry, dict):
+        for key in ("server", "name"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                hint = value.strip()
+                break
+        config = entry.get("config")
+        if isinstance(config, str) and config.strip():
+            relative = config.strip()
+        elif hint:
+            relative = os.path.join("mcp", hint + ".yaml")
+    if not relative or os.path.isabs(relative):
+        return "", ""
+    for part in relative.split(os.sep):
+        if part in ("", ".", ".."):
+            return "", ""
+    return hint, relative
+
+
+def _patch_mcp(mod):
+    if not callable(getattr(mod, "_locate_config", None)):
+        return
+
+    def wrapped(agent_path, entry, index):
+        del index
+        hint, rel = _mcp_relative(entry)
+        if rel == "":
+            return None
+        sealed = os.path.join(os.path.dirname(os.path.abspath(agent_path)), ".cast", rel)
+        if os.path.isfile(sealed):
+            return hint, sealed
+        return None
+
+    mod._locate_config = wrapped
+
+
 def _patch_agent_config(mod):
     def _load(self):
         protected = os.path.join(os.path.dirname(os.path.abspath(self.path)), ".cast", "agent.yaml")
@@ -317,6 +386,7 @@ _PATCHERS = {
     "cast.tools.edit": _patch_file_tool,
     "cast.tools.list": _patch_file_tool,
     "cast.agent.base": _patch_agent_config,
+    "cast.mcp.loader": _patch_mcp,
 }
 
 

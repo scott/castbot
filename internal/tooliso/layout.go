@@ -1,8 +1,13 @@
 package tooliso
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
+
+	"github.com/scott/castbot/internal/bundle"
 )
 
 // PrepareLayout creates the runtime-private directories next to the agent
@@ -36,22 +41,50 @@ func StateDir(agentDir string) string {
 	return filepath.Join(parent, ".castlet", base)
 }
 
-// SealConfig copies agent.yaml to the private directory next to the agent.
-// The runtime reads that copy for its permission config. The workspace copy
-// stays where the bundle wrote it.
-func SealConfig(agentDir string) {
-	raw, err := os.ReadFile(filepath.Join(agentDir, "agent.yaml"))
-	if err != nil {
-		return
-	}
+// SealFromBundle writes the permission copy of agent.yaml and the MCP
+// config files next to the agent directory. The bytes come from the bundle
+// the control plane sent. The workspace copies are not read again.
+func SealFromBundle(agentDir string, raw []byte) {
 	parent := filepath.Dir(agentDir)
 	if parent == "" || parent == "." || parent == string(filepath.Separator) {
 		return
 	}
-	dir := filepath.Join(parent, ".cast")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	files, err := bundle.Files(raw)
+	if err != nil {
 		return
 	}
-	_ = os.Chmod(dir, 0o700)
-	_ = os.WriteFile(filepath.Join(dir, "agent.yaml"), raw, 0o600)
+	for name, body := range files {
+		if name != "agent.yaml" && !(strings.HasPrefix(name, "mcp/") && strings.HasSuffix(name, ".yaml")) {
+			continue
+		}
+		_ = writePrivate(filepath.Join(parent, ".cast", filepath.FromSlash(name)), body)
+	}
+}
+
+func writePrivate(path string, body []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
+	if err != nil && (errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EEXIST)) {
+		if rm := os.Remove(path); rm != nil && !os.IsNotExist(rm) {
+			return rm
+		}
+		f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
+	}
+	if err != nil {
+		return err
+	}
+	if _, werr := f.Write(body); werr != nil {
+		f.Close()
+		return werr
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }

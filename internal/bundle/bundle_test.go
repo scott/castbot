@@ -51,6 +51,39 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 }
 
+func TestInstallReplacesASymlink(t *testing.T) {
+	raw, _, err := Archive("name: Atlas\n", "Be brief.\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "agent.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(dir, raw); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := os.ReadFile(outside)
+	if err != nil || string(kept) != "keep" {
+		t.Fatalf("outside %q %v", kept, err)
+	}
+	info, err := os.Lstat(filepath.Join(dir, "agent.yaml"))
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("yaml mode %v %v", info, err)
+	}
+	if info.Mode().Perm()&0o007 != 0 || info.Mode().Perm()&0o040 == 0 {
+		t.Fatalf("yaml mode %o", info.Mode().Perm())
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "agent.yaml"))
+	if err != nil || string(got) != "name: Atlas\n" {
+		t.Fatalf("yaml %q %v", got, err)
+	}
+}
+
 func TestSkillFileRoundTrip(t *testing.T) {
 	extras := map[string]string{
 		agentskill.SkillFile:  "name: create-agent\n",
