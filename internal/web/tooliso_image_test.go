@@ -238,17 +238,8 @@ if (os.stat("/app/agent/workspace/made/sub/via-os.txt").st_mode & 0o777) != 0o66
     raise SystemExit("osopen mode")
 mem = "/app/agent/memory"
 os.makedirs(mem, exist_ok=True)
-os.chown(mem, 65534, 998)
 os.chmod(mem, 0o2770)
-notes = os.path.join(mem, "notes.md")
-with open(notes, "w", encoding="utf-8") as fh:
-    fh.write("agent notes\n")
-os.chown(notes, 999, 998)
-os.chmod(notes, 0o660)
-subprocess.check_call(["/opt/cast/bin/python", "-c", r'''
-import os
-os.setgid(998)
-os.setuid(65534)
+subprocess.check_call(["/bin/sh", "-c", "printf '%s\\n' 'agent notes' > /app/agent/memory/notes.md && chmod 660 /app/agent/memory/notes.md"])
 path = "/app/agent/memory/notes.md"
 with open(path, "a", encoding="utf-8") as fh:
     fh.write("more\n")
@@ -274,7 +265,6 @@ with open(own, "w", encoding="utf-8") as fh:
 with open(own, "r+", encoding="utf-8") as fh:
     if fh.read() != "own":
         raise SystemExit("own r+")
-'''])
 print("env-ok")
 PY
 echo isolation-ok
