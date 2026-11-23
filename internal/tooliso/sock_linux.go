@@ -160,8 +160,9 @@ func handleTool(conn net.Conn) {
 		copyPipe(run.stderr, frameErr, send)
 	}()
 	go func() {
-		err := run.cmd.Wait()
+		// Wait closes the pipes. Reading them first keeps the output.
 		wg.Wait()
+		err := run.cmd.Wait()
 		var buf [4]byte
 		code := exitCode(err)
 		if code < 0 {
