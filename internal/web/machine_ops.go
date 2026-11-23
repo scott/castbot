@@ -789,6 +789,7 @@ func (s *Server) refreshSecrets(ctx context.Context, userID string, agent store.
 type secretPair struct {
 	name  string
 	value string
+	tools bool
 }
 
 func (s *Server) secretPairs(ctx context.Context, userID string, agent store.Agent) ([]secretPair, error) {
@@ -798,7 +799,7 @@ func (s *Server) secretPairs(ctx context.Context, userID string, agent store.Age
 	}
 	pairs := make([]secretPair, 0, len(secrets)+1)
 	for _, sec := range secrets {
-		pairs = append(pairs, secretPair{name: sec.Name, value: sec.Value})
+		pairs = append(pairs, secretPair{name: sec.Name, value: sec.Value, tools: sec.Tools})
 	}
 	if name, value, missing := s.effectiveModelSecret(ctx, userID, agent.Model); missing == "" && name != "" && value != "" {
 		pairs = append(pairs, secretPair{name: name, value: value})
@@ -821,6 +822,10 @@ func hashSecretPairs(h hash.Hash, pairs []secretPair) string {
 		h.Write([]byte{0})
 		h.Write([]byte(p.value))
 		h.Write([]byte{0})
+		if p.tools {
+			h.Write([]byte("tools"))
+			h.Write([]byte{0})
+		}
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

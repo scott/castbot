@@ -18,7 +18,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/castlet ./cmd/castlet \
  && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/cast-standin ./cmd/cast-standin \
- && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/castbot-guest ./cmd/castbot-guest
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/castbot-guest ./cmd/castbot-guest \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/castbot-toolrun ./cmd/castbot-toolrun
 
 FROM python:3.11-slim-bookworm AS cast
 ARG CAST_COMMIT=5fc2bdb46c4041831fc51c9f909d59e54f887d31
@@ -37,8 +38,13 @@ FROM debian:bookworm-slim AS standin
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
+ && sed -i 's/^nobody:x:65534:65534:/nobody:x:65534:998:/' /etc/passwd \
+ && printf '%s\n' 'agent:x:999:998::/app/agent:/usr/sbin/nologin' >> /etc/passwd \
+ && printf '%s\n' 'castwork:x:998:agent' >> /etc/group \
  && mkdir -p /app/agent \
- && chown -R nobody:nogroup /app
+ && chown nobody:nogroup /app \
+ && chown nobody:castwork /app/agent \
+ && chmod 2770 /app/agent
 COPY --from=gobuild /out/castlet /usr/local/bin/castlet
 COPY --from=gobuild /out/cast-standin /usr/local/bin/cast-standin
 ENV CASTLET_RUNTIME="/usr/local/bin/cast-standin --addr 127.0.0.1:8081 --agent /app/agent"
@@ -50,22 +56,36 @@ ENTRYPOINT ["/usr/local/bin/castlet"]
 FROM python:3.11-slim-bookworm AS runtime
 COPY deploy/runtime-install.sh /tmp/runtime-install.sh
 RUN sh /tmp/runtime-install.sh && rm /tmp/runtime-install.sh \
- && mkdir -p /app/.local/bin /app/.local/share/castbot /app/.local/cache/go-build /app/.local/go/pkg/mod /app/agent \
- && chown -R nobody:nogroup /app \
- && chmod 755 /app /app/.local /app/.local/bin
+ && sed -i 's/^nobody:x:65534:65534:/nobody:x:65534:998:/' /etc/passwd \
+ && printf '%s\n' 'agent:x:999:998::/app/agent:/usr/sbin/nologin' >> /etc/passwd \
+ && printf '%s\n' 'castwork:x:998:agent' >> /etc/group \
+ && mkdir -p /app/.local/bin /app/.local/share/castbot /app/.local/cache/go-build /app/.local/go/pkg/mod /app/agent /app/.cast /app/.castlet /app/.agent-tmp \
+ && chown -R nobody:castwork /app/agent /app/.local \
+ && find /app/agent /app/.local -type d -exec chmod 2770 {} + \
+ && chown nobody:nogroup /app /app/.cast /app/.castlet \
+ && chmod 755 /app \
+ && chmod 700 /app/.cast /app/.castlet \
+ && chown 999:998 /app/.agent-tmp \
+ && chmod 700 /app/.agent-tmp
 COPY --from=gobuild /out/castlet /usr/local/bin/castlet
 COPY --from=gobuild /out/castbot-guest /usr/local/bin/castbot-guest
+COPY --from=gobuild /out/castbot-toolrun /usr/local/bin/castbot-toolrun
 RUN ln -sf castbot-guest /usr/local/bin/git \
  && ln -sf castbot-guest /usr/local/bin/gh \
  && ln -sf castbot-guest /usr/local/bin/doctl \
  && ln -sf castbot-guest /usr/local/bin/castbot-mcp \
- && ln -sf castbot-guest /usr/local/bin/castbot-git-credential
+ && ln -sf castbot-guest /usr/local/bin/castbot-git-credential \
+ && chown root:root /usr/local/bin/castbot-toolrun \
+ && chmod 0755 /usr/local/bin/castbot-toolrun
 COPY --from=cast /opt/cast /opt/cast
 COPY deploy/mcp /opt/castbot/mcp
-# /usr/local/bin is before the Cast venv so python3 and pip are the image
-# interpreter. pip install --user honors PYTHONUSERBASE. The runtime process
-# is started with the absolute /opt/cast/bin/python path below.
-ENV PATH="/app/.local/bin:/opt/node/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/opt/cast/bin"
+COPY deploy/tooliso /opt/castbot/tooliso
+# System directories come before /app/.local/bin so a program installed
+# there cannot shadow git, python, or castlet. The runtime process is
+# started with the absolute /opt/cast/bin/python path below.
+# PYTHONPATH loads the command and file-tool wrapper before Cast.
+ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/node/bin:/usr/local/go/bin:/opt/cast/bin:/app/.local/bin"
+ENV PYTHONPATH="/opt/castbot/tooliso"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV HOME=/app
 ENV PYTHONUSERBASE=/app/.local
@@ -82,7 +102,11 @@ ENV CASTLET_EGRESS_URL=http://127.0.0.1:8090
 # GitPython raises on import when git is absent. The binary is present now.
 ENV GIT_PYTHON_REFRESH=quiet
 ENV CASTLET_RUNTIME="/opt/cast/bin/python -m cast.runtime --agent-path /app/agent --port 8081 --host 127.0.0.1"
+# The runtime and a command share the agent workspace, so git may use a
+# repository the runtime prepared there. Other directories stay untouched.
+RUN git config --system --add safe.directory /app/agent \
+ && git config --system --add safe.directory '/app/agent/*'
 EXPOSE 8080
-USER nobody
+USER root
 WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/castlet"]

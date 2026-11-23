@@ -17,8 +17,8 @@ bash -n "$script"
 command -v go >/dev/null 2>&1 || fail "go is missing"
 command -v git >/dev/null 2>&1 || fail "git is missing"
 
-grep -F 'Dockerfile deploy go.mod go.sum cmd/castlet cmd/castbot-guest cmd/cast-standin internal/castlet' "$script" >/dev/null || fail "fixed inputs"
-grep -F 'Dockerfile deploy go.mod go.sum cmd/castlet cmd/castbot-guest cmd/cast-standin internal/castlet' "$root/scripts/deploy.sh" >/dev/null || fail "deploy inputs differ"
+grep -F 'Dockerfile deploy go.mod go.sum cmd/castlet cmd/castbot-guest cmd/cast-standin cmd/castbot-toolrun internal/castlet' "$script" >/dev/null || fail "fixed inputs"
+grep -F 'Dockerfile deploy go.mod go.sum cmd/castlet cmd/castbot-guest cmd/cast-standin cmd/castbot-toolrun internal/castlet' "$root/scripts/deploy.sh" >/dev/null || fail "deploy inputs differ"
 
 hdr=$(mktemp)
 printf '%s\n' 'Link: </v2/scott/castbot-runtime/tags/list?n=100&last=abc>; rel="next"' >"$hdr"
@@ -86,6 +86,19 @@ got=$(select_ref "$repo" "$tags" "$head")
 printf '%s\n' "$old" "$head" >"$tags"
 got=$(select_ref "$repo" "$tags" "$head")
 [[ "$got" == "example.invalid/castbot-runtime:${head}" ]] || fail "exact tag: $got"
+
+mkdir -p "$repo/cmd/castbot-toolrun"
+printf 'package main\n\nfunc main() {}\n' >"$repo/cmd/castbot-toolrun/main.go"
+helper=$(commit_at "$repo" '2020-07-01T00:00:00Z' 'helper')
+printf '%s\n' "$old" >"$tags"
+set +e
+got=$(select_ref "$repo" "$tags" "$helper" 2>/tmp/castbot-runtime-image.err)
+code=$?
+set -e
+[[ "$code" -eq 1 ]] || fail "helper change should miss, code $code"
+[[ -z "$got" ]] || fail "helper change printed $got"
+[[ ! -s /tmp/castbot-runtime-image.err ]] || fail "helper change wrote an error"
+git -C "$repo" checkout -q main
 
 git -C "$repo" config uploadpack.allowReachableSHA1InWant true
 shallow=$(mktemp -d)

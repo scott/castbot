@@ -82,6 +82,14 @@ func TestFileAndMemoryRoundTrip(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Body.String() != "hello file" {
 		t.Fatalf("get %d %q", rec.Code, rec.Body.String())
 	}
+	info, err := os.Stat(filepath.Join(dir, "workspace", "uploads", "hello.txt"))
+	if err != nil || info.Mode().Perm() != 0o660 {
+		t.Fatalf("upload mode %v %v", info, err)
+	}
+	info, err = os.Stat(filepath.Join(dir, "workspace", "uploads"))
+	if err != nil || info.Mode().Perm() != 0o770 || info.Mode()&os.ModeSetgid == 0 {
+		t.Fatalf("upload dir %v %v", info, err)
+	}
 
 	var tarBuf bytes.Buffer
 	tw := tar.NewWriter(&tarBuf)
@@ -120,6 +128,14 @@ func TestFileAndMemoryRoundTrip(t *testing.T) {
 	got, err := io.ReadAll(tr)
 	if err != nil || string(got) != "remember this" {
 		t.Fatalf("memory %q %v", got, err)
+	}
+	info, err = os.Stat(filepath.Join(dir, "memory", "note.txt"))
+	if err != nil || info.Mode().Perm() != 0o660 {
+		t.Fatalf("memory mode %v %v", info, err)
+	}
+	info, err = os.Stat(filepath.Join(dir, "memory"))
+	if err != nil || info.Mode().Perm() != 0o770 || info.Mode()&os.ModeSetgid == 0 {
+		t.Fatalf("memory dir %v %v", info, err)
 	}
 }
 

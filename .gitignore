@@ -33,6 +33,10 @@ castbot.env
 .vscode/
 .DS_Store
 
+# Python bytecode from local checks
+__pycache__/
+*.pyc
+
 # Local deploy config, host keys, logs, and backups.
 /deploy.env
 /.deploy/

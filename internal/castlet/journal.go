@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/runtime"
+	"github.com/scott/castbot/internal/tooliso"
 )
 
 type callerKey struct{}
@@ -48,7 +49,7 @@ func callerOf(r *http.Request) string {
 }
 
 func (s *Supervisor) stateDir() string {
-	return filepath.Join(s.cfg.AgentDir, ".castlet")
+	return tooliso.StateDir(s.cfg.AgentDir)
 }
 
 const (

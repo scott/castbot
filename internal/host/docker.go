@@ -83,6 +83,7 @@ func Run(ctx context.Context, opt RunOpt) (*Guest, error) {
 	id := "castbot-s03-" + hex.EncodeToString(buf)
 	args := []string{
 		"run", "--rm", "-d",
+		"--security-opt", "no-new-privileges",
 		"--name", id,
 		"--add-host", "host.docker.internal:host-gateway",
 		"-p", "127.0.0.1::8080",
@@ -188,10 +189,35 @@ func (g *Guest) Stop(ctx context.Context) {
 // Output runs a command in the container and returns combined output.
 // Callers must not pass secret values in the command.
 func (g *Guest) Output(ctx context.Context, args ...string) (string, error) {
+	return g.outputAs(ctx, "", false, args...)
+}
+
+// OutputAs runs a command as user, for example "0" or "999:998".
+// An empty user keeps the container's default user.
+func (g *Guest) OutputAs(ctx context.Context, user string, args ...string) (string, error) {
+	return g.outputAs(ctx, user, false, args...)
+}
+
+// OutputRoot runs a command as root with the privilege needed to read a
+// process that is not dumpable. The container user cannot read that
+// environment, and root without this privilege cannot either.
+func (g *Guest) OutputRoot(ctx context.Context, args ...string) (string, error) {
+	return g.outputAs(ctx, "0", true, args...)
+}
+
+func (g *Guest) outputAs(ctx context.Context, user string, privileged bool, args ...string) (string, error) {
 	if g == nil {
 		return "", errors.New("no container")
 	}
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"exec", g.id}, args...)...)
+	argv := []string{"exec"}
+	if privileged {
+		argv = append(argv, "--privileged")
+	}
+	if user != "" {
+		argv = append(argv, "-u", user)
+	}
+	argv = append(argv, g.id)
+	cmd := exec.CommandContext(ctx, "docker", append(argv, args...)...)
 	out, err := cmd.CombinedOutput()
 	text := string(out)
 	if len(text) > 2000 {

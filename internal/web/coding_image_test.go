@@ -33,7 +33,7 @@ func TestRuntimeCodingImage(t *testing.T) {
 		t.Fatalf("inspect: %s", out)
 	}
 	fields := strings.Fields(string(out))
-	if len(fields) < 2 || fields[0] != "nobody" {
+	if len(fields) < 2 || fields[0] != "root" {
 		t.Fatalf("user %q", strings.TrimSpace(string(out)))
 	}
 	t.Logf("runtime image bytes %s", fields[1])
@@ -48,7 +48,8 @@ func TestRuntimeCodingImage(t *testing.T) {
 		"NPM_CONFIG_PREFIX=/app/.local",
 		"GOBIN=/app/.local/bin",
 		"CASTLET_EGRESS_URL=http://127.0.0.1:8090",
-		"PATH=/app/.local/bin:",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/node/bin:/usr/local/go/bin:/opt/cast/bin:/app/.local/bin",
+		"PYTHONPATH=/opt/castbot/tooliso",
 	} {
 		if !strings.Contains(envText, needle) {
 			t.Fatalf("missing %s", needle)
@@ -64,24 +65,25 @@ func TestRuntimeCodingImage(t *testing.T) {
 	dir := t.TempDir()
 	t.Cleanup(func() {
 		owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-		_ = exec.Command("docker", "run", "--rm", "--user", "0:0", "-v", dir+":/work", "--entrypoint", "/bin/chown", host.RuntimeImage, "-R", owner, "/work").Run()
+		_ = exec.Command("docker", "run", "--rm", "--user", "0:0", "-v", dir+":/app/agent", "--entrypoint", "/bin/chown", host.RuntimeImage, "-R", owner, "/app/agent").Run()
 	})
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	chown := exec.Command("docker", "run", "--rm", "--user", "0:0", "-v", dir+":/work", "--entrypoint", "/bin/chown", host.RuntimeImage, "-R", "nobody:nogroup", "/work")
+	chown := exec.Command("docker", "run", "--rm", "--user", "0:0", "-v", dir+":/app/agent", "--entrypoint", "/bin/sh", host.RuntimeImage, "-c", "chown -R nobody:castwork /app/agent && chmod 2770 /app/agent")
 	if out, err := chown.CombinedOutput(); err != nil {
 		t.Fatalf("chown: %s", out)
 	}
 	script := codingScript
 	cmd := exec.Command("docker", "run", "--rm", "-i", "--network", "none",
+		"--security-opt", "no-new-privileges",
 		"-e", "GITHUB_TOKEN="+codingFixture,
 		"-e", "GH_TOKEN="+codingFixture,
 		"-e", "GITHUB_PERSONAL_ACCESS_TOKEN="+codingFixture,
 		"-e", "DIGITALOCEAN_ACCESS_TOKEN="+codingFixture,
-		"-e", "CAST_AGENT_DIR=/work",
-		"-v", dir+":/work",
-		"--entrypoint", "/bin/sh", host.RuntimeImage)
+		"-e", "CAST_AGENT_DIR=/app/agent",
+		"-v", dir+":/app/agent",
+		"--entrypoint", "/bin/sh", host.RuntimeImage, "-c", codingBootWrapper)
 	cmd.Stdin = strings.NewReader(script)
 	out, err = cmd.CombinedOutput()
 	if err != nil || bytes.Contains(out, []byte(codingFixture)) {
@@ -107,14 +109,14 @@ func TestRuntimePrefixSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := "castbot-prefix-" + hex.EncodeToString(buf)
-	run := exec.Command("docker", "run", "-d", "--name", name, "--network", "none", "--entrypoint", "sleep", host.RuntimeImage, "infinity")
+	run := exec.Command("docker", "run", "-d", "--name", name, "--network", "none", "--security-opt", "no-new-privileges", "--entrypoint", "sleep", host.RuntimeImage, "infinity")
 	if out, err := run.CombinedOutput(); err != nil {
 		t.Fatalf("run: %s", out)
 	}
 	t.Cleanup(func() {
 		_ = exec.Command("docker", "rm", "-f", name).Run()
 	})
-	install := exec.Command("docker", "exec", "-i", name, "/bin/sh")
+	install := exec.Command("docker", "exec", "-i", name, "/usr/local/bin/castbot-toolrun", "--", "/bin/bash")
 	install.Stdin = strings.NewReader(prefixInstall)
 	if out, err := install.CombinedOutput(); err != nil {
 		t.Fatalf("install: %s", out)
@@ -129,7 +131,24 @@ func TestRuntimePrefixSurvivesRestart(t *testing.T) {
 	}
 }
 
+const codingBootWrapper = `set -eu
+cat >/tmp/castbot-test.sh
+/usr/local/bin/castbot-toolrun --serve >/tmp/tool-serve.log 2>&1 &
+i=0
+while [ ! -S /run/castbot-tool.sock ]; do
+  i=$((i + 1))
+  if [ "$i" -gt 50 ]; then
+    echo 'tool server did not start' >&2
+    cat /tmp/tool-serve.log >&2 || true
+    exit 1
+  fi
+  sleep 0.1
+done
+exec /usr/local/bin/castbot-toolrun --as-runtime -- /bin/sh /tmp/castbot-test.sh
+`
+
 const codingScript = `set -eu
+umask 007
 test "$(id -u)" = "65534"
 test "$(id -un)" = "nobody"
 for c in git curl rg node npm go gh doctl castbot-mcp castbot-git-credential; do
@@ -154,7 +173,7 @@ if grep -R -E 'TOKEN|SECRET' /opt/castbot/mcp; then
   echo 'mcp file names a token' >&2
   exit 1
 fi
-cd /work
+cd /app/agent
 git init -b main >/dev/null
 git config user.email fixture@example.com
 git config user.name Fixture

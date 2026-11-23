@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -31,6 +32,7 @@ import (
 	"github.com/scott/castbot/internal/bundle"
 	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/egresscontract"
+	"github.com/scott/castbot/internal/tooliso"
 )
 
 const (
@@ -95,15 +97,31 @@ type Supervisor struct {
 	egressAt     time.Time
 	egressView   egresscontract.Status
 	proc         *exec.Cmd
-	procDone     chan struct{}
+	procDone     <-chan struct{}
+	host         *tooliso.RuntimeHost
 	bootErr      string
+}
+
+// UseRuntimeHost sends runtime output to the log and starts the runtime
+// through the privileged process.
+func (s *Supervisor) UseRuntimeHost(h *tooliso.RuntimeHost) {
+	s.mu.Lock()
+	s.host = h
+	s.mu.Unlock()
+	if h == nil || h.Logs() == nil {
+		return
+	}
+	go func() {
+		_, _ = io.Copy(s.logs, h.Logs())
+	}()
 }
 
 var errReloadBusy = errors.New("reload in progress")
 
 type secret struct {
-	Name  string
-	Value string
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Tools bool   `json:"tools"`
 }
 
 // RequireHTTPS rejects a control plane URL that is not https.
@@ -176,6 +194,10 @@ func (s *Supervisor) Boot(ctx context.Context) error {
 	if err := bundle.Install(s.cfg.AgentDir, raw); err != nil {
 		s.setBootErr("bundle")
 		return err
+	}
+	if err := tooliso.SealFromBundle(s.cfg.AgentDir, raw); err != nil {
+		s.setBootErr("bundle")
+		return fmt.Errorf("seal config: %w", err)
 	}
 	secrets, err := s.pullSecrets(ctx, token)
 	if err != nil {
@@ -300,7 +322,7 @@ func (s *Supervisor) pullSecrets(ctx context.Context, token string) ([]secret, e
 			return nil, errors.New("secret value rejected")
 		}
 		seen[name] = true
-		out = append(out, secret{Name: name, Value: sec.Value})
+		out = append(out, secret{Name: name, Value: sec.Value, Tools: sec.Tools})
 	}
 	return out, nil
 }
@@ -351,6 +373,13 @@ func (s *Supervisor) controlClient() (*http.Client, error) {
 }
 
 func (s *Supervisor) startRuntime(ctx context.Context) error {
+	_ = tooliso.SetNonDumpable()
+	tooliso.PrepareLayout(s.cfg.AgentDir)
+	if s.host == nil && os.Geteuid() == 0 {
+		if err := tooliso.EnsureServe(ctx); err != nil {
+			return err
+		}
+	}
 	s.stopRuntime()
 	if len(s.cfg.RuntimeCmd) == 0 {
 		if err := s.waitReady(ctx); err != nil {
@@ -362,17 +391,34 @@ func (s *Supervisor) startRuntime(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil
 	}
-	cmd := exec.Command(s.cfg.RuntimeCmd[0], s.cfg.RuntimeCmd[1:]...)
-	cmd.Env = s.childEnv()
-	cmd.Stdout = s.logs
-	cmd.Stderr = s.logs
-	if err := cmd.Start(); err != nil {
-		return err
+	var cmd *exec.Cmd
+	var done <-chan struct{}
+	if s.host != nil {
+		d, err := s.host.Start(s.childEnv())
+		if err != nil {
+			return err
+		}
+		done = d
+	} else {
+		cmd = exec.Command(s.cfg.RuntimeCmd[0], s.cfg.RuntimeCmd[1:]...)
+		cmd.Env = s.childEnv()
+		cmd.Stdout = s.logs
+		cmd.Stderr = s.logs
+		if err := tooliso.ApplyRuntime(cmd); err != nil {
+			return err
+		}
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		ch := make(chan struct{})
+		done = ch
+		go func() {
+			_ = cmd.Wait()
+			close(ch)
+		}()
 	}
-	done := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(done)
+	go func(done <-chan struct{}) {
+		<-done
 		s.mu.Lock()
 		if s.procDone == done {
 			s.ready = false
@@ -381,7 +427,7 @@ func (s *Supervisor) startRuntime(ctx context.Context) error {
 			}
 		}
 		s.mu.Unlock()
-	}()
+	}(done)
 	s.mu.Lock()
 	s.proc = cmd
 	s.procDone = done
@@ -411,21 +457,29 @@ func (s *Supervisor) stopRuntime() {
 	s.mu.Lock()
 	cmd := s.proc
 	done := s.procDone
+	host := s.host
 	s.proc = nil
 	s.procDone = nil
 	s.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
-		return
+	if host != nil {
+		_ = host.Stop()
 	}
-	_ = cmd.Process.Signal(syscall.SIGTERM)
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+	}
 	if done == nil {
 		return
 	}
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		_ = cmd.Process.Kill()
-		<-done
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
 	}
 }
 
@@ -497,6 +551,9 @@ func (s *Supervisor) childEnv() []string {
 		"CASTBOT_BOOTSTRAP_TOKEN": true,
 		"CASTBOT_CA_FILE":         true,
 		"AUTH_TOKEN":              true,
+		tooliso.ToolSecretEnv:     true,
+		"CASTBOT_TOOLRUN_TEST":    true,
+		"CASTBOT_TOOLRUN":         true,
 	}
 	var out []string
 	for _, env := range os.Environ() {
@@ -520,7 +577,20 @@ func (s *Supervisor) childEnv() []string {
 	if runtimeToken != "" {
 		out = append(out, "AUTH_TOKEN="+runtimeToken)
 	}
+	out = tooliso.RewriteRuntimePath(out)
+	names := tooliso.ParseNames(toolNameList(secrets))
+	out = append(out, tooliso.ToolSecretEnv+"="+strings.Join(names, ","))
 	return out
+}
+
+func toolNameList(secrets []secret) string {
+	var names []string
+	for _, sec := range secrets {
+		if sec.Tools {
+			names = append(names, sec.Name)
+		}
+	}
+	return strings.Join(names, ",")
 }
 
 func (s *Supervisor) reload(ctx context.Context) error {
@@ -544,6 +614,9 @@ func (s *Supervisor) reload(ctx context.Context) error {
 	}
 	if err := bundle.Install(s.cfg.AgentDir, raw); err != nil {
 		return err
+	}
+	if err := tooliso.SealFromBundle(s.cfg.AgentDir, raw); err != nil {
+		return fmt.Errorf("seal config: %w", err)
 	}
 	s.mu.Lock()
 	s.secrets = secrets

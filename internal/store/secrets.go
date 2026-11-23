@@ -27,6 +27,9 @@ type Secret struct {
 	CreatedAt   string
 	RotatedAt   string
 	Value       string
+	// ToolEnv is true when a command on the machine may read this name.
+	// Model keys never set it. The default is false.
+	ToolEnv bool
 }
 
 // SecretInput is a new vault row. Provider is empty for an agent secret.
@@ -140,6 +143,15 @@ func (s *Store) migrateSecrets() error {
 		return err
 	}
 	return nil
+}
+
+// migrateV35 adds the command opt-in. Existing rows stay off.
+func (s *Store) migrateV35() error {
+	if err := s.ensureColumn("secrets", "tool_env", `ALTER TABLE secrets ADD COLUMN tool_env INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (35) ON CONFLICT(version) DO NOTHING`)
+	return err
 }
 
 func (s *Store) encryptFixtures() error {
@@ -334,14 +346,44 @@ func (s *Store) DeleteSecret(ctx context.Context, userID, id string) error {
 func (s *Store) SecretMeta(ctx context.Context, userID, id string) (Secret, error) {
 	var sec Secret
 	var rotated sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, name, label, provider, created_at, rotated_at
+	var tool int
+	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, name, label, provider, created_at, rotated_at, tool_env
 FROM secrets WHERE id = ? AND user_id = ?`, id, userID).Scan(
-		&sec.ID, &sec.WorkspaceID, &sec.UserID, &sec.Name, &sec.Label, &sec.Provider, &sec.CreatedAt, &rotated)
+		&sec.ID, &sec.WorkspaceID, &sec.UserID, &sec.Name, &sec.Label, &sec.Provider, &sec.CreatedAt, &rotated, &tool)
 	if err != nil {
 		return Secret{}, scanErr(err)
 	}
 	sec.RotatedAt = rotated.String
+	sec.ToolEnv = tool != 0
 	return sec, nil
+}
+
+// SetSecretToolEnv lets a command read this environment secret.
+// A model key or a connection token cannot be marked. The value is not returned.
+func (s *Store) SetSecretToolEnv(ctx context.Context, userID, id string, on bool) error {
+	sec, err := s.SecretMeta(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if sec.Provider != "" {
+		return ErrInvalid
+	}
+	kind, err := s.SecretKind(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if kind != "env" {
+		return ErrInvalid
+	}
+	flag := 0
+	if on {
+		flag = 1
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE secrets SET tool_env = ? WHERE id = ? AND user_id = ? AND provider = '' AND kind = 'env'`, flag, id, userID)
+	if err != nil {
+		return err
+	}
+	return rowsAffected(res)
 }
 
 // SecretKind is env or connection. The value is not returned.
@@ -547,7 +589,7 @@ func (s *Store) grantedSecrets(ctx context.Context, userID, agentID string) ([]S
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT f.id, f.name, f.ciphertext, f.nonce FROM secrets f
+	rows, err := s.db.QueryContext(ctx, `SELECT f.id, f.name, f.ciphertext, f.nonce, f.tool_env FROM secrets f
 JOIN agent_secret_grants g ON g.secret_id = f.id AND g.user_id = f.user_id
 WHERE g.user_id = ? AND g.agent_id = ? AND f.provider = '' AND f.kind = 'env' ORDER BY f.name`, userID, agentID)
 	if err != nil {
@@ -558,7 +600,8 @@ WHERE g.user_id = ? AND g.agent_id = ? AND f.provider = '' AND f.kind = 'env' OR
 	for rows.Next() {
 		var sec SecretFixture
 		var ct, nonce []byte
-		if err := rows.Scan(&sec.ID, &sec.Name, &ct, &nonce); err != nil {
+		var tool int
+		if err := rows.Scan(&sec.ID, &sec.Name, &ct, &nonce, &tool); err != nil {
 			return nil, err
 		}
 		if connect.BlocksGuest(sec.Name) || BlocksSSHSeed(sec.Name) {
@@ -569,6 +612,7 @@ WHERE g.user_id = ? AND g.agent_id = ? AND f.provider = '' AND f.kind = 'env' OR
 			return nil, err
 		}
 		sec.Value = val
+		sec.Tools = tool != 0
 		out = append(out, sec)
 	}
 	return out, rows.Err()

@@ -389,6 +389,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /settings/secrets/item/{id}/reload/{agent}", s.vaultReloadAgent)
 	mux.HandleFunc("POST /settings/secrets/item/{id}/grant", s.vaultGrantAgents)
 	mux.HandleFunc("POST /settings/secrets/item/{id}/move", s.vaultMove)
+	mux.HandleFunc("POST /settings/secrets/item/{id}/commands", s.vaultCommands)
 	mux.HandleFunc("GET /settings/sessions", s.sessionsConfirm)
 	mux.HandleFunc("POST /settings/sessions", s.sessionsEnd)
 

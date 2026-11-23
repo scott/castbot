@@ -20,7 +20,7 @@ The image is Debian bookworm with Python 3.11, castlet, and the Cast runtime fro
 | gh | `2.104.0` official linux-amd64 tarball |
 | doctl | `2.4.0` official linux-amd64 tarball |
 
-The four downloaded archives are checked with SHA256 during the image build. The apt packages are pinned to those versions. Their dependencies come from the Debian archive and are not hashed one by one. The process runs as `nobody`. The image has no agent and no provider key.
+The four downloaded archives are checked with SHA256 during the image build. The apt packages are pinned to those versions. Their dependencies come from the Debian archive and are not hashed one by one. castlet starts as root. A separate process stays root and only starts the Cast runtime as `nobody` and runs commands as `agent`. The rest of castlet continues as `nobody`. The image has no agent and no provider key.
 
 `CAST_AGENT_DIR=/app/agent`, so the built-in git tools look at the agent directory. `GIT_PYTHON_REFRESH=quiet` stays set. Project repositories under `workspace/` are used through `bash` and the `git` binary. Write tools in the castbot catalog stay `ask`. Read tools stay `always-allow`.
 
@@ -28,7 +28,9 @@ The castbot catalog does not include `write_file`, `edit_file`, or `web_fetch` y
 
 ## Writable prefix
 
-`/app/.local` is owned by `nobody` and is not world-writable. These variables point installs there, and `/app/.local/bin` is first on `PATH`:
+`/app/.local` is owned by `nobody`, group `castwork`, and is not world-writable. The runtime account's only group is `castwork`, and `agent` is in that group. The directory is setgid, so files created there stay in that group. A command whose groups are anything else is refused. `/app/.local/bin` is last on `PATH`, after the system directories, so a program installed there cannot shadow `git`, `python`, or castlet. Git treats `/app/agent` and repositories inside it as safe directories, because the runtime and a command share that workspace. Castlet state and the permission copy of `agent.yaml` live next to the workspace, not inside it. Command temporary files use `/app/.agent-tmp`. The runtime asks castlet to start a command. Stopping that request stops the command and the processes it started.
+
+These variables point installs at that prefix:
 
 - `PYTHONUSERBASE=/app/.local` for `pip install --user`. `python3` and `pip` on `PATH` are the image interpreter. The Cast runtime stays at `/opt/cast/bin/python`, which is what castlet starts.
 - `NPM_CONFIG_PREFIX=/app/.local` for `npm install -g`

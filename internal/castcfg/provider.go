@@ -209,6 +209,23 @@ func manifestProviders() []provider {
 	return list
 }
 
+// GuestEnvVars is every provider environment name in the manifest, including
+// keyless and reserved rows. Those names stay on the host. A command inside
+// the machine does not receive them.
+func GuestEnvVars() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range manifestProviders() {
+		name := strings.TrimSpace(p.EnvVar)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
 func keyedManifest() []provider {
 	var out []provider
 	for _, p := range manifestProviders() {

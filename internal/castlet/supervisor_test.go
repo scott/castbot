@@ -254,6 +254,58 @@ func TestDeadRuntimeIsNotReady(t *testing.T) {
 	}
 }
 
+func TestCommandOptInIsOnlyAName(t *testing.T) {
+	echo := runtime.NewEcho(runtime.EchoOptions{Name: "Atlas"})
+	t.Cleanup(echo.Close)
+	up := httptest.NewServer(echo)
+	t.Cleanup(up.Close)
+	raw, sum, err := bundle.Archive("name: Atlas\n", "Reply briefly.\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/bundle"):
+			w.Header().Set("X-Castbot-Bundle-SHA256", sum)
+			w.Header().Set("X-Castbot-Bundle-Version", "1")
+			w.Write(raw)
+		case strings.HasSuffix(r.URL.Path, "/secrets"):
+			w.Write([]byte(`{"secrets":[{"name":"NOTES_TOKEN","value":"fixture-iso-notes"},{"name":"PUBLIC_TOKEN","value":"fixture-public","tools":true}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(cp.Close)
+	dir := t.TempDir()
+	names := filepath.Join(dir, "names")
+	notes := filepath.Join(dir, "notes")
+	public := filepath.Join(dir, "public")
+	script := fmt.Sprintf(`printf '%%s' "$CASTBOT_TOOL_SECRET_NAMES" > %q; printf '%%s' "$NOTES_TOKEN" > %q; printf '%%s' "$PUBLIC_TOKEN" > %q; exec sleep 60`, names, notes, public)
+	sup, err := New(Config{
+		Token:      "agent-token",
+		ControlURL: cp.URL,
+		AllowHTTP:  true,
+		AgentID:    "agt1",
+		AgentDir:   filepath.Join(dir, "agent"),
+		RuntimeURL: up.URL,
+		RuntimeCmd: []string{"/bin/sh", "-c", script},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sup.Close)
+	if err := sup.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !waitHash(t, names, "PUBLIC_TOKEN") {
+		raw, err := os.ReadFile(names)
+		t.Fatalf("names %q %v\nlog: %s", raw, err, sup.logs.Bytes())
+	}
+	if !waitHash(t, notes, "fixture-iso-notes") || !waitHash(t, public, "fixture-public") {
+		t.Fatal("runtime env dropped a granted value")
+	}
+}
+
 func waitHash(t *testing.T, path, want string) bool {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
