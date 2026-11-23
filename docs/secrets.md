@@ -4,6 +4,8 @@ Each person has a vault. A secret is an environment variable for the agents they
 
 The guest receives a granted secret, and the model key for that agent's model, only when it starts or reloads. The value stays in memory and in the runtime environment. It is not written into the bundle, the page, the audit log, or a screenshot.
 
+A command the agent runs does not receive that value. The runtime environment is scrubbed down to an allowlist (`PATH`, `HOME`, `LANG`, `TERM`, `TZ`, the workspace directory, and the install prefixes) before the command starts. Model key names, castlet tokens, and granted secrets are left out. On the secret's page, "Available to commands" copies that one name into the command. It is off until you turn it on. A model key name is never copied, even if the box is checked. The command runs as `agent`, not as the runtime user, and it cannot read `/app/.cast` or `/app/.castlet`.
+
 A connection token is not one of these grants. GitHub and DigitalOcean tokens stay in the vault and are used only by the host proxy. See [connections.md](connections.md).
 
 Replacing, granting, revoking, or deleting reloads each running agent that has the secret. A paused agent is not woken. An agent that is replying, or waiting on an approval, reloads after that finishes. If a reload fails, the new value stays saved and that agent keeps the previous value until a retry works.

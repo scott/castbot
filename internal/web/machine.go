@@ -145,12 +145,13 @@ func (s *Server) writeSecrets(w http.ResponseWriter, r *http.Request, userID str
 	type item struct {
 		Name  string `json:"name"`
 		Value string `json:"value"`
+		Tools bool   `json:"tools,omitempty"`
 	}
 	out := struct {
 		Secrets []item `json:"secrets"`
 	}{Secrets: []item{}}
 	for _, sec := range secrets {
-		out.Secrets = append(out.Secrets, item{Name: sec.Name, Value: sec.Value})
+		out.Secrets = append(out.Secrets, item{Name: sec.Name, Value: sec.Value, Tools: sec.Tools})
 	}
 	if agent, err := s.store.GetAgent(r.Context(), userID, r.PathValue("id")); err == nil {
 		if name, value, missing := s.effectiveModelSecret(r.Context(), userID, agent.Model); missing == "" && name != "" && value != "" {
@@ -158,7 +159,7 @@ func (s *Server) writeSecrets(w http.ResponseWriter, r *http.Request, userID str
 		}
 		pairs := make([]secretPair, 0, len(out.Secrets))
 		for _, sec := range out.Secrets {
-			pairs = append(pairs, secretPair{name: sec.Name, value: sec.Value})
+			pairs = append(pairs, secretPair{name: sec.Name, value: sec.Value, tools: sec.Tools})
 		}
 		sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
 		fp := hashSecretPairs(hmac.New(sha256.New, s.secretFPKey()), pairs)

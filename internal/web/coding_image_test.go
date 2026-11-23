@@ -48,7 +48,8 @@ func TestRuntimeCodingImage(t *testing.T) {
 		"NPM_CONFIG_PREFIX=/app/.local",
 		"GOBIN=/app/.local/bin",
 		"CASTLET_EGRESS_URL=http://127.0.0.1:8090",
-		"PATH=/app/.local/bin:",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/node/bin:/usr/local/go/bin:/opt/cast/bin:/app/.local/bin",
+		"PYTHONPATH=/opt/castbot/tooliso",
 	} {
 		if !strings.Contains(envText, needle) {
 			t.Fatalf("missing %s", needle)
@@ -69,7 +70,7 @@ func TestRuntimeCodingImage(t *testing.T) {
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	chown := exec.Command("docker", "run", "--rm", "--user", "0:0", "-v", dir+":/work", "--entrypoint", "/bin/chown", host.RuntimeImage, "-R", "nobody:nogroup", "/work")
+	chown := exec.Command("docker", "run", "--rm", "--user", "0:0", "-v", dir+":/work", "--entrypoint", "/bin/sh", host.RuntimeImage, "-c", "chown -R nobody:castwork /work && chmod 2770 /work")
 	if out, err := chown.CombinedOutput(); err != nil {
 		t.Fatalf("chown: %s", out)
 	}
@@ -114,7 +115,7 @@ func TestRuntimePrefixSurvivesRestart(t *testing.T) {
 	t.Cleanup(func() {
 		_ = exec.Command("docker", "rm", "-f", name).Run()
 	})
-	install := exec.Command("docker", "exec", "-i", name, "/bin/sh")
+	install := exec.Command("docker", "exec", "-i", name, "/usr/local/bin/castbot-toolrun", "--", "/bin/bash")
 	install.Stdin = strings.NewReader(prefixInstall)
 	if out, err := install.CombinedOutput(); err != nil {
 		t.Fatalf("install: %s", out)
@@ -130,6 +131,7 @@ func TestRuntimePrefixSurvivesRestart(t *testing.T) {
 }
 
 const codingScript = `set -eu
+umask 007
 test "$(id -u)" = "65534"
 test "$(id -un)" = "nobody"
 for c in git curl rg node npm go gh doctl castbot-mcp castbot-git-credential; do

@@ -13,10 +13,13 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/castlet"
+	"github.com/scott/castbot/internal/tooliso"
 )
 
 func main() {
 	log.SetFlags(0)
+	_ = tooliso.SetNonDumpable()
+	syscall.Umask(0o007)
 	cfg := castlet.Config{
 		Addr:       env("CASTLET_ADDR", ":8080"),
 		ControlURL: os.Getenv("CASTBOT_URL"),

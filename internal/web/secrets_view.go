@@ -64,6 +64,7 @@ type vaultRow struct {
 type vaultDetail struct {
 	ID, Name, KindLine, DeleteLine, Count string
 	ShowRevoke                            bool
+	Commands, ToolEnv                     bool
 	Agents                                []vaultAgentRow
 	History                               []vaultHist
 	BannerClass, BannerLead, BannerRest   string
@@ -530,6 +531,10 @@ func (s *Server) vaultItem(r *http.Request, user store.User, id string) (vaultVi
 			d.Move = true
 			d.MoveCopy = connectionStayCopy
 		}
+		if kind == "env" {
+			d.Commands = true
+			d.ToolEnv = sec.ToolEnv
+		}
 	}
 	var granted []store.Agent
 	if sec.Provider == "" {
@@ -901,7 +906,7 @@ func (s *Server) fillAgentSecrets(r *http.Request, user store.User, agent store.
 func (s *Server) panelView(r *http.Request, user store.User, agent store.Agent) (vaultView, error) {
 	ctx := r.Context()
 	v := vaultView{Panel: true}
-	v.Pane.Fine = agent.Name + " reads these as environment variables. Adding, replacing or revoking one reloads " + agent.Name + ", with no new machine. The model key comes with the agent's model. Values stay in your vault in Settings, Secrets."
+	v.Pane.Fine = agent.Name + " reads these as environment variables. A command does not receive the value unless you allow it on the secret. Adding, replacing or revoking one reloads " + agent.Name + ", with no new machine. The model key comes with the agent's model. Values stay in your vault in Settings, Secrets."
 	v.Pane.AddHref = "/agents/" + agent.ID + "?panel=secrets&give=1"
 	if slot, ok := slotForModel(agent.Model); ok {
 		sec, have, err := s.slotKey(ctx, user.ID, slot)

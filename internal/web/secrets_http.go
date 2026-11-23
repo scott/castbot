@@ -9,6 +9,7 @@ import (
 
 	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/store"
+	"github.com/scott/castbot/internal/tooliso"
 )
 
 // connectionStayCopy is the promise for a provider token saved from Settings.
@@ -783,4 +784,34 @@ func (s *Server) vaultRevoke(w http.ResponseWriter, r *http.Request) {
 		back = "/agents/" + agentID + "?panel=secrets"
 	}
 	http.Redirect(w, r, back, http.StatusSeeOther)
+}
+
+func (s *Server) vaultCommands(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	on := r.FormValue("commands") == "1"
+	sec, err := s.store.SecretMeta(r.Context(), user.ID, id)
+	if s.missing(w, err) {
+		return
+	}
+	if on && tooliso.DeniedToolName(sec.Name) {
+		writeText(w, http.StatusBadRequest, "Commands cannot use this secret.\n")
+		return
+	}
+	if err := s.store.SetSecretToolEnv(r.Context(), user.ID, id, on); errors.Is(err, store.ErrInvalid) {
+		writeText(w, http.StatusBadRequest, "Commands cannot use this secret.\n")
+		return
+	} else if s.missing(w, err) {
+		return
+	}
+	s.audit(r.Context(), user, "secret.commands", sec.ID, sec.Name, "", "")
+	ids, err := s.reloadTargets(r, user, sec)
+	if s.missing(w, err) {
+		return
+	}
+	s.reloadAgents(r.Context(), user.ID, sec.ID, ids)
+	http.Redirect(w, r, "/settings/secrets/item/"+id, http.StatusSeeOther)
 }

@@ -34,6 +34,8 @@ type SecretFixture struct {
 	ID    string
 	Name  string
 	Value string
+	// Tools is true when a command may read this name. The default is false.
+	Tools bool
 }
 
 // PutBundle saves a bundle version for one of the caller's agents.

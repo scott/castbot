@@ -31,6 +31,7 @@ import (
 	"github.com/scott/castbot/internal/bundle"
 	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/egresscontract"
+	"github.com/scott/castbot/internal/tooliso"
 )
 
 const (
@@ -102,8 +103,9 @@ type Supervisor struct {
 var errReloadBusy = errors.New("reload in progress")
 
 type secret struct {
-	Name  string
-	Value string
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Tools bool   `json:"tools"`
 }
 
 // RequireHTTPS rejects a control plane URL that is not https.
@@ -300,7 +302,7 @@ func (s *Supervisor) pullSecrets(ctx context.Context, token string) ([]secret, e
 			return nil, errors.New("secret value rejected")
 		}
 		seen[name] = true
-		out = append(out, secret{Name: name, Value: sec.Value})
+		out = append(out, secret{Name: name, Value: sec.Value, Tools: sec.Tools})
 	}
 	return out, nil
 }
@@ -351,6 +353,8 @@ func (s *Supervisor) controlClient() (*http.Client, error) {
 }
 
 func (s *Supervisor) startRuntime(ctx context.Context) error {
+	_ = tooliso.SetNonDumpable()
+	tooliso.PrepareLayout(s.cfg.AgentDir)
 	s.stopRuntime()
 	if len(s.cfg.RuntimeCmd) == 0 {
 		if err := s.waitReady(ctx); err != nil {
@@ -497,6 +501,9 @@ func (s *Supervisor) childEnv() []string {
 		"CASTBOT_BOOTSTRAP_TOKEN": true,
 		"CASTBOT_CA_FILE":         true,
 		"AUTH_TOKEN":              true,
+		tooliso.ToolSecretEnv:     true,
+		"CASTBOT_TOOLRUN_TEST":    true,
+		"CASTBOT_TOOLRUN":         true,
 	}
 	var out []string
 	for _, env := range os.Environ() {
@@ -520,7 +527,20 @@ func (s *Supervisor) childEnv() []string {
 	if runtimeToken != "" {
 		out = append(out, "AUTH_TOKEN="+runtimeToken)
 	}
+	out = tooliso.RewriteRuntimePath(out)
+	names := tooliso.ParseNames(toolNameList(secrets))
+	out = append(out, tooliso.ToolSecretEnv+"="+strings.Join(names, ","))
 	return out
+}
+
+func toolNameList(secrets []secret) string {
+	var names []string
+	for _, sec := range secrets {
+		if sec.Tools {
+			names = append(names, sec.Name)
+		}
+	}
+	return strings.Join(names, ",")
 }
 
 func (s *Supervisor) reload(ctx context.Context) error {

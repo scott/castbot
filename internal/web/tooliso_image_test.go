@@ -1,0 +1,131 @@
+package web
+
+import (
+	"bytes"
+	"context"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/scott/castbot/internal/host"
+)
+
+func TestRuntimeToolIsolation(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	if err := host.BuildRuntime(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("docker", "run", "--rm", "-i", "--network", "none",
+		"-e", "OPENROUTER_API_KEY=fixture-iso-model",
+		"-e", "NOTES_TOKEN=fixture-iso-notes",
+		"-e", "PUBLIC_TOKEN=fixture-public",
+		"-e", "CASTBOT_TOOL_SECRET_NAMES=PUBLIC_TOKEN,OPENROUTER_API_KEY",
+		"-e", "CAST_AGENT_DIR=/app/agent",
+		"--entrypoint", "/bin/sh", host.RuntimeImage)
+	cmd.Stdin = strings.NewReader(toolIsolationScript)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !bytes.Contains(out, []byte("isolation-ok")) {
+		t.Fatalf("isolation: %v\n%s", err, out)
+	}
+	if bytes.Contains(out, []byte("fixture-iso-model")) || bytes.Contains(out, []byte("fixture-iso-notes")) {
+		t.Fatal("tool output contained a secret")
+	}
+}
+
+const toolIsolationScript = `set -eu
+test -x /bin/bash
+test -u /usr/local/bin/castbot-toolrun
+test -g /usr/local/bin/castbot-toolrun
+grep -q '^agent:x:999:998:' /etc/passwd
+umask 077
+printf '%s\n' 'private-file' > /app/.castlet/env
+chmod 600 /app/.castlet/env
+mkdir -p /app/agent /app/.local/bin
+printf '%s\n' 'hello' > /app/agent/note.txt
+ln -s /etc/passwd /app/agent/escape
+ln -s /proc/self/environ /app/agent/envlink
+printf '%s\n' '#!/bin/sh' 'echo planted' > /app/.local/bin/cat
+chmod 755 /app/.local/bin/cat
+python3 - <<'PY' &
+import ctypes, os, time
+libc = ctypes.CDLL(None)
+if libc.prctl(4, 0, 0, 0, 0) != 0:
+    raise SystemExit("prctl")
+open("/tmp/rt.ready", "w").write(str(os.getpid()))
+time.sleep(60)
+PY
+i=0
+while [ ! -s /tmp/rt.ready ]; do
+  i=$((i + 1))
+  if [ "$i" -gt 50 ]; then
+    echo 'runtime did not become non-dumpable' >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+rt=$(cat /tmp/rt.ready)
+if cat /proc/"$rt"/environ >/dev/null 2>&1; then
+  echo 'same user read environ' >&2
+  exit 1
+fi
+/usr/local/bin/castbot-toolrun -- /bin/bash -c "
+  set -eu
+  id -u > /tmp/tool.uid
+  id -un > /tmp/tool.name
+  id -g > /tmp/tool.gid
+  if cat /proc/$rt/environ >/dev/null 2>&1; then
+    echo tool-read-environ
+    exit 1
+  fi
+  if kill -0 $rt 2>/dev/null; then
+    echo could-signal
+    exit 1
+  fi
+  if [ -n \"\${OPENROUTER_API_KEY-}\" ]; then
+    echo saw-model
+    exit 1
+  fi
+  if [ -n \"\${NOTES_TOKEN-}\" ]; then
+    echo saw-notes
+    exit 1
+  fi
+  test \"\${PUBLIC_TOKEN-}\" = fixture-public
+  if cat /app/.castlet/env >/dev/null 2>&1; then
+    echo read-private
+    exit 1
+  fi
+  command -v cat > /tmp/tool.cat
+  printf '%s\n' ok > /tmp/tool.done
+"
+test "$(cat /tmp/tool.uid)" = "999"
+test "$(cat /tmp/tool.name)" = "agent"
+test "$(cat /tmp/tool.gid)" = "998"
+grep -q '^/usr/bin/cat$' /tmp/tool.cat
+test "$(cat /tmp/tool.done)" = "ok"
+/opt/cast/bin/python - <<'PY'
+import os
+os.environ["CAST_AGENT_DIR"] = "/app/agent"
+from cast.tools.paths import resolve_agent_file
+for path in ("/proc/self/environ", "/sys/kernel", "/dev/null", "/app/.castlet/env", "/app/agent/escape", "/app/agent/envlink", "/etc/passwd"):
+    try:
+        resolve_agent_file(path)
+    except OSError:
+        continue
+    raise SystemExit("allowed " + path)
+got = resolve_agent_file("/app/agent/note.txt")
+if not got.endswith("/note.txt"):
+    raise SystemExit("note " + got)
+missing = resolve_agent_file("/app/agent/missing.txt")
+if not missing.endswith("/missing.txt"):
+    raise SystemExit("missing " + missing)
+print("read-ok")
+PY
+echo isolation-ok
+`
