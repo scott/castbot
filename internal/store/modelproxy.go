@@ -15,10 +15,18 @@ func (s *Store) migrateV36() error {
 	return err
 }
 
-// ModelProxy reports whether this user's machine has called models through the host.
-func (s *Store) ModelProxy(ctx context.Context, userID, agentID string) (bool, error) {
+// ModelProxy reports whether this machine has called models through the host.
+// vmID is the calling machine. An empty id reads the live row, which is the
+// token that was not bound to one machine.
+func (s *Store) ModelProxy(ctx context.Context, userID, agentID, vmID string) (bool, error) {
+	q := `SELECT model_proxy FROM agent_vms WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`
+	args := []any{userID, agentID}
+	if vmID != "" {
+		q += ` AND id = ?`
+		args = append(args, vmID)
+	}
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT model_proxy FROM agent_vms WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, userID, agentID).Scan(&n)
+	err := s.db.QueryRowContext(ctx, q, args...).Scan(&n)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -28,10 +36,18 @@ func (s *Store) ModelProxy(ctx context.Context, userID, agentID string) (bool, e
 	return n != 0, nil
 }
 
-// MarkModelProxy records that this user's live machine calls models through the host.
-// Another user's row is left unchanged. The bool is false when no row was updated.
-func (s *Store) MarkModelProxy(ctx context.Context, userID, agentID string) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE agent_vms SET model_proxy = 1 WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`, userID, agentID)
+// MarkModelProxy records that the calling machine calls models through the host.
+// vmID limits the update to that row. Another machine, including one a failed
+// replacement did not replace, is left unchanged. The bool is false when no
+// row was updated.
+func (s *Store) MarkModelProxy(ctx context.Context, userID, agentID, vmID string) (bool, error) {
+	q := `UPDATE agent_vms SET model_proxy = 1 WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL`
+	args := []any{userID, agentID}
+	if vmID != "" {
+		q += ` AND id = ?`
+		args = append(args, vmID)
+	}
+	res, err := s.db.ExecContext(ctx, q, args...)
 	if err != nil {
 		return false, err
 	}

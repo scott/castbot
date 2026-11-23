@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/castcfg"
+	"github.com/scott/castbot/internal/tooliso"
 )
 
 const modelBodyCap = 8 << 20
@@ -69,6 +70,10 @@ func writeModelConfig(agentDir, base string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return err
+	}
+	tooliso.OwnRuntime(dir)
 	var b strings.Builder
 	b.WriteString("providers:\n")
 	for _, p := range castcfg.ProxyProviders() {
@@ -78,7 +83,12 @@ func writeModelConfig(agentDir, base string) error {
 		}
 		fmt.Fprintf(&b, "  %s:\n    base_url: %q\n", name, base)
 	}
-	return os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(b.String()), 0o600)
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		return err
+	}
+	tooliso.OwnRuntime(path)
+	return nil
 }
 
 func configSection(configKey string) string {
@@ -94,7 +104,7 @@ func configSection(configKey string) string {
 }
 
 func (s *Supervisor) egressModel(w http.ResponseWriter, r *http.Request) {
-	if !sameUserPeer(r) || !s.modelGateMatches(r) {
+	if !s.runtimePeer(r) || !s.modelGateMatches(r) {
 		http.NotFound(w, r)
 		return
 	}

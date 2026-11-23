@@ -347,21 +347,29 @@ WHERE token_hash = ? AND agent_id = ? AND kind = 'bootstrap' AND used_at IS NULL
 // UserForAgentToken resolves a per-agent token to its owner.
 // A token for a different agent is not found.
 func (s *Store) UserForAgentToken(ctx context.Context, agentID, plain string) (string, error) {
+	userID, _, err := s.MachineForAgentToken(ctx, agentID, plain)
+	return userID, err
+}
+
+// MachineForAgentToken resolves a per-agent token to its owner and the
+// machine row id stored on that token. The machine id is empty when the
+// token was not bound to a row.
+func (s *Store) MachineForAgentToken(ctx context.Context, agentID, plain string) (string, string, error) {
 	agentID = strings.TrimSpace(agentID)
 	plain = strings.TrimSpace(plain)
 	if agentID == "" || plain == "" {
-		return "", ErrNotFound
+		return "", "", ErrNotFound
 	}
-	var userID string
-	err := s.db.QueryRowContext(ctx, `SELECT user_id FROM agent_tokens WHERE token_hash = ? AND agent_id = ? AND kind = 'agent' AND used_at IS NULL AND revoked_at IS NULL`,
-		tokenHash(plain), agentID).Scan(&userID)
+	var userID, vmID string
+	err := s.db.QueryRowContext(ctx, `SELECT user_id, COALESCE(agent_vm_id, '') FROM agent_tokens WHERE token_hash = ? AND agent_id = ? AND kind = 'agent' AND used_at IS NULL AND revoked_at IS NULL`,
+		tokenHash(plain), agentID).Scan(&userID, &vmID)
 	if err != nil {
-		return "", scanErr(err)
+		return "", "", scanErr(err)
 	}
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return userID, nil
+	return userID, vmID, nil
 }
 
 func tokenHash(plain string) string {

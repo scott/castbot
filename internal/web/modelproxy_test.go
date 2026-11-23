@@ -210,10 +210,10 @@ func TestModelProxyStaysOffAfterTheHeader(t *testing.T) {
 	if code != http.StatusOK || strings.Contains(body, key) || strings.Contains(body, "DIGITALOCEAN_MODEL_ACCESS_KEY") {
 		t.Fatalf("later read %d %s", code, body)
 	}
-	if ok, err := h.st.MarkModelProxy(ctx, other.ID, agent.ID); err != nil || ok {
+	if ok, err := h.st.MarkModelProxy(ctx, other.ID, agent.ID, ""); err != nil || ok {
 		t.Fatalf("other user mark %v %v", ok, err)
 	}
-	seen, err := h.st.ModelProxy(ctx, other.ID, agent.ID)
+	seen, err := h.st.ModelProxy(ctx, other.ID, agent.ID, "")
 	if err != nil || seen {
 		t.Fatalf("other user read %v %v", seen, err)
 	}
@@ -230,6 +230,76 @@ func TestModelProxyStaysOffAfterTheHeader(t *testing.T) {
 	code, body = secretsOf(false)
 	if code != http.StatusOK || !strings.Contains(body, key) {
 		t.Fatalf("new machine %d %s", code, body)
+	}
+}
+
+func TestModelProxyFailedReplaceKeepsTheOldKey(t *testing.T) {
+	const key = "fixture-proxy-value"
+	h := newHarness(t)
+	t.Setenv("CASTBOT_PROVIDER_KEY_DIGITALOCEAN", key)
+	ctx := context.Background()
+	owner, _ := h.account("ada-replace@example.com", "Ada", "correct-horse-1")
+	sec, err := h.st.CreateSection(ctx, owner.ID, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := h.st.CreateAgent(ctx, owner.ID, store.AgentInput{
+		SectionID: sec.ID, Name: "Atlas", Title: "Helper", Status: "ready",
+		Model: "digitalocean/deepseek-3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.BeginVM(ctx, owner.ID, agent.ID, "castbot-old", "example.invalid/castbot-runtime:test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.FinishVM(ctx, owner.ID, agent.ID, "vm-old", "https://old.example", "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	old, err := h.st.LiveVM(ctx, owner.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldBoot, err := h.st.IssueBootstrapFor(ctx, owner.ID, agent.ID, old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldToken, err := h.st.ExchangeBootstrap(ctx, agent.ID, oldBoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, _, err := h.st.BeginReplacement(ctx, owner.ID, agent.ID, "web:ada@example.com", "example.invalid/castbot-runtime:next", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextBoot, err := h.st.IssueBootstrapFor(ctx, owner.ID, agent.ID, row.NewVMID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextToken, err := h.st.ExchangeBootstrap(ctx, agent.ID, nextBoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip := "203.0.113.91:9"
+	code, _, _ := h.do(http.MethodGet, "/api/castlet/agents/"+agent.ID+"/secrets", "", ip, map[string]string{
+		"Authorization":          "Bearer " + nextToken,
+		castcfg.ModelProxyHeader: castcfg.ModelProxyValue,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("replacement secrets %d", code)
+	}
+	if err := h.st.FailReplacement(ctx, owner.ID, row.ID, "create", "failed"); err != nil {
+		t.Fatal(err)
+	}
+	code, body, _ := h.do(http.MethodGet, "/api/castlet/agents/"+agent.ID+"/secrets", "", ip, map[string]string{
+		"Authorization": "Bearer " + oldToken,
+	})
+	if code != http.StatusOK || !strings.Contains(body, key) {
+		t.Fatalf("old machine %d", code)
+	}
+	seen, err := h.st.ModelProxy(ctx, owner.ID, agent.ID, old.ID)
+	if err != nil || seen {
+		t.Fatalf("old flag %v %v", seen, err)
 	}
 }
 

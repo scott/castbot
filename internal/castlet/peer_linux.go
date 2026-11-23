@@ -10,6 +10,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/scott/castbot/internal/tooliso"
 )
 
 // procTCP and procTCP6 are the kernel tables that record a socket's owner.
@@ -28,6 +30,20 @@ func sameUserPeer(r *http.Request) bool {
 		return false
 	}
 	return uid == os.Getuid()
+}
+
+// runtimePeer accepts this process, and the runtime account when this
+// process started that account. Any other caller is refused.
+func (s *Supervisor) runtimePeer(r *http.Request) bool {
+	uid, ok := socketUID(r)
+	if !ok {
+		return false
+	}
+	if uid == os.Getuid() {
+		return true
+	}
+	runtimeUID, ok := tooliso.RuntimeUID()
+	return ok && uid == runtimeUID
 }
 
 func socketUID(r *http.Request) (int, bool) {

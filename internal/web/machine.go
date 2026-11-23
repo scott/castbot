@@ -156,12 +156,17 @@ func (s *Server) writeSecrets(w http.ResponseWriter, r *http.Request, userID str
 	}
 	if agent, err := s.store.GetAgent(r.Context(), userID, r.PathValue("id")); err == nil {
 		header := r.Header.Get(castcfg.ModelProxyHeader) == castcfg.ModelProxyValue
-		sticky, stickyErr := s.store.ModelProxy(r.Context(), userID, agent.ID)
+		plain := bearerToken(r.Header.Get("Authorization"))
+		if plain == "" {
+			plain = bearerToken(r.Header.Get("X-Cast-Authorization"))
+		}
+		_, vmID, _ := s.store.MachineForAgentToken(r.Context(), agent.ID, plain)
+		sticky, stickyErr := s.store.ModelProxy(r.Context(), userID, agent.ID, vmID)
 		if stickyErr != nil {
 			sticky = false
 		}
 		if header {
-			if ok, err := s.store.MarkModelProxy(r.Context(), userID, agent.ID); err == nil && ok {
+			if ok, err := s.store.MarkModelProxy(r.Context(), userID, agent.ID, vmID); err == nil && ok {
 				sticky = true
 			}
 		}
