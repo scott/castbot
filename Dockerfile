@@ -38,8 +38,13 @@ FROM debian:bookworm-slim AS standin
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
+ && sed -i 's/^nobody:x:65534:65534:/nobody:x:65534:998:/' /etc/passwd \
+ && printf '%s\n' 'agent:x:999:998::/app/agent:/usr/sbin/nologin' >> /etc/passwd \
+ && printf '%s\n' 'castwork:x:998:agent' >> /etc/group \
  && mkdir -p /app/agent \
- && chown -R nobody:nogroup /app
+ && chown nobody:nogroup /app \
+ && chown nobody:castwork /app/agent \
+ && chmod 2770 /app/agent
 COPY --from=gobuild /out/castlet /usr/local/bin/castlet
 COPY --from=gobuild /out/cast-standin /usr/local/bin/cast-standin
 ENV CASTLET_RUNTIME="/usr/local/bin/cast-standin --addr 127.0.0.1:8081 --agent /app/agent"

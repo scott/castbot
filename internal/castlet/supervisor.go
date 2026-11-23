@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -179,7 +180,10 @@ func (s *Supervisor) Boot(ctx context.Context) error {
 		s.setBootErr("bundle")
 		return err
 	}
-	tooliso.SealFromBundle(s.cfg.AgentDir, raw)
+	if err := tooliso.SealFromBundle(s.cfg.AgentDir, raw); err != nil {
+		s.setBootErr("bundle")
+		return fmt.Errorf("seal config: %w", err)
+	}
 	secrets, err := s.pullSecrets(ctx, token)
 	if err != nil {
 		s.setBootErr("secrets")
@@ -566,7 +570,9 @@ func (s *Supervisor) reload(ctx context.Context) error {
 	if err := bundle.Install(s.cfg.AgentDir, raw); err != nil {
 		return err
 	}
-	tooliso.SealFromBundle(s.cfg.AgentDir, raw)
+	if err := tooliso.SealFromBundle(s.cfg.AgentDir, raw); err != nil {
+		return fmt.Errorf("seal config: %w", err)
+	}
 	s.mu.Lock()
 	s.secrets = secrets
 	s.version = version

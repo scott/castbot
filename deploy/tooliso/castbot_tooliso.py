@@ -335,6 +335,41 @@ def _mcp_relative(entry):
     return hint, relative
 
 
+def _warn_withheld(env):
+    """A declared name that still has the runtime value is not passed on
+    unless the owner marked it available to commands.
+    """
+    if not isinstance(env, dict):
+        return
+    opted = set()
+    for name in os.environ.get("CASTBOT_TOOL_SECRET_NAMES", "").split(","):
+        name = name.strip()
+        if name:
+            opted.add(name)
+    for key, value in env.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        if key in ("PATH", "HOME", "LANG", "TERM", "TZ") or key.startswith("CASTBOT_") or key.startswith("CASTLET_"):
+            continue
+        if key in opted or os.environ.get(key) != value:
+            continue
+        sys.stderr.write("withheld %s: not available to commands\n" % key)
+
+
+def _patch_mcp_session(mod):
+    cls = getattr(mod, "McpStdioSession", None)
+    orig = getattr(cls, "start", None) if cls is not None else None
+    if not callable(orig):
+        return
+
+    def start(self, *args, **kwargs):
+        env = getattr(self, "env", None)
+        _warn_withheld(env)
+        return orig(self, *args, **kwargs)
+
+    cls.start = start
+
+
 def _patch_mcp(mod):
     if not callable(getattr(mod, "_locate_config", None)):
         return
@@ -387,6 +422,7 @@ _PATCHERS = {
     "cast.tools.list": _patch_file_tool,
     "cast.agent.base": _patch_agent_config,
     "cast.mcp.loader": _patch_mcp,
+    "cast.mcp.session": _patch_mcp_session,
 }
 
 

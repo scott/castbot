@@ -284,6 +284,16 @@ func TestContainerBootsFromBundle(t *testing.T) {
 	if hdr.Name != "note.txt" || string(got) != "remember this" {
 		t.Fatal("memory round trip mismatch")
 	}
+	readCtx, readCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer readCancel()
+	upload, err := guest.OutputAs(readCtx, "999:998", "/bin/cat", "/app/agent/workspace/uploads/hello.txt")
+	if err != nil || strings.TrimSpace(upload) != "hello file" {
+		t.Fatalf("agent upload %q %v", upload, err)
+	}
+	remembered, err := guest.OutputAs(readCtx, "999:998", "/bin/cat", "/app/agent/memory/note.txt")
+	if err != nil || strings.TrimSpace(remembered) != "remember this" {
+		t.Fatalf("agent memory %q %v", remembered, err)
+	}
 
 	logs := castletText(t, http.MethodGet, guest.URL()+"/castlet/logs", token, nil)
 	if !strings.Contains(logs, "stand-in ready name=Atlas") || !strings.Contains(logs, "secrets=1") || !strings.Contains(logs, "turn") {
@@ -401,8 +411,8 @@ func assertNamedSecret(t *testing.T, guest *host.Guest, name, value string) {
 	want := hex.EncodeToString(sum[:])
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	script := `for e in /proc/[0-9]*/environ; do tr '\000' '\n' < "$e"; done | sed -n 's/^` + name + `=//p' | tr -d '\n' | sha256sum`
-	out, err := guest.Output(ctx, "/bin/sh", "-c", script)
+	script := `for e in /proc/[0-9]*/environ; do tr '\000' '\n' < "$e" 2>/dev/null || true; done | sed -n 's/^` + name + `=//p' | tr -d '\n' | sha256sum`
+	out, err := guest.OutputRoot(ctx, "/bin/sh", "-c", script)
 	if err != nil || !strings.Contains(out, want) {
 		t.Fatalf("secret %s was not isolated", name)
 	}
@@ -445,7 +455,7 @@ func assertSecretInEnvOnly(t *testing.T, guest *host.Guest, value string) {
 	want := hex.EncodeToString(sum[:])
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	out, err := guest.Output(ctx, "/bin/sh", "-c", `for e in /proc/[0-9]*/environ; do tr '\000' '\n' < "$e"; done | sed -n 's/^FIXTURE_TOKEN=//p' | tr -d '\n' | sha256sum`)
+	out, err := guest.OutputRoot(ctx, "/bin/sh", "-c", `for e in /proc/[0-9]*/environ; do tr '\000' '\n' < "$e" 2>/dev/null || true; done | sed -n 's/^FIXTURE_TOKEN=//p' | tr -d '\n' | sha256sum`)
 	if err != nil || !strings.Contains(out, want) {
 		t.Fatal("runtime environment is missing the granted secret")
 	}

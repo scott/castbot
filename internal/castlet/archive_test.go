@@ -90,7 +90,7 @@ func TestArchiveKeepsModeSymlinkAndLocal(t *testing.T) {
 		t.Fatalf("tool %q %v", got, err)
 	}
 	info, err := os.Stat(filepath.Join(newAgent, "workspace", "bin", "tool"))
-	if err != nil || info.Mode().Perm() != 0o755 {
+	if err != nil || info.Mode().Perm() != 0o770 {
 		t.Fatalf("mode %v %v", info, err)
 	}
 	target, err := os.Readlink(filepath.Join(newAgent, "workspace", "link"))

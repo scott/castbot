@@ -44,21 +44,55 @@ func StateDir(agentDir string) string {
 // SealFromBundle writes the permission copy of agent.yaml and the MCP
 // config files next to the agent directory. The bytes come from the bundle
 // the control plane sent. The workspace copies are not read again.
-func SealFromBundle(agentDir string, raw []byte) {
+// A config file that is no longer in the bundle is removed.
+func SealFromBundle(agentDir string, raw []byte) error {
 	parent := filepath.Dir(agentDir)
 	if parent == "" || parent == "." || parent == string(filepath.Separator) {
-		return
+		return errors.New("seal path")
 	}
 	files, err := bundle.Files(raw)
 	if err != nil {
-		return
+		return err
 	}
+	wanted := map[string][]byte{}
 	for name, body := range files {
-		if name != "agent.yaml" && !(strings.HasPrefix(name, "mcp/") && strings.HasSuffix(name, ".yaml")) {
+		if name == "agent.yaml" || (strings.HasPrefix(name, "mcp/") && strings.HasSuffix(name, ".yaml") && strings.Count(name, "/") == 1) {
+			wanted[name] = body
+		}
+	}
+	if _, ok := wanted["agent.yaml"]; !ok {
+		return errors.New("seal config: agent.yaml")
+	}
+	for name, body := range wanted {
+		if err := writePrivate(filepath.Join(parent, ".cast", filepath.FromSlash(name)), body); err != nil {
+			return err
+		}
+	}
+	return removeStaleSeal(filepath.Join(parent, ".cast"), wanted)
+}
+
+func removeStaleSeal(dir string, wanted map[string][]byte) error {
+	mcpDir := filepath.Join(dir, "mcp")
+	entries, err := os.ReadDir(mcpDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, ent := range entries {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".yaml") {
 			continue
 		}
-		_ = writePrivate(filepath.Join(parent, ".cast", filepath.FromSlash(name)), body)
+		name := "mcp/" + ent.Name()
+		if _, ok := wanted[name]; ok {
+			continue
+		}
+		if err := os.Remove(filepath.Join(mcpDir, ent.Name())); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
+	return nil
 }
 
 func writePrivate(path string, body []byte) error {

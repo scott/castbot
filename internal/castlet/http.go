@@ -364,7 +364,7 @@ func (s *Supervisor) putFile(w http.ResponseWriter, r *http.Request, root, full 
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(full), 0o770); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -387,6 +387,10 @@ func (s *Supervisor) putFile(w http.ResponseWriter, r *http.Request, root, full 
 	// Rename replaces a symlink entry. It does not follow one.
 	if err := os.Rename(tmp.Name(), full); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := shareAgentFile(s.cfg.AgentDir, full, agentFileMode); err != nil {
+		http.Error(w, "unavailable", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -431,8 +435,12 @@ func (s *Supervisor) exportMemory(w http.ResponseWriter, r *http.Request) {
 
 func (s *Supervisor) importMemory(w http.ResponseWriter, r *http.Request) {
 	root := filepath.Join(s.cfg.AgentDir, "memory")
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o770); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := shareAgentDir(s.cfg.AgentDir, root); err != nil {
+		http.Error(w, "unavailable", http.StatusInternalServerError)
 		return
 	}
 	tr := tar.NewReader(io.LimitReader(r.Body, fileCap+1))
@@ -468,7 +476,7 @@ func (s *Supervisor) importMemory(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(full), 0o770); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
@@ -476,7 +484,7 @@ func (s *Supervisor) importMemory(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		f, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, 0o644)
+		f, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, agentFileMode)
 		if err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
@@ -485,6 +493,10 @@ func (s *Supervisor) importMemory(w http.ResponseWriter, r *http.Request) {
 		cerr := f.Close()
 		if err != nil || cerr != nil || n != hdr.Size {
 			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if err := shareAgentFile(s.cfg.AgentDir, full, agentFileMode); err != nil {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
 			return
 		}
 		used += n

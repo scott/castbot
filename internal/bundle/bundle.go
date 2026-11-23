@@ -161,7 +161,7 @@ func Install(dir string, raw []byte) error {
 		if err := os.MkdirAll(path, 0o770); err != nil {
 			return err
 		}
-		if err := os.Chmod(path, 0o2770); err != nil {
+		if err := syscall.Chmod(path, 0o2770); err != nil {
 			return err
 		}
 	}
@@ -208,17 +208,20 @@ func writeUnder(root, name string, body []byte, mode os.FileMode) error {
 		}
 		next := filepath.Join(cur, part)
 		info, err := os.Lstat(next)
+		mode := bundleDirMode(root, next)
 		if os.IsNotExist(err) {
-			if err := os.Mkdir(next, 0o700); err != nil {
+			if err := os.Mkdir(next, mode); err != nil {
 				return err
 			}
-			if err := os.Chmod(next, 0o700); err != nil {
+			if err := os.Chmod(next, mode); err != nil {
 				return err
 			}
 		} else if err != nil {
 			return err
 		} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return errors.New("bundle path")
+		} else if err := os.Chmod(next, mode); err != nil {
+			return err
 		}
 		cur = next
 	}
@@ -227,6 +230,17 @@ func writeUnder(root, name string, body []byte, mode os.FileMode) error {
 		return errors.New("bundle path")
 	}
 	return writeNoFollow(filepath.Join(cur, part), body, mode)
+}
+
+func bundleDirMode(root, path string) os.FileMode {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return 0o700
+	}
+	if rel == "skills" || strings.HasPrefix(rel, "skills"+string(os.PathSeparator)) {
+		return 0o750
+	}
+	return 0o700
 }
 
 func writeNoFollow(path string, body []byte, mode os.FileMode) error {

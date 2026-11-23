@@ -104,6 +104,14 @@ func TestSkillFileRoundTrip(t *testing.T) {
 	if err != nil || string(got) != extras[agentskill.SkillFile] {
 		t.Fatalf("skill %q %v", got, err)
 	}
+	info, err := os.Stat(filepath.Join(dir, "skills", "create-agent"))
+	if err != nil || info.Mode().Perm()&0o050 != 0o050 || info.Mode().Perm()&0o020 != 0 {
+		t.Fatalf("skill dir %v %v", info, err)
+	}
+	info, err = os.Stat(filepath.Join(dir, agentskill.SkillFile))
+	if err != nil || info.Mode().Perm()&0o040 == 0 || info.Mode().Perm()&0o027 != 0 {
+		t.Fatalf("skill file %v %v", info, err)
+	}
 	routine, err := os.ReadFile(filepath.Join(dir, routinetool.SkillFile))
 	if err != nil || string(routine) != extras[routinetool.SkillFile] {
 		t.Fatalf("routine skill %q %v", routine, err)

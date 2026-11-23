@@ -67,7 +67,7 @@ func TestReplaceCopiesRealCastletBytes(t *testing.T) {
 		t.Fatalf("file %q %v", got, err)
 	}
 	info, err := os.Stat(filepath.Join(newDir, "workspace", "tool"))
-	if err != nil || info.Mode().Perm() != 0o755 {
+	if err != nil || info.Mode().Perm() != 0o770 {
 		t.Fatalf("mode %v %v", info, err)
 	}
 	target, err := os.Readlink(filepath.Join(newDir, "workspace", "link"))

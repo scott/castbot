@@ -176,12 +176,12 @@ out = subprocess.check_output(
 notes, public, added = out.split("\n")
 if notes != "" or public != "fixture-public" or added != "added-ok":
     raise SystemExit("plain " + repr(out))
-path = "/tmp/gitfake"
+path = "/app/agent/gitfake"
 with open(path, "w", encoding="utf-8") as fh:
     fh.write('#!/bin/sh\nprintf "%s\\n%s" "$NOTES_TOKEN" "$PUBLIC_TOKEN"\n')
 os.chmod(path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
 git.cmd.Git.GIT_PYTHON_GIT_EXECUTABLE = path
-text = git.cmd.Git("/tmp").execute(["--version"])
+text = git.cmd.Git("/app/agent").execute([path, "--version"])
 parts = text.split("\n")
 if len(parts) < 2 or parts[0] != "" or parts[1] != "fixture-public":
     raise SystemExit("git " + repr(text))
@@ -197,6 +197,12 @@ import cast.mcp.loader as loader
 found = loader._locate_config(agent, "notes", 0)
 if found is None or not found[1].endswith("/.cast/mcp/notes.yaml"):
     raise SystemExit("mcp " + repr(found))
+os.makedirs("/app/agent/workspace/made/sub", exist_ok=True)
+with open("/app/agent/workspace/made/sub/note.txt", "w", encoding="utf-8") as fh:
+    fh.write("from-runtime")
+seen = subprocess.check_output(["/bin/cat", "/app/agent/workspace/made/sub/note.txt"], text=True)
+if seen.strip() != "from-runtime":
+    raise SystemExit("runtime dir " + repr(seen))
 print("env-ok")
 PY
 echo isolation-ok
