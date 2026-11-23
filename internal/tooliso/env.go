@@ -119,6 +119,18 @@ func envNameOK(name string) bool {
 // ToolEnv is the environment for one command. parent is the runtime
 // environment. extra is the owner opt-in list from ParseNames.
 func ToolEnv(parent []string, extra []string) []string {
+	return toolEnv(parent, extra, false)
+}
+
+// ToolEnvExplicit keeps every parent name that is not denied, then applies
+// the same forced names as ToolEnv. MCP servers pass an allowlisted
+// environment this way. A command that inherits the runtime environment
+// does not.
+func ToolEnvExplicit(parent []string, extra []string) []string {
+	return toolEnv(parent, extra, true)
+}
+
+func toolEnv(parent []string, extra []string, explicit bool) []string {
 	vals := map[string]string{}
 	var order []string
 	put := func(key, value string) {
@@ -140,7 +152,7 @@ func ToolEnv(parent []string, extra []string) []string {
 		if !ok || key == "" || DeniedToolName(key) {
 			continue
 		}
-		if !allowed(key) && !allowedExtra[key] {
+		if !allowed(key) && !allowedExtra[key] && !(explicit && !DeniedToolName(key)) {
 			continue
 		}
 		if strings.ContainsAny(value, "\x00\n\r") {
@@ -159,6 +171,9 @@ func ToolEnv(parent []string, extra []string) []string {
 	put("LOGNAME", ToolUser)
 	put("SHELL", "/bin/bash")
 	put("PATH", commandPath())
+	put("TMPDIR", AgentTmp)
+	put("TMP", AgentTmp)
+	put("TEMP", AgentTmp)
 	var out []string
 	for _, key := range order {
 		out = append(out, key+"="+vals[key])

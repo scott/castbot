@@ -28,7 +28,9 @@ The castbot catalog does not include `write_file`, `edit_file`, or `web_fetch` y
 
 ## Writable prefix
 
-`/app/.local` is owned by `nobody`, group `castwork`, and is not world-writable. `nobody` and `agent` are both in `castwork`, and the directory is setgid, so files they create stay in that group. These variables point installs there. `/app/.local/bin` is last on `PATH`, after the system directories, so a program installed there cannot shadow `git`, `python`, or castlet. Git is told that every directory in this image is safe, because the runtime and a command share the workspace:
+`/app/.local` is owned by `nobody`, group `castwork`, and is not world-writable. The runtime account's only group is `castwork`, and `agent` is in that group. The directory is setgid, so files created there stay in that group. A command whose groups are anything else is refused. `/app/.local/bin` is last on `PATH`, after the system directories, so a program installed there cannot shadow `git`, `python`, or castlet. Git treats `/app/agent` and repositories inside it as safe directories, because the runtime and a command share that workspace. Castlet state and the permission copy of `agent.yaml` live next to the workspace, not inside it. Command temporary files use `/app/.agent-tmp`. The helper that starts a command stays as its parent, so the runtime can stop the command and the processes it starts.
+
+These variables point installs at that prefix:
 
 - `PYTHONUSERBASE=/app/.local` for `pip install --user`. `python3` and `pip` on `PATH` are the image interpreter. The Cast runtime stays at `/opt/cast/bin/python`, which is what castlet starts.
 - `NPM_CONFIG_PREFIX=/app/.local` for `npm install -g`

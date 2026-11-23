@@ -49,6 +49,7 @@ printf '%s\n' 'private-file' > /app/.castlet/env
 chmod 600 /app/.castlet/env
 mkdir -p /app/agent /app/.local/bin
 printf '%s\n' 'hello' > /app/agent/note.txt
+chmod 640 /app/agent/note.txt
 ln -s /etc/passwd /app/agent/escape
 ln -s /proc/self/environ /app/agent/envlink
 printf '%s\n' '#!/bin/sh' 'echo planted' > /app/.local/bin/cat
@@ -80,6 +81,7 @@ fi
   id -u > /tmp/tool.uid
   id -un > /tmp/tool.name
   id -g > /tmp/tool.gid
+  id -G > /tmp/tool.groups
   if cat /proc/$rt/environ >/dev/null 2>&1; then
     echo tool-read-environ
     exit 1
@@ -107,6 +109,19 @@ fi
 test "$(cat /tmp/tool.uid)" = "999"
 test "$(cat /tmp/tool.name)" = "agent"
 test "$(cat /tmp/tool.gid)" = "998"
+test "$(cat /tmp/tool.groups)" = "998"
+/usr/local/bin/castbot-toolrun -- /bin/sh -c 'sleep 30 & sleep 30' &
+hp=$!
+sleep 0.4
+kill -TERM "$hp"
+wait "$hp" || true
+left=0
+for d in /proc/[0-9]*; do
+  if grep -a -q 'sleep' "$d/cmdline" 2>/dev/null && grep -a -q '30' "$d/cmdline" 2>/dev/null; then
+    left=1
+  fi
+done
+test "$left" = 0
 grep -q '^/usr/bin/cat$' /tmp/tool.cat
 test "$(cat /tmp/tool.done)" = "ok"
 /opt/cast/bin/python - <<'PY'
@@ -125,6 +140,13 @@ if not got.endswith("/note.txt"):
 missing = resolve_agent_file("/app/agent/missing.txt")
 if not missing.endswith("/missing.txt"):
     raise SystemExit("missing " + missing)
+from cast.tools.read import read_tool
+body = read_tool.func("/app/agent/note.txt")
+if body.strip() != "hello":
+    raise SystemExit("note body " + body)
+refused = read_tool.func("/proc/self/environ")
+if not refused.startswith("Error"):
+    raise SystemExit("proc " + refused[:40])
 print("read-ok")
 PY
 echo isolation-ok

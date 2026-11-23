@@ -11,6 +11,10 @@ import (
 // or lands in a kernel filesystem.
 var ErrPath = errors.New("path refused")
 
+// AgentTmp is the per-agent temporary directory. File tools may use it.
+// They do not use the shared /tmp directory.
+const AgentTmp = "/app/.agent-tmp"
+
 // DefaultRoots are the directories a file tool may touch besides the
 // agent directory. CASTBOT_READ_ROOTS can add more, separated by colons.
 func DefaultRoots(agentDir string) []string {
@@ -18,7 +22,7 @@ func DefaultRoots(agentDir string) []string {
 	if agentDir != "" {
 		roots = append(roots, agentDir)
 	}
-	roots = append(roots, "/app/.local", "/tmp")
+	roots = append(roots, "/app/.local", AgentTmp)
 	return roots
 }
 

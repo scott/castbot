@@ -2,23 +2,27 @@
 
 The pinned Cast runtime starts a command with the runtime environment and
 opens any absolute path. This module is loaded from sitecustomize before
-that runtime imports its tools. Command isolation is the setuid helper.
-This file does not copy secret values into a command.
+that runtime imports its tools. Commands stay attached to the helper so the
+runtime can stop them. File tools read and list through the helper, which
+opens the path without following a swapped symlink. This file does not copy
+secret values into a command.
 """
 
 from __future__ import annotations
 
-import glob
 import os
+import signal
 import sys
+import threading
 
 _HELPER = os.environ.get("CASTBOT_TOOLRUN", "/usr/local/bin/castbot-toolrun")
 _BLOCKED = ("/proc", "/sys", "/dev", "/app/.cast", "/app/.castlet")
 _INSTALLED = False
+_SPAWN_DEPTH = threading.local()
 
 
 def roots():
-    """Agent directory, install prefix, temp, and CASTBOT_READ_ROOTS."""
+    """Agent directory, install prefix, per-agent temp, and CASTBOT_READ_ROOTS."""
     found = []
     for key in ("CAST_AGENT_PATH", "CAST_AGENT_DIR"):
         value = os.environ.get(key, "").strip()
@@ -30,7 +34,7 @@ def roots():
     if extra:
         found.extend(part for part in extra.split(":") if part)
     else:
-        found.extend(["/app/.local", "/tmp"])
+        found.extend(["/app/.local", "/app/.agent-tmp"])
     return found
 
 
@@ -82,6 +86,28 @@ def allow_path(file_path, allowed):
     raise OSError("path refused")
 
 
+def _helper():
+    return os.environ.get("CASTBOT_TOOLRUN", _HELPER)
+
+
+def _is_helper(argv0):
+    if not isinstance(argv0, str) or argv0 == "":
+        return False
+    return os.path.basename(argv0) == "castbot-toolrun" or argv0 == _helper()
+
+
+def _in_spawn():
+    return getattr(_SPAWN_DEPTH, "n", 0) > 0
+
+
+def _enter_spawn():
+    _SPAWN_DEPTH.n = getattr(_SPAWN_DEPTH, "n", 0) + 1
+
+
+def _leave_spawn():
+    _SPAWN_DEPTH.n = max(0, getattr(_SPAWN_DEPTH, "n", 1) - 1)
+
+
 def _patch_subprocess():
     import subprocess
 
@@ -94,8 +120,15 @@ def _patch_subprocess():
             kwargs.pop("user", None)
             kwargs.pop("group", None)
             kwargs.pop("extra_groups", None)
-            helper = os.environ.get("CASTBOT_TOOLRUN", _HELPER)
-            if shell:
+            explicit = "env" in kwargs and kwargs.get("env") is not None
+            if explicit:
+                env = dict(kwargs["env"])
+                env["CASTBOT_TOOL_EXPLICIT"] = "1"
+                kwargs["env"] = env
+            helper = _helper()
+            if isinstance(args, (list, tuple)) and args and _is_helper(str(args[0])):
+                argv = list(args)
+            elif shell:
                 if isinstance(args, (list, tuple)):
                     script = args[0] if args else ""
                 else:
@@ -104,15 +137,45 @@ def _patch_subprocess():
             elif isinstance(args, str):
                 argv = [helper, "--", args]
             else:
-                argv = [helper, "--", *list(args)]
+                argv = [helper, "--", *list(args or [])]
             kwargs["shell"] = False
-            super().__init__(argv, *popenargs, **kwargs)
+            _enter_spawn()
+            try:
+                super().__init__(argv, *popenargs, **kwargs)
+            finally:
+                _leave_spawn()
+
+        def terminate(self):
+            if self.poll() is not None:
+                return
+            try:
+                super().send_signal(signal.SIGTERM)
+            except ProcessLookupError:
+                return
+
+        def kill(self):
+            # The helper is the process the runtime can signal. It stops the
+            # command group. A direct kill would remove the helper and leave
+            # the group running.
+            self.terminate()
 
     subprocess.Popen = IsolatedPopen
 
 
 def _refuse_exec(*_args, **_kwargs):
     raise OSError("command refused")
+
+
+def _wrap_spawn(real):
+    def wrapped(path, argv, env, *args, **kwargs):
+        if _in_spawn() or real is None:
+            return real(path, argv, env, *args, **kwargs)
+        helper = _helper()
+        tail = list(argv[1:]) if argv else []
+        new_argv = [helper, "--", path, *tail]
+        return real(helper, new_argv, env, *args, **kwargs)
+
+    return wrapped
 
 
 def _patch_os():
@@ -122,9 +185,28 @@ def _patch_os():
         return subprocess.call(command, shell=True)
 
     os.system = _system
-    for name in ("execve", "execv", "execvp", "execvpe", "posix_spawn", "posix_spawnp"):
+    for name in ("execve", "execv", "execvp", "execvpe"):
         if hasattr(os, name):
             setattr(os, name, _refuse_exec)
+    # Python 3.13 starts subprocesses with posix_spawn. Refusing that call
+    # would refuse the helper itself. Direct calls are sent through the helper.
+    for name in ("posix_spawn", "posix_spawnp"):
+        real = getattr(os, name, None)
+        if real is not None:
+            setattr(os, name, _wrap_spawn(real))
+
+
+def _file_bytes(path):
+    import subprocess
+
+    proc = subprocess.run(
+        [_helper(), "--file", "read", "--", path],
+        capture_output=True,
+        timeout=30,
+    )
+    if proc.returncode != 0:
+        raise OSError("path refused")
+    return proc.stdout
 
 
 def _patch_paths(mod):
@@ -132,6 +214,30 @@ def _patch_paths(mod):
         return allow_path(file_path, roots())
 
     mod.resolve_agent_file = resolve
+
+
+def _patch_read(mod):
+    tool = getattr(mod, "read_tool", None)
+    fn = getattr(tool, "func", None)
+    if not callable(fn):
+        return
+
+    def wrapped(file_path, offset=0, limit=100):
+        try:
+            raw = _file_bytes(file_path)
+            text = raw.decode("utf-8", errors="replace")
+        except (OSError, UnicodeError) as exc:
+            return "Error reading file: " + str(exc)
+        lines = text.splitlines(keepends=True)
+        start = offset if isinstance(offset, int) and offset > 0 else 0
+        count = limit if isinstance(limit, int) and limit > 0 else 100
+        end = min(start + count, len(lines))
+        content = "".join(lines[start:end])
+        if end < len(lines):
+            content += "\n... (%d more lines)" % (len(lines) - end)
+        return content
+
+    tool.func = wrapped
 
 
 def _patch_glob(mod):
@@ -144,26 +250,20 @@ def _patch_glob(mod):
             return "Error: pattern is outside the workspace"
         if ".." in pattern.split("/"):
             return "Error: pattern is outside the workspace"
-        agent = getattr(mod, "agent_root", None)
-        root = agent() if callable(agent) else None
-        if not root:
-            root = os.environ.get("CAST_AGENT_PATH") or os.environ.get("CAST_AGENT_DIR") or "/app/agent"
-        try:
-            root = allow_path(root, [root])
-        except OSError:
-            return "Error: pattern is outside the workspace"
-        matches = glob.glob(pattern, root_dir=root, recursive=True)
-        kept = []
-        for match in matches:
-            full = match if os.path.isabs(match) else os.path.join(root, match)
-            try:
-                allow_path(full, [root])
-            except OSError:
-                continue
-            kept.append(match)
-        if not kept:
+        import subprocess
+
+        proc = subprocess.run(
+            [_helper(), "--file", "glob", "--", pattern],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode != 0:
             return "No files found matching pattern"
-        return "\n".join(kept)
+        names = [line for line in proc.stdout.splitlines() if line]
+        if not names:
+            return "No files found matching pattern"
+        return "\n".join(names)
 
     tool.func = wrapped
 
@@ -175,26 +275,48 @@ def _patch_file_tool(mod):
         if not callable(fn):
             continue
 
-        def wrapped(*args, _fn=fn, **kwargs):
-            path = kwargs.get("file_path", kwargs.get("path"))
-            if path is None and args:
-                path = args[0]
-            if isinstance(path, str):
-                try:
-                    allow_path(path, roots())
-                except OSError:
-                    return "Error: path refused"
-            return _fn(*args, **kwargs)
+        def wrapped(*args, **kwargs):
+            # File changes are not opened in the runtime. A later tool can
+            # use the helper; until then the call is refused.
+            return "Error: path refused"
 
         obj.func = wrapped
+
+
+def _patch_agent_config(mod):
+    def _load(self):
+        protected = os.path.join(os.path.dirname(os.path.abspath(self.path)), ".cast", "agent.yaml")
+        config_path = protected if os.path.isfile(protected) else os.path.join(self.path, "agent.yaml")
+        if not os.path.isfile(config_path):
+            return {}
+        import yaml
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as handle:
+                text = handle.read()
+            loaded = yaml.safe_load(text)
+            version = mod.read_agent_yaml_version(text).version
+        except yaml.YAMLError as exc:
+            raise mod.AgentConfigError(str(exc)) from exc
+        if loaded is None:
+            loaded = {}
+        if not isinstance(loaded, dict):
+            raise mod.AgentConfigError("agent.yaml could not be validated")
+        loaded["version"] = version
+        return loaded
+
+    if hasattr(mod, "AgentConfig"):
+        mod.AgentConfig._load_config = _load
 
 
 _PATCHERS = {
     "cast.tools.paths": _patch_paths,
     "cast.tools.glob": _patch_glob,
+    "cast.tools.read": _patch_read,
     "cast.tools.write": _patch_file_tool,
     "cast.tools.edit": _patch_file_tool,
     "cast.tools.list": _patch_file_tool,
+    "cast.agent.base": _patch_agent_config,
 }
 
 
@@ -294,6 +416,8 @@ def _selftest():
         missing = allow_path("missing.txt", [root])
         if not missing.endswith("/missing.txt"):
             raise SystemExit("missing")
+    if not callable(getattr(os, "posix_spawn", None)) and not hasattr(os, "posix_spawn"):
+        pass
     print("tooliso-ok")
 
 

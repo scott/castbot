@@ -179,6 +179,7 @@ func (s *Supervisor) Boot(ctx context.Context) error {
 		s.setBootErr("bundle")
 		return err
 	}
+	tooliso.SealConfig(s.cfg.AgentDir)
 	secrets, err := s.pullSecrets(ctx, token)
 	if err != nil {
 		s.setBootErr("secrets")
@@ -565,6 +566,7 @@ func (s *Supervisor) reload(ctx context.Context) error {
 	if err := bundle.Install(s.cfg.AgentDir, raw); err != nil {
 		return err
 	}
+	tooliso.SealConfig(s.cfg.AgentDir)
 	s.mu.Lock()
 	s.secrets = secrets
 	s.version = version

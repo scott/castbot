@@ -65,12 +65,12 @@ func TestRuntimeCodingImage(t *testing.T) {
 	dir := t.TempDir()
 	t.Cleanup(func() {
 		owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-		_ = exec.Command("docker", "run", "--rm", "--user", "0:0", "-v", dir+":/work", "--entrypoint", "/bin/chown", host.RuntimeImage, "-R", owner, "/work").Run()
+		_ = exec.Command("docker", "run", "--rm", "--user", "0:0", "-v", dir+":/app/agent", "--entrypoint", "/bin/chown", host.RuntimeImage, "-R", owner, "/app/agent").Run()
 	})
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	chown := exec.Command("docker", "run", "--rm", "--user", "0:0", "-v", dir+":/work", "--entrypoint", "/bin/sh", host.RuntimeImage, "-c", "chown -R nobody:castwork /work && chmod 2770 /work")
+	chown := exec.Command("docker", "run", "--rm", "--user", "0:0", "-v", dir+":/app/agent", "--entrypoint", "/bin/sh", host.RuntimeImage, "-c", "chown -R nobody:castwork /app/agent && chmod 2770 /app/agent")
 	if out, err := chown.CombinedOutput(); err != nil {
 		t.Fatalf("chown: %s", out)
 	}
@@ -80,8 +80,8 @@ func TestRuntimeCodingImage(t *testing.T) {
 		"-e", "GH_TOKEN="+codingFixture,
 		"-e", "GITHUB_PERSONAL_ACCESS_TOKEN="+codingFixture,
 		"-e", "DIGITALOCEAN_ACCESS_TOKEN="+codingFixture,
-		"-e", "CAST_AGENT_DIR=/work",
-		"-v", dir+":/work",
+		"-e", "CAST_AGENT_DIR=/app/agent",
+		"-v", dir+":/app/agent",
 		"--entrypoint", "/bin/sh", host.RuntimeImage)
 	cmd.Stdin = strings.NewReader(script)
 	out, err = cmd.CombinedOutput()
@@ -156,7 +156,7 @@ if grep -R -E 'TOKEN|SECRET' /opt/castbot/mcp; then
   echo 'mcp file names a token' >&2
   exit 1
 fi
-cd /work
+cd /app/agent
 git init -b main >/dev/null
 git config user.email fixture@example.com
 git config user.name Fixture

@@ -10,8 +10,10 @@ const (
 )
 
 // SetNonDumpable hides this process's memory and environment from other
-// processes, including ones that share its user. A child keeps the flag
-// until its user id changes.
+// processes, including ones that share its user. Call it after the user id
+// is final. Changing the user id clears the flag, and a setuid exec sets it
+// from the kernel default, so the helper sets it again on the process that
+// stays behind and on the process that execs the command.
 func SetNonDumpable() error {
 	return prctl(prSetDumpable, 0)
 }

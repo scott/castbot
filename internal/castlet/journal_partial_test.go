@@ -15,7 +15,7 @@ func TestPartialTrailingLineStaysReadable(t *testing.T) {
 	if _, err := first.appendJournal(journalEntry{Kind: "reply", Text: "kept"}); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, ".castlet", "journal.jsonl")
+	path := filepath.Join(first.stateDir(), "journal.jsonl")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)

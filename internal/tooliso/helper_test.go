@@ -1,11 +1,15 @@
 package tooliso
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestHelperScrubsTheCommandEnvironment(t *testing.T) {
@@ -46,6 +50,67 @@ func TestHelperScrubsTheCommandEnvironment(t *testing.T) {
 	if strings.Contains(text, "fixture-iso-model") || strings.Contains(text, "fixture-iso-notes") {
 		t.Fatal("command saw a secret")
 	}
+}
+
+func TestHelperStopsTheCommandGroup(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "castbot-toolrun")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/castbot-toolrun")
+	build.Dir = root
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	run := exec.Command(bin, "--", "/bin/sh", "-c", "sleep 30 & sleep 30")
+	run.Env = append(os.Environ(), "CASTBOT_TOOLRUN_TEST=1")
+	if err := run.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if err := run.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- run.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		_ = run.Process.Kill()
+		t.Fatal("helper still running")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if !commandStillRunning("sleep") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("command still running")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func commandStillRunning(name string) bool {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if _, err := strconv.Atoi(entry.Name()); err != nil {
+			continue
+		}
+		raw, err := os.ReadFile("/proc/" + entry.Name() + "/cmdline")
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(raw, []byte(name)) && bytes.Contains(raw, []byte("30")) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPythonPathSelftest(t *testing.T) {

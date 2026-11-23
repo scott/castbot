@@ -51,14 +51,17 @@ ENTRYPOINT ["/usr/local/bin/castlet"]
 FROM python:3.11-slim-bookworm AS runtime
 COPY deploy/runtime-install.sh /tmp/runtime-install.sh
 RUN sh /tmp/runtime-install.sh && rm /tmp/runtime-install.sh \
+ && sed -i 's/^nobody:x:65534:65534:/nobody:x:65534:998:/' /etc/passwd \
  && printf '%s\n' 'agent:x:999:998::/app/agent:/usr/sbin/nologin' >> /etc/passwd \
- && printf '%s\n' 'castwork:x:998:nobody,agent' >> /etc/group \
- && mkdir -p /app/.local/bin /app/.local/share/castbot /app/.local/cache/go-build /app/.local/go/pkg/mod /app/agent /app/.cast /app/.castlet \
+ && printf '%s\n' 'castwork:x:998:agent' >> /etc/group \
+ && mkdir -p /app/.local/bin /app/.local/share/castbot /app/.local/cache/go-build /app/.local/go/pkg/mod /app/agent /app/.cast /app/.castlet /app/.agent-tmp \
  && chown -R nobody:castwork /app/agent /app/.local \
  && find /app/agent /app/.local -type d -exec chmod 2770 {} + \
  && chown nobody:nogroup /app /app/.cast /app/.castlet \
  && chmod 755 /app \
- && chmod 700 /app/.cast /app/.castlet
+ && chmod 700 /app/.cast /app/.castlet \
+ && chown 999:998 /app/.agent-tmp \
+ && chmod 700 /app/.agent-tmp
 COPY --from=gobuild /out/castlet /usr/local/bin/castlet
 COPY --from=gobuild /out/castbot-guest /usr/local/bin/castbot-guest
 COPY --from=gobuild /out/castbot-toolrun /usr/local/bin/castbot-toolrun
@@ -94,9 +97,10 @@ ENV CASTLET_EGRESS_URL=http://127.0.0.1:8090
 # GitPython raises on import when git is absent. The binary is present now.
 ENV GIT_PYTHON_REFRESH=quiet
 ENV CASTLET_RUNTIME="/opt/cast/bin/python -m cast.runtime --agent-path /app/agent --port 8081 --host 127.0.0.1"
-# The runtime and a command share the workspace, so a command may use a
-# repository the runtime prepared.
-RUN git config --system --add safe.directory '*'
+# The runtime and a command share the agent workspace, so git may use a
+# repository the runtime prepared there. Other directories stay untouched.
+RUN git config --system --add safe.directory /app/agent \
+ && git config --system --add safe.directory '/app/agent/*'
 EXPOSE 8080
 USER nobody
 WORKDIR /app
