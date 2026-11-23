@@ -35,6 +35,18 @@ func credential(name string) (*syscall.Credential, error) {
 	}, nil
 }
 
+// RuntimeUID is the runtime account when this process is root.
+func RuntimeUID() (int, bool) {
+	if os.Geteuid() != 0 {
+		return 0, false
+	}
+	cred, err := credential(RuntimeUser)
+	if err != nil {
+		return 0, false
+	}
+	return int(cred.Uid), true
+}
+
 // ApplyRuntime starts cmd as the runtime account when this process is root.
 // The group list is only that account's group. A non-root process is unchanged.
 func ApplyRuntime(cmd *exec.Cmd) error {

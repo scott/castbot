@@ -76,6 +76,8 @@ func (s *Supervisor) ServeEgress(w http.ResponseWriter, r *http.Request) {
 		s.egressRaw(w, r, "/git/")
 	case strings.HasPrefix(r.URL.Path, "/upstream/"):
 		s.egressRaw(w, r, "/upstream/")
+	case strings.HasPrefix(r.URL.Path, "/model/"):
+		s.egressModel(w, r)
 	default:
 		http.NotFound(w, r)
 	}

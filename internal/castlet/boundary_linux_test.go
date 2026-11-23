@@ -156,6 +156,26 @@ func TestAppBoundary(t *testing.T) {
 	}
 	assertSameInodeKept(t, arcOut, arcIn, "kept", "fresh")
 
+	cfgTarget := filepath.Join(root, "cfg-target")
+	if err := os.WriteFile(cfgTarget, []byte("target"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(app, ".cast", "config.yaml")
+	if err := os.Symlink(cfgTarget, cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeModelConfig(agent, "http://127.0.0.1:8090/model/v1"); err != nil {
+		t.Fatal(err)
+	}
+	cfgKept, err := os.ReadFile(cfgTarget)
+	if err != nil || string(cfgKept) != "target" {
+		t.Fatalf("config target %q %v", cfgKept, err)
+	}
+	cfgInfo, err := os.Lstat(cfgPath)
+	if err != nil || cfgInfo.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("config %v %v", cfgInfo, err)
+	}
+
 	hard, _ := os.ReadFile("/proc/sys/fs/protected_hardlinks")
 	sym, _ := os.ReadFile("/proc/sys/fs/protected_symlinks")
 	t.Logf("sysctl %s %s", strings.TrimSpace(string(hard)), strings.TrimSpace(string(sym)))

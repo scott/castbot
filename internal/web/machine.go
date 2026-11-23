@@ -10,6 +10,7 @@ import (
 
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/bundle"
+	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
@@ -154,12 +155,35 @@ func (s *Server) writeSecrets(w http.ResponseWriter, r *http.Request, userID str
 		out.Secrets = append(out.Secrets, item{Name: sec.Name, Value: sec.Value, Tools: sec.Tools})
 	}
 	if agent, err := s.store.GetAgent(r.Context(), userID, r.PathValue("id")); err == nil {
-		if name, value, missing := s.effectiveModelSecret(r.Context(), userID, agent.Model); missing == "" && name != "" && value != "" {
-			out.Secrets = append(out.Secrets, item{Name: name, Value: value})
+		header := r.Header.Get(castcfg.ModelProxyHeader) == castcfg.ModelProxyValue
+		plain := bearerToken(r.Header.Get("Authorization"))
+		if plain == "" {
+			plain = bearerToken(r.Header.Get("X-Cast-Authorization"))
 		}
-		pairs := make([]secretPair, 0, len(out.Secrets))
+		_, vmID, _ := s.store.MachineForAgentToken(r.Context(), agent.ID, plain)
+		sticky, stickyErr := s.store.ModelProxy(r.Context(), userID, agent.ID, vmID)
+		if stickyErr != nil {
+			sticky = false
+		}
+		if header {
+			if ok, err := s.store.MarkModelProxy(r.Context(), userID, agent.ID, vmID); err == nil && ok {
+				sticky = true
+			}
+		}
+		omitKey := header || sticky
+		var modelName, modelValue string
+		if name, value, missing := s.effectiveModelSecret(r.Context(), userID, agent.Model); missing == "" && name != "" && value != "" {
+			modelName, modelValue = name, value
+			if !omitKey {
+				out.Secrets = append(out.Secrets, item{Name: name, Value: value})
+			}
+		}
+		pairs := make([]secretPair, 0, len(out.Secrets)+1)
 		for _, sec := range out.Secrets {
 			pairs = append(pairs, secretPair{name: sec.Name, value: sec.Value, tools: sec.Tools})
+		}
+		if omitKey && modelName != "" {
+			pairs = append(pairs, secretPair{name: modelName, value: modelValue})
 		}
 		sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
 		fp := hashSecretPairs(hmac.New(sha256.New, s.secretFPKey()), pairs)

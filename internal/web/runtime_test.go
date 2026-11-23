@@ -94,12 +94,13 @@ func TestRuntimeImageAndSmoke(t *testing.T) {
 		_ = srv.Shutdown(ctx)
 	})
 	port := ln.Addr().(*net.TCPAddr).Port
-	base := "http://host.docker.internal:" + portString(port) + "/v1"
 
 	t.Setenv("CASTBOT_PROVIDER_KEY_DIGITALOCEAN", key)
 	h := newHarnessWith(t, runtime.NewHTTP("http://127.0.0.1:1"))
 	h.srv.SetDevEcho(false)
 	h.srv.SetExplicitRuntime(true)
+	// The runtime calls the host proxy. Point that proxy at the fixture.
+	h.srv.modelProxyUpstream = "http://127.0.0.1:" + portString(port) + "/v1"
 	ctx := context.Background()
 	owner, secret := h.account("runtime-s07@example.com", "Owner", "correct-horse-1")
 	sec, err := h.st.CreateSection(ctx, owner.ID, "Work")
@@ -134,7 +135,6 @@ func TestRuntimeImageAndSmoke(t *testing.T) {
 		Bootstrap:  bootstrap,
 		CAFile:     ca,
 		Image:      host.RuntimeImage,
-		Env:        []string{"DIGITALOCEAN_INFERENCE_BASE_URL=" + base},
 	})
 	if err != nil {
 		t.Fatal(err)

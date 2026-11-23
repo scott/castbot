@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/bundle"
+	"github.com/scott/castbot/internal/castcfg"
 	"github.com/scott/castbot/internal/connect"
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/tooliso"
@@ -90,6 +91,7 @@ type Supervisor struct {
 	permSession  map[string]string
 	token        string
 	runtimeToken string
+	modelGate    string
 	ready        bool
 	version      string
 	sha          string
@@ -165,6 +167,11 @@ func New(cfg Config) (*Supervisor, error) {
 		return nil, err
 	}
 	s.runtimeToken = hex.EncodeToString(buf)
+	gate := make([]byte, 32)
+	if _, err := rand.Read(gate); err != nil {
+		return nil, err
+	}
+	s.modelGate = hex.EncodeToString(gate)
 	return s, nil
 }
 
@@ -297,6 +304,7 @@ func (s *Supervisor) pullSecrets(ctx context.Context, token string) ([]secret, e
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set(castcfg.ModelProxyHeader, castcfg.ModelProxyValue)
 	res, err := s.do(req)
 	if err != nil {
 		return nil, err
@@ -380,6 +388,7 @@ func (s *Supervisor) startRuntime(ctx context.Context) error {
 			return err
 		}
 	}
+	_ = writeModelConfig(s.cfg.AgentDir, modelProxyBaseURL())
 	s.stopRuntime()
 	if len(s.cfg.RuntimeCmd) == 0 {
 		if err := s.waitReady(ctx); err != nil {
@@ -577,6 +586,7 @@ func (s *Supervisor) childEnv() []string {
 	if runtimeToken != "" {
 		out = append(out, "AUTH_TOKEN="+runtimeToken)
 	}
+	out = applyModelProxy(out, modelProxyBaseURL(), s.modelGate)
 	out = tooliso.RewriteRuntimePath(out)
 	names := tooliso.ParseNames(toolNameList(secrets))
 	out = append(out, tooliso.ToolSecretEnv+"="+strings.Join(names, ","))
