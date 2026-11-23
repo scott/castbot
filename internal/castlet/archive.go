@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/scott/castbot/internal/tooliso"
 )
@@ -330,19 +329,11 @@ func (s *Supervisor) extractEntry(tr *tar.Reader, hdr *tar.Header, limit int64) 
 			return 0, 0, err
 		}
 		mode := fileMode(hdr.Mode)
-		f, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, mode)
-		if err != nil {
-			return 0, 0, err
-		}
-		n, err := io.Copy(f, io.LimitReader(tr, hdr.Size))
-		cerr := f.Close()
-		if err != nil || cerr != nil || n != hdr.Size {
+		n, err := writeFreshStream(filepath.Dir(full), filepath.Base(full), tr, mode, hdr.Size)
+		if err != nil || n != hdr.Size {
 			if err == nil {
 				err = io.ErrUnexpectedEOF
 			}
-			return 0, 0, err
-		}
-		if err := os.Chmod(full, mode); err != nil {
 			return 0, 0, err
 		}
 		if key == "workspace" {

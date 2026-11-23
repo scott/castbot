@@ -26,3 +26,12 @@ func RenameUnder(root, oldRel, newRel string) error { return ErrPath }
 
 // RemoveUnder is refused off Linux.
 func RemoveUnder(root, rel string) error { return ErrPath }
+
+func mkdirNoFollow(path string, mode os.FileMode) error { return ErrPath }
+
+// WriteFresh is refused off Linux.
+func WriteFresh(dir, name string, body []byte, mode uint32) error { return ErrPath }
+
+func listDirNoFollow(path string) ([]os.DirEntry, error) { return nil, ErrPath }
+
+func removeNameNoFollow(dir, name string) error { return ErrPath }

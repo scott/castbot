@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/scott/castbot/internal/bundle"
 )
@@ -19,16 +18,9 @@ func PrepareLayout(agentDir string) {
 		return
 	}
 	for _, name := range []string{".cast", ".castlet"} {
-		dir := filepath.Join(parent, name)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			continue
-		}
-		_ = os.Chmod(dir, 0o700)
-		OwnRuntime(dir)
+		_ = mkdirNoFollow(filepath.Join(parent, name), 0o700)
 	}
-	if err := os.MkdirAll(StateDir(agentDir), 0o700); err == nil {
-		_ = os.Chmod(StateDir(agentDir), 0o700)
-	}
+	_ = mkdirNoFollow(StateDir(agentDir), 0o700)
 }
 
 // StateDir is castlet state for one agent. It sits outside the agent
@@ -74,7 +66,7 @@ func SealFromBundle(agentDir string, raw []byte) error {
 
 func removeStaleSeal(dir string, wanted map[string][]byte) error {
 	mcpDir := filepath.Join(dir, "mcp")
-	entries, err := os.ReadDir(mcpDir)
+	entries, err := listDirNoFollow(mcpDir)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -89,7 +81,7 @@ func removeStaleSeal(dir string, wanted map[string][]byte) error {
 		if _, ok := wanted[name]; ok {
 			continue
 		}
-		if err := os.Remove(filepath.Join(mcpDir, ent.Name())); err != nil && !os.IsNotExist(err) {
+		if err := removeNameNoFollow(mcpDir, ent.Name()); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
@@ -98,33 +90,9 @@ func removeStaleSeal(dir string, wanted map[string][]byte) error {
 
 func writePrivate(path string, body []byte) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	name := filepath.Base(path)
+	if err := mkdirNoFollow(dir, 0o700); err != nil {
 		return err
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return err
-	}
-	OwnRuntime(dir)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
-	if err != nil && (errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EEXIST)) {
-		if rm := os.Remove(path); rm != nil && !os.IsNotExist(rm) {
-			return rm
-		}
-		f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
-	}
-	if err != nil {
-		return err
-	}
-	if _, werr := f.Write(body); werr != nil {
-		f.Close()
-		return werr
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return err
-	}
-	OwnRuntime(path)
-	return nil
+	return WriteFresh(dir, name, body, 0o600)
 }

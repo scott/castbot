@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/user"
@@ -17,8 +18,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/scott/castbot/internal/agentskill"
 	"github.com/scott/castbot/internal/grouptool"
@@ -252,27 +256,50 @@ func bundleDirMode(root, path string) os.FileMode {
 	return 0o700
 }
 
+var writeSeq atomic.Uint64
+
+// writeNoFollow writes body to a new inode and renames it onto path.
+// An existing inode is not modified. The final name is not followed.
 func writeNoFollow(path string, body []byte, mode os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
-	if err != nil && (errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EEXIST)) {
-		if rm := os.Remove(path); rm != nil && !os.IsNotExist(rm) {
-			return rm
-		}
-		f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
+	dir, name := filepath.Split(path)
+	if dir == "" {
+		dir = "."
 	}
+	name = strings.TrimSuffix(name, "/")
+	if name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
+		return errors.New("path")
+	}
+	parent, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return err
 	}
+	defer parent.Close()
+	tmp := fmt.Sprintf(".castbot-%d-%d", os.Getpid(), writeSeq.Add(1))
+	fd, err := unix.Openat(int(parent.Fd()), tmp, unix.O_CREAT|unix.O_EXCL|unix.O_WRONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(mode.Perm()))
+	if err != nil {
+		return err
+	}
+	f := os.NewFile(uintptr(fd), tmp)
 	if _, werr := f.Write(body); werr != nil {
 		f.Close()
+		_ = unix.Unlinkat(int(parent.Fd()), tmp, 0)
 		return werr
 	}
 	if err := syscall.Fchmod(int(f.Fd()), uint32(mode.Perm())); err != nil {
 		f.Close()
+		_ = unix.Unlinkat(int(parent.Fd()), tmp, 0)
 		return err
 	}
 	shareCastwork(int(f.Fd()))
-	return f.Close()
+	if err := f.Close(); err != nil {
+		_ = unix.Unlinkat(int(parent.Fd()), tmp, 0)
+		return err
+	}
+	if err := unix.Renameat(int(parent.Fd()), tmp, int(parent.Fd()), name); err != nil {
+		_ = unix.Unlinkat(int(parent.Fd()), tmp, 0)
+		return err
+	}
+	return nil
 }
 
 // fchmodOwned changes a directory this process owns. A directory owned by

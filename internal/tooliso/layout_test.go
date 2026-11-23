@@ -66,3 +66,37 @@ func TestSealUsesTheBundleBytes(t *testing.T) {
 		t.Fatal("seal succeeded on a blocked path")
 	}
 }
+
+func TestSealReplacesAnExtraLink(t *testing.T) {
+	root := t.TempDir()
+	agent := filepath.Join(root, "agent")
+	if err := os.MkdirAll(agent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, _, err := bundle.Archive("name: Atlas\n", "Be brief.\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := filepath.Join(root, "kept")
+	if err := os.WriteFile(kept, []byte("kept"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".cast"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sealed := filepath.Join(root, ".cast", "agent.yaml")
+	if err := os.Link(kept, sealed); err != nil {
+		t.Fatal(err)
+	}
+	if err := SealFromBundle(agent, raw); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(kept)
+	if err != nil || string(got) != "kept" {
+		t.Fatalf("kept %q %v", got, err)
+	}
+	body, err := os.ReadFile(sealed)
+	if err != nil || !strings.Contains(string(body), "name: Atlas") {
+		t.Fatalf("sealed %q %v", body, err)
+	}
+}

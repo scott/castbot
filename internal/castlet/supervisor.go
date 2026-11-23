@@ -97,8 +97,23 @@ type Supervisor struct {
 	egressAt     time.Time
 	egressView   egresscontract.Status
 	proc         *exec.Cmd
-	procDone     chan struct{}
+	procDone     <-chan struct{}
+	host         *tooliso.RuntimeHost
 	bootErr      string
+}
+
+// UseRuntimeHost sends runtime output to the log and starts the runtime
+// through the privileged process.
+func (s *Supervisor) UseRuntimeHost(h *tooliso.RuntimeHost) {
+	s.mu.Lock()
+	s.host = h
+	s.mu.Unlock()
+	if h == nil || h.Logs() == nil {
+		return
+	}
+	go func() {
+		_, _ = io.Copy(s.logs, h.Logs())
+	}()
 }
 
 var errReloadBusy = errors.New("reload in progress")
@@ -360,7 +375,7 @@ func (s *Supervisor) controlClient() (*http.Client, error) {
 func (s *Supervisor) startRuntime(ctx context.Context) error {
 	_ = tooliso.SetNonDumpable()
 	tooliso.PrepareLayout(s.cfg.AgentDir)
-	if os.Geteuid() == 0 {
+	if s.host == nil && os.Geteuid() == 0 {
 		if err := tooliso.EnsureServe(ctx); err != nil {
 			return err
 		}
@@ -376,20 +391,34 @@ func (s *Supervisor) startRuntime(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil
 	}
-	cmd := exec.Command(s.cfg.RuntimeCmd[0], s.cfg.RuntimeCmd[1:]...)
-	cmd.Env = s.childEnv()
-	cmd.Stdout = s.logs
-	cmd.Stderr = s.logs
-	if err := tooliso.ApplyRuntime(cmd); err != nil {
-		return err
+	var cmd *exec.Cmd
+	var done <-chan struct{}
+	if s.host != nil {
+		d, err := s.host.Start(s.childEnv())
+		if err != nil {
+			return err
+		}
+		done = d
+	} else {
+		cmd = exec.Command(s.cfg.RuntimeCmd[0], s.cfg.RuntimeCmd[1:]...)
+		cmd.Env = s.childEnv()
+		cmd.Stdout = s.logs
+		cmd.Stderr = s.logs
+		if err := tooliso.ApplyRuntime(cmd); err != nil {
+			return err
+		}
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		ch := make(chan struct{})
+		done = ch
+		go func() {
+			_ = cmd.Wait()
+			close(ch)
+		}()
 	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	done := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(done)
+	go func(done <-chan struct{}) {
+		<-done
 		s.mu.Lock()
 		if s.procDone == done {
 			s.ready = false
@@ -398,7 +427,7 @@ func (s *Supervisor) startRuntime(ctx context.Context) error {
 			}
 		}
 		s.mu.Unlock()
-	}()
+	}(done)
 	s.mu.Lock()
 	s.proc = cmd
 	s.procDone = done
@@ -428,21 +457,29 @@ func (s *Supervisor) stopRuntime() {
 	s.mu.Lock()
 	cmd := s.proc
 	done := s.procDone
+	host := s.host
 	s.proc = nil
 	s.procDone = nil
 	s.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
-		return
+	if host != nil {
+		_ = host.Stop()
 	}
-	_ = cmd.Process.Signal(syscall.SIGTERM)
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+	}
 	if done == nil {
 		return
 	}
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		_ = cmd.Process.Kill()
-		<-done
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
 	}
 }
 

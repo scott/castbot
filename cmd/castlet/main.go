@@ -18,6 +18,10 @@ import (
 
 func main() {
 	log.SetFlags(0)
+	if len(os.Args) > 1 && os.Args[1] == tooliso.SupervisorArg {
+		tooliso.RunSupervisor()
+		return
+	}
 	_ = tooliso.SetNonDumpable()
 	syscall.Umask(0o077)
 	cfg := castlet.Config{
@@ -36,10 +40,28 @@ func main() {
 	if err := castlet.RequireHTTPS(cfg.ControlURL); err != nil {
 		log.Fatal("castlet needs an https control plane URL")
 	}
+	var host *tooliso.RuntimeHost
+	if os.Geteuid() == 0 {
+		if err := tooliso.PrepareApp(cfg.AgentDir); err != nil {
+			log.Fatal("castlet did not start")
+		}
+		if len(cfg.RuntimeCmd) > 0 {
+			started, err := tooliso.StartRuntimeHost(cfg.RuntimeCmd)
+			if err != nil {
+				log.Fatal("castlet did not start")
+			}
+			host = started
+			defer host.Close()
+		}
+		if err := tooliso.DropToRuntime(); err != nil {
+			log.Fatal("castlet did not start")
+		}
+	}
 	sup, err := castlet.New(cfg)
 	if err != nil {
 		log.Fatal("castlet did not start")
 	}
+	sup.UseRuntimeHost(host)
 	egressAddr, err := castlet.LoopbackAddr(env("CASTLET_EGRESS_ADDR", "127.0.0.1:8090"))
 	if err != nil {
 		log.Fatal("castlet egress must listen on 127.0.0.1")

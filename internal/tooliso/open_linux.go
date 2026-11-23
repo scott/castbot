@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -338,6 +340,115 @@ func walkUnder(dir *os.File, rel, pattern string, out *[]string) error {
 		}
 	}
 	return nil
+}
+
+var freshSeq atomic.Uint64
+
+func freshName() string {
+	return fmt.Sprintf(".castbot-%d-%d", os.Getpid(), freshSeq.Add(1))
+}
+
+// mkdirNoFollow creates path and any missing parents.
+// A symlink component is an error. An existing directory is left in place.
+func mkdirNoFollow(path string, mode os.FileMode) error {
+	path = filepath.Clean(path)
+	if path == "" || path == "." || path == string(filepath.Separator) {
+		return errors.New("path")
+	}
+	parent := filepath.Dir(path)
+	name := filepath.Base(path)
+	if name == "" || name == "." || name == ".." || parent == path {
+		return errors.New("path")
+	}
+	if parent != string(filepath.Separator) {
+		if err := mkdirNoFollow(parent, mode); err != nil {
+			return err
+		}
+	}
+	dir, err := os.OpenFile(parent, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	var st unix.Stat_t
+	err = unix.Fstatat(int(dir.Fd()), name, &st, unix.AT_SYMLINK_NOFOLLOW)
+	if err == nil {
+		if st.Mode&unix.S_IFMT != unix.S_IFDIR {
+			return errors.New("path")
+		}
+		return nil
+	}
+	if !errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	if err := unix.Mkdirat(int(dir.Fd()), name, uint32(mode.Perm())); err != nil {
+		return err
+	}
+	fd, err := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	return unix.Fchmod(fd, uint32(mode.Perm()))
+}
+
+// WriteFresh writes body to a new inode in dir and renames it to name.
+// An existing inode is not modified. name is not followed.
+func WriteFresh(dir, name string, body []byte, mode uint32) error {
+	if name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
+		return ErrPath
+	}
+	parent, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	tmp := freshName()
+	fd, err := unix.Openat(int(parent.Fd()), tmp, unix.O_CREAT|unix.O_EXCL|unix.O_WRONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, mode)
+	if err != nil {
+		return err
+	}
+	f := os.NewFile(uintptr(fd), tmp)
+	if _, err := f.Write(body); err != nil {
+		f.Close()
+		_ = unix.Unlinkat(int(parent.Fd()), tmp, 0)
+		return err
+	}
+	if err := unix.Fchmod(int(f.Fd()), mode); err != nil {
+		f.Close()
+		_ = unix.Unlinkat(int(parent.Fd()), tmp, 0)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = unix.Unlinkat(int(parent.Fd()), tmp, 0)
+		return err
+	}
+	if err := unix.Renameat(int(parent.Fd()), tmp, int(parent.Fd()), name); err != nil {
+		_ = unix.Unlinkat(int(parent.Fd()), tmp, 0)
+		return err
+	}
+	return nil
+}
+
+func listDirNoFollow(path string) ([]os.DirEntry, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return f.ReadDir(-1)
+}
+
+func removeNameNoFollow(dir, name string) error {
+	if name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
+		return ErrPath
+	}
+	parent, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	return unix.Unlinkat(int(parent.Fd()), name, 0)
 }
 
 func matchGlob(pattern, name string) bool {
