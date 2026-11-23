@@ -29,17 +29,17 @@ func (s *Store) StopRun(ctx context.Context, userID, runID string, started bool)
 	if !stopStatus(run.Status, started) {
 		return run, "", false, nil
 	}
-	text, err := s.runTextTx(ctx, tx, runID)
+	text, steps, err := s.runTextTx(ctx, tx, runID)
 	if err != nil {
 		return Run{}, "", false, err
 	}
 	stamp := s.stamp(s.Now())
 	if strings.TrimSpace(text) != "" {
-		if err := s.insertRunMessage(ctx, tx, run, "agent", run.AgentID, text, "web", stamp); err != nil {
+		if err := s.insertRunMessage(ctx, tx, run, "agent", run.AgentID, text, steps, "web", stamp); err != nil {
 			return Run{}, "", false, err
 		}
 	}
-	if err := s.insertRunMessage(ctx, tx, run, "system", run.AgentID, StoppedLine, "notice", stamp); err != nil {
+	if err := s.insertRunMessage(ctx, tx, run, "system", run.AgentID, StoppedLine, "", "notice", stamp); err != nil {
 		return Run{}, "", false, err
 	}
 	clause := `status = 'queued'`
@@ -100,13 +100,13 @@ func stopStatus(status string, started bool) bool {
 	return status == "queued"
 }
 
-func (s *Store) runTextTx(ctx context.Context, tx *sql.Tx, runID string) (string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT payload_json FROM run_events WHERE run_id = ? AND kind = 'text' ORDER BY seq`, runID)
+func (s *Store) runTextTx(ctx context.Context, tx *sql.Tx, runID string) (string, string, error) {
+	chunks, err := textChunksTx(ctx, tx, runID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	defer rows.Close()
-	return joinRunText(rows)
+	text := clipReply(strings.Join(chunks, ""))
+	return text, stepsJSON(chunks, text), nil
 }
 
 func joinRunText(rows *sql.Rows) (string, error) {
@@ -144,13 +144,13 @@ func clipReply(body string) string {
 	return body[:cut]
 }
 
-func (s *Store) insertRunMessage(ctx context.Context, tx *sql.Tx, run Run, authorKind, authorID, body, origin, stamp string) error {
+func (s *Store) insertRunMessage(ctx context.Context, tx *sql.Tx, run Run, authorKind, authorID, body, steps, origin, stamp string) error {
 	id, err := newID()
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, run_id, origin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, run.WorkspaceID, run.UserID, run.ThreadID, authorKind, authorID, body, run.ID, origin, stamp)
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, steps_md, run_id, origin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, run.WorkspaceID, run.UserID, run.ThreadID, authorKind, authorID, body, steps, run.ID, origin, stamp)
 	return err
 }
 

@@ -509,23 +509,35 @@ func (s *Server) calmLive(ctx context.Context, user store.User, runRow store.Run
 }
 
 func (s *Server) writeMarkdownProgress(fw *frameWriter, st *liveSend, ev store.RunEvent) error {
-	before := st.fold.apply(ev)
-	through := st.fold.body()
+	before, beforeBeats := st.fold.apply(ev)
+	answer := st.fold.answer()
+	beats := st.fold.beats()
+	full := st.fold.body()
 	prev, _ := md.Split(before)
-	closed, tail := md.Split(through)
+	closed, tail := md.Split(answer)
+	if len(beats) != beforeBeats {
+		logHTML := string(beatsHTML(beats, false))
+		if len(prev) > 0 {
+			logHTML += `<div id="md-` + html.EscapeString(st.run.ID) + `" hx-swap-oob="innerHTML"></div>`
+			prev = nil
+		}
+		if err := fw.write("log", logHTML); err != nil {
+			return err
+		}
+	}
 	out, elapsed := s.activityNow(st)
 	inner := ""
 	if strings.TrimSpace(tail.Raw) != "" {
 		inner = md.RenderTail(tail)
 	}
 	if out.HideThread {
-		if inner == "" && strings.TrimSpace(through) != "" {
+		if inner == "" && strings.TrimSpace(full) != "" {
 			inner = `<span class="caret" aria-hidden="true"></span>`
 		}
 	} else {
 		inner = strings.ReplaceAll(inner, `<span class="caret" aria-hidden="true"></span>`, "")
 	}
-	immediate := len(closed) > len(prev) || ev.Kind == "tool" || st.pending
+	immediate := len(closed) > len(prev) || ev.Kind == "tool" || st.pending || len(beats) != beforeBeats
 	if err := st.emitTail(fw.w, inner, immediate); err != nil {
 		return err
 	}

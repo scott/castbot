@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"html"
 	"html/template"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/scott/castbot/internal/md"
 	"github.com/scott/castbot/internal/store"
+	"github.com/scott/castbot/internal/turn"
 )
 
 func fillMessage(v *msgView) {
@@ -23,6 +25,9 @@ func fillMessage(v *msgView) {
 		v.HTML = template.HTML(md.LinkPlain(v.Text))
 	case "agent":
 		v.Copy = base64.StdEncoding.EncodeToString([]byte(v.Body))
+		if len(v.Steps) > 0 {
+			v.Log = beatsHTML(v.Steps, true)
+		}
 		if strings.TrimSpace(v.Body) == "" {
 			return
 		}
@@ -154,7 +159,9 @@ func (s *Server) paintLive(ctx context.Context, user store.User, row store.Run, 
 	if errText == "" {
 		errText = row.Error
 	}
-	closed, tail := md.Split(text)
+	flush := row.Status == "failed" || row.Status == "stopped" || row.Status == "done"
+	beats, answer := speakFrom(events, flush)
+	closed, tail := md.Split(answer)
 	var blocks strings.Builder
 	for _, block := range closed {
 		blocks.WriteString(md.Render(block.Raw))
@@ -181,15 +188,77 @@ func (s *Server) paintLive(ctx context.Context, user store.User, row store.Run, 
 	return liveView{
 		RunID: row.ID, Color: agent.Color, Letter: agent.Letter, CSRF: csrf,
 		AgentID: agent.ID, AgentName: agent.Name, After: last,
-		Text: text, Error: errText,
-		HTML:      template.HTML(md.Render(text)),
+		Text: answer, Error: errText,
+		HTML:      template.HTML(md.Render(answer)),
 		Blocks:    template.HTML(blocks.String()),
 		Tail:      template.HTML(tailWrap(row.ID, inner)),
 		Act:       template.HTML(actSlotHTML(row.ID, actRowHTML(out, elapsed, stopID, csrf), actHidden(out, stopID))),
 		Tools:     template.HTML(tools),
+		Log:       beatsHTML(beats, flush),
 		CalmTitle: calm.Title, CalmLine: calm.Line, CalmRetry: calm.Retry, CalmSecond: calm.Second,
 		CalmWake: calm.Wake,
 	}
+}
+
+// speakFrom cuts progress lines out of the text events.
+// flush keeps a token that was still waiting for the next chunk.
+func speakFrom(events []store.RunEvent, flush bool) (beats []string, answer string) {
+	var sp turn.Splitter
+	for _, ev := range events {
+		if ev.Kind != "text" {
+			continue
+		}
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal([]byte(ev.Payload), &payload) == nil {
+			sp.Add(payload.Text)
+		}
+	}
+	if flush {
+		sp.Flush()
+	}
+	return sp.Beats(), sp.Answer()
+}
+
+// beatsHTML is the progress log. A finished reply collapses it.
+func beatsHTML(lines []string, done bool) template.HTML {
+	var shown []string
+	for _, line := range lines {
+		line = strings.Join(strings.Fields(line), " ")
+		if line != "" {
+			shown = append(shown, line)
+		}
+	}
+	if len(shown) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	if done {
+		b.WriteString(`<details class="step-log"><summary>`)
+		if len(shown) == 1 {
+			b.WriteString("1 step")
+		} else {
+			b.WriteString(strconv.Itoa(len(shown)))
+			b.WriteString(" steps")
+		}
+		b.WriteString(`</summary>`)
+	}
+	b.WriteString(`<ol class="beats"`)
+	if !done {
+		b.WriteString(` aria-label="Progress"`)
+	}
+	b.WriteString(`>`)
+	for _, line := range shown {
+		b.WriteString(`<li>`)
+		b.WriteString(html.EscapeString(line))
+		b.WriteString(`</li>`)
+	}
+	b.WriteString(`</ol>`)
+	if done {
+		b.WriteString(`</details>`)
+	}
+	return template.HTML(b.String())
 }
 
 func foldRun(events []store.RunEvent) (text string, last int, tools string, fact toolFact, errText string) {

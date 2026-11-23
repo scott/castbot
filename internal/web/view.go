@@ -69,8 +69,9 @@ type msgView struct {
 	Href, Pill, PillClass, Sub                                  string
 	Chips                                                       []chipView
 	PathLines                                                   []string
+	Steps                                                       []string
 	File                                                        *fileLinkView
-	HTML                                                        template.HTML
+	HTML, Log                                                   template.HTML
 	Copy                                                        string
 }
 
@@ -111,7 +112,7 @@ type liveView struct {
 	After                                           int
 	Cards                                           []cardView
 	SecretCards                                     []cardView
-	HTML, Blocks, Tail, Act, Tools, Side            template.HTML
+	HTML, Blocks, Tail, Act, Tools, Side, Log       template.HTML
 	CalmTitle, CalmLine, CalmRetry, CalmSecond      string
 	CalmWake                                        bool
 	Note                                            string

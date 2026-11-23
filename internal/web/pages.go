@@ -11,6 +11,7 @@ import (
 
 	"github.com/scott/castbot/internal/auth"
 	"github.com/scott/castbot/internal/store"
+	"github.com/scott/castbot/internal/turn"
 )
 
 // rosterNote lists the other agents a delegating agent can ask.
@@ -820,7 +821,13 @@ func presentMessages(msgs []store.Message, agent agentView, now time.Time, loc *
 	prev := ""
 	for _, m := range msgs {
 		day := dayLabel(m.CreatedAt, now, loc)
-		v := msgView{ID: m.ID, Author: m.AuthorKind, Body: m.Body, Text: m.Body, Stamp: clockLabel(m.CreatedAt, loc), Day: day, At: m.CreatedAt, Origin: m.Origin}
+		body := m.Body
+		var steps []string
+		if m.AuthorKind == "agent" {
+			steps = turn.DecodeSteps(m.Steps)
+			body = turn.Visible(m.Body, steps)
+		}
+		v := msgView{ID: m.ID, Author: m.AuthorKind, Body: body, Text: body, Stamp: clockLabel(m.CreatedAt, loc), Day: day, At: m.CreatedAt, Origin: m.Origin, Steps: steps}
 		if m.Origin == "routine" && m.AuthorKind == "user" {
 			v.Prompt = true
 		}

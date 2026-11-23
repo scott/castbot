@@ -226,6 +226,11 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .tool .ts { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 650; white-space: nowrap; }
 .tool .ts.ok { color: var(--ok); } .tool .ts.wait { color: var(--acc); } .tool .ts.err { color: var(--err); }
 .tools { display: grid; gap: 6px; }
+.beats { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; min-width: 0; }
+.beats li { font-size: 13px; line-height: 1.45; color: var(--tx3); overflow-wrap: anywhere; }
+.step-log { min-width: 0; }
+.step-log summary { cursor: pointer; font-size: 12.5px; font-weight: 650; color: var(--tx3); }
+.step-log .beats { margin-top: 6px; }
 
 /* approval card */
 .appr { border: 1px solid var(--acc-line); background: linear-gradient(180deg, var(--acc-soft), transparent 70%), var(--surf); border-radius: var(--r2); padding: 16px; display: grid; gap: 12px; }
@@ -1373,7 +1378,7 @@ button.sclose, a.sclose { font: inherit; cursor: pointer; text-decoration: none;
 .act .el { color: var(--tx3); font-weight: 500; }
 .act .hint { color: var(--tx3); font-weight: 500; }
 .act-hold[hidden], #netbar[hidden], .md-src { display: none; }
-.tools:empty, .md-tail:empty, .fail-slot:empty, .act-slot:empty { display: none; }
+.tools:empty, .beats-slot:empty, .md-tail:empty, .fail-slot:empty, .act-slot:empty { display: none; }
 .ag .sub.act-sub { display: inline-flex; align-items: center; gap: 6px; }
 .md { display: grid; gap: 12px; min-width: 0; font-size: 15px; line-height: 1.6; color: var(--tx); }
 .cards:empty, .md:empty { display: none; }

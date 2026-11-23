@@ -62,6 +62,7 @@ type Message struct {
 	AuthorKind  string
 	AuthorID    string
 	Body        string
+	Steps       string
 	Origin      string
 	JournalSeq  int
 	CreatedAt   string
@@ -675,7 +676,7 @@ func (s *Store) ListMessages(ctx context.Context, userID, threadID string) ([]Me
 	if _, err := s.GetThread(ctx, userID, threadID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, origin, journal_seq, created_at FROM messages WHERE user_id = ? AND thread_id = ? ORDER BY created_at, COALESCE(journal_seq, 0), rowid`, userID, threadID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, steps_md, origin, journal_seq, created_at FROM messages WHERE user_id = ? AND thread_id = ? ORDER BY created_at, COALESCE(journal_seq, 0), rowid`, userID, threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -687,8 +688,8 @@ func (s *Store) ListMessages(ctx context.Context, userID, threadID string) ([]Me
 func (s *Store) GetMessage(ctx context.Context, userID, id string) (Message, error) {
 	var m Message
 	var seq sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, origin, journal_seq, created_at FROM messages WHERE id = ? AND user_id = ?`, id, userID).
-		Scan(&m.ID, &m.WorkspaceID, &m.UserID, &m.ThreadID, &m.AuthorKind, &m.AuthorID, &m.Body, &m.Origin, &seq, &m.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, steps_md, origin, journal_seq, created_at FROM messages WHERE id = ? AND user_id = ?`, id, userID).
+		Scan(&m.ID, &m.WorkspaceID, &m.UserID, &m.ThreadID, &m.AuthorKind, &m.AuthorID, &m.Body, &m.Steps, &m.Origin, &seq, &m.CreatedAt)
 	if seq.Valid {
 		m.JournalSeq = int(seq.Int64)
 	}
@@ -756,7 +757,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var seq sql.NullInt64
-		if err := rows.Scan(&m.ID, &m.WorkspaceID, &m.UserID, &m.ThreadID, &m.AuthorKind, &m.AuthorID, &m.Body, &m.Origin, &seq, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.WorkspaceID, &m.UserID, &m.ThreadID, &m.AuthorKind, &m.AuthorID, &m.Body, &m.Steps, &m.Origin, &seq, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		if seq.Valid {
