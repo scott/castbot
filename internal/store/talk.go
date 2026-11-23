@@ -478,10 +478,10 @@ func (s *Store) LatestAgentReply(ctx context.Context, userID, runID string) (Mes
 	}
 	var m Message
 	var seq sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, origin, journal_seq, created_at
+	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, steps_md, origin, journal_seq, created_at
 FROM messages WHERE user_id = ? AND run_id = ? AND author_kind = 'agent'
 ORDER BY created_at DESC, rowid DESC LIMIT 1`, userID, runID).
-		Scan(&m.ID, &m.WorkspaceID, &m.UserID, &m.ThreadID, &m.AuthorKind, &m.AuthorID, &m.Body, &m.Origin, &seq, &m.CreatedAt)
+		Scan(&m.ID, &m.WorkspaceID, &m.UserID, &m.ThreadID, &m.AuthorKind, &m.AuthorID, &m.Body, &m.Steps, &m.Origin, &seq, &m.CreatedAt)
 	if seq.Valid {
 		m.JournalSeq = int(seq.Int64)
 	}

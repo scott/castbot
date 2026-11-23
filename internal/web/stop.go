@@ -208,9 +208,11 @@ func (s *Server) stoppedTurnHTML(ctx context.Context, user store.User, row store
 	stamp := s.store.Now().UTC().Format(time.RFC3339)
 	var msgs []store.Message
 	if strings.TrimSpace(text) != "" {
-		msgs = append(msgs, store.Message{
-			ID: "stop-reply", AuthorKind: "agent", AuthorID: row.AgentID, Body: text, CreatedAt: stamp,
-		})
+		saved, err := s.store.LatestAgentReply(ctx, user.ID, row.ID)
+		if err != nil || strings.TrimSpace(saved.Body) == "" {
+			saved = store.Message{ID: "stop-reply", AuthorKind: "agent", AuthorID: row.AgentID, Body: text, CreatedAt: stamp}
+		}
+		msgs = append(msgs, saved)
 	}
 	msgs = append(msgs, store.Message{
 		ID: "stop-note", AuthorKind: "system", AuthorID: row.AgentID, Body: store.StoppedLine, Origin: "notice", CreatedAt: stamp,

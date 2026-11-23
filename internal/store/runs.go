@@ -204,6 +204,11 @@ ORDER BY m.journal_seq LIMIT 1`,
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Message{}, RunEvent{}, err
 	}
+	chunks, err := textChunksTx(ctx, tx, runID)
+	if err != nil {
+		return Message{}, RunEvent{}, err
+	}
+	steps := stepsJSON(chunks, body)
 	if msgID != "" {
 		res, err := tx.ExecContext(ctx, `UPDATE messages SET run_id = ? WHERE id = ? AND user_id = ? AND run_id IS NULL`, runID, msgID, userID)
 		if err != nil {
@@ -212,13 +217,24 @@ ORDER BY m.journal_seq LIMIT 1`,
 		if err := rowsAffected(res); err != nil {
 			return Message{}, RunEvent{}, err
 		}
+		if steps != "" {
+			var existing string
+			if err := tx.QueryRowContext(ctx, `SELECT body_md FROM messages WHERE id = ? AND user_id = ?`, msgID, userID).Scan(&existing); err != nil {
+				return Message{}, RunEvent{}, err
+			}
+			if existing == body {
+				if _, err := tx.ExecContext(ctx, `UPDATE messages SET steps_md = ? WHERE id = ? AND user_id = ? AND steps_md = ''`, steps, msgID, userID); err != nil {
+					return Message{}, RunEvent{}, err
+				}
+			}
+		}
 	} else {
 		msgID, err = newID()
 		if err != nil {
 			return Message{}, RunEvent{}, err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, run_id, created_at) VALUES (?, ?, ?, ?, 'agent', ?, ?, ?, ?)`,
-			msgID, run.WorkspaceID, userID, run.ThreadID, run.AgentID, body, runID, stamp); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO messages(id, workspace_id, user_id, thread_id, author_kind, author_id, body_md, steps_md, run_id, created_at) VALUES (?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`,
+			msgID, run.WorkspaceID, userID, run.ThreadID, run.AgentID, body, steps, runID, stamp); err != nil {
 			return Message{}, RunEvent{}, err
 		}
 	}

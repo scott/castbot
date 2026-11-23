@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/scott/castbot/internal/store"
+	"github.com/scott/castbot/internal/turn"
 )
 
 // liveSend is one browser's view of a run.
@@ -36,33 +37,38 @@ const tailGap = 75 * time.Millisecond
 
 // runFold is the text and tool rows seen so far on one stream.
 type runFold struct {
-	text  strings.Builder
+	sp    turn.Splitter
 	tools strings.Builder
 	fact  toolFact
 }
 
-func (f *runFold) apply(ev store.RunEvent) (before string) {
-	before = f.text.String()
+func (f *runFold) apply(ev store.RunEvent) (before string, beats int) {
+	before = f.sp.Answer()
+	beats = len(f.sp.Beats())
 	switch ev.Kind {
 	case "text":
 		var payload struct {
 			Text string `json:"text"`
 		}
 		if json.Unmarshal([]byte(ev.Payload), &payload) == nil {
-			f.text.WriteString(payload.Text)
+			f.sp.Add(payload.Text)
 		}
 	case "tool":
 		got := parseTool(ev.Payload)
 		if got.Kind == "" {
-			return before
+			return before, beats
 		}
 		f.fact = got
 		f.tools.WriteString(toolRowHTML(got))
 	}
-	return before
+	return before, beats
 }
 
-func (f *runFold) body() string { return f.text.String() }
+func (f *runFold) body() string { return f.sp.Text() }
+
+func (f *runFold) answer() string { return f.sp.Answer() }
+
+func (f *runFold) beats() []string { return f.sp.Beats() }
 
 func (f *runFold) toolsHTML() string { return f.tools.String() }
 

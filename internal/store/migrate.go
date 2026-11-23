@@ -544,6 +544,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	if err := s.migrateV36(); err != nil {
 		return err
 	}
+	// Version 37 stores the progress lines that led up to an agent reply.
+	if err := s.migrateV37(); err != nil {
+		return err
+	}
 	return nil
 }
 
