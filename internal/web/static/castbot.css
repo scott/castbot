@@ -774,6 +774,9 @@ textarea.ta { width: 100%; min-height: 92px; border-radius: 10px; border: 1px so
 
 /* ---------- 07 login ---------- */
 .auth { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.auth.one { grid-template-columns: minmax(0, 1fr); }
+.auth.one .auth-top { display: flex; padding: 10px 16px; border-bottom: 1px solid var(--line); min-height: 60px; align-items: center; }
+.auth.one .auth-main { min-height: calc(100vh - 60px); }
 .auth-top { display: none; }
 .auth-side { background: var(--bg2); border-right: 1px solid var(--line); padding: 56px 56px 48px; display: flex; flex-direction: column; gap: 18px; justify-content: center; position: relative; overflow: hidden; }
 .auth-side::after { content: ""; position: absolute; right: -120px; bottom: -120px; width: 360px; height: 360px; border-radius: 50%; border: 2px solid var(--acc-line); box-shadow: 0 0 0 40px var(--acc-soft), 0 0 0 80px rgba(255,143,90,.05); }

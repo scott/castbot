@@ -10,6 +10,7 @@ import (
 )
 
 // version, commit, and guestID are set with -ldflags -X.
+// Package main is linked as main, so the symbols are main.version, main.commit, and main.guestID.
 // A local build keeps these defaults.
 var (
 	version = "dev"

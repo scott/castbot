@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -290,8 +291,34 @@ func TestUpdateApplyHookRunsWhenIdle(t *testing.T) {
 	if code != http.StatusOK || called != 1 {
 		t.Fatalf("hook %d called %d", code, called)
 	}
+	if !strings.Contains(body, "castbot is restarting.") || !strings.Contains(body, "This page comes back at Settings.") {
+		t.Fatal("restart page missing")
+	}
+	if !strings.Contains(body, `http-equiv="refresh"`) || !strings.Contains(body, "3;url=/settings") {
+		t.Fatal("restart page did not refresh")
+	}
+	if strings.Contains(body, "Update now") || strings.Contains(body, "invite only") {
+		t.Fatal("restart page still offered the install")
+	}
+}
+
+func TestUpdateApplyHookErrorStaysOnSettings(t *testing.T) {
+	h := newHarness(t)
+	ip := "203.0.113.59:4000"
+	path := filepath.Join(t.TempDir(), "update.json")
+	writeUpdateCache(t, path, true, false)
+	h.srv.SetUpdate("0.20261124.1", strings.Repeat("ab", 20), "", path)
+	h.srv.SetUpdateApply(func(context.Context) error {
+		return errors.New("missing helper")
+	})
+	_, secret := h.account("owner-hook-err@example.com", "Alex Rivera", "correct-horse-1")
+	h.login("owner-hook-err@example.com", "correct-horse-1", secret, ip, false)
+	code, body, _ := h.do(http.MethodPost, "/settings/update/apply", h.form(nil), ip, nil)
+	if code != http.StatusBadGateway || !strings.Contains(body, "The update did not start.") {
+		t.Fatalf("hook error %d", code)
+	}
 	if strings.Contains(body, "restarting") {
-		t.Fatal("hook success claimed a restart")
+		t.Fatal("failed start claimed a restart")
 	}
 }
 

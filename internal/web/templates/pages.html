@@ -2,6 +2,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
 <meta name="csrf-token" content="{{.CSRF}}">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false}'>
 <title>{{if gt .Approvals 0}}({{.Approvals}}) {{end}}{{.Title}} · castbot</title>
@@ -607,6 +608,24 @@
 <script src="{{static "secrets.js"}}"></script>
 <script src="{{static "files.js"}}"></script>
 <script src="{{static "create.js"}}"></script>
+</body>
+</html>
+{{end}}
+
+{{define "updateWait"}}
+<!doctype html>
+<html lang="en" data-theme="{{.Theme}}"{{if eq .Theme "light"}} class="light"{{end}}>
+{{template "head" .}}
+<body class="p-auth">
+<div class="auth one">
+<header class="auth-top"><a class="brand" href="/" aria-label="castbot home">{{template "mark" .}}{{template "word" .}}</a></header>
+<main class="auth-main">
+<div class="auth-card" role="status">
+<h1>castbot is restarting.</h1>
+<p class="muted">This page comes back at Settings.</p>
+</div>
+</main>
+</div>
 </body>
 </html>
 {{end}}
