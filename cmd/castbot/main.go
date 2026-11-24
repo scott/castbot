@@ -53,8 +53,10 @@ func main() {
 		os.Exit(adminCmd(args))
 	case "version":
 		versionCmd(args)
+	case "release":
+		releaseCmd(args)
 	default:
-		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo|create-assistant|list-models|save-provider-key|admin|version]")
+		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo|create-assistant|list-models|save-provider-key|admin|version|release]")
 		os.Exit(2)
 	}
 }

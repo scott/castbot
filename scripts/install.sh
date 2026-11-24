@@ -21,6 +21,8 @@ CADDY_DIR="${PREFIX}/etc/caddy"
 CADDY_FILE="${CADDY_DIR}/Caddyfile"
 NOTE="${PREFIX}/root/castbot-first-login.txt"
 REPO_URL="https://github.com/scott/castbot.git"
+# Second line of internal/update/minisign.pub. Release assets are signed with this key.
+CASTBOT_MINISIGN_PUBLIC_KEY="RWSyjqLNx0wTvLjD5TPZ9pw69SIeh58MA2nQczdpv7MkcQuzOhcJZCQG"
 GO_VERSION="go1.27.4"
 GO_AMD64_SUM="7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840"
 GO_ARM64_SUM="3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92"
@@ -99,6 +101,12 @@ EOF
 die() {
   printf 'install: %s\n' "$*" >&2
   exit 1
+}
+
+# check_release_key fails closed when the embedded minisign line is corrupt.
+# The same line is the second line of internal/update/minisign.pub.
+check_release_key() {
+  [[ "$CASTBOT_MINISIGN_PUBLIC_KEY" =~ ^RW[A-Za-z0-9+/]{40,}$ ]] || die "release key is unexpected"
 }
 
 cleanup() {
@@ -1318,6 +1326,7 @@ main() {
   if [[ -z "$PREFIX" && "$(id -u)" -ne 0 ]]; then
     die "run as root"
   fi
+  check_release_key
   read_settings
   prepare_os
   install_binary
