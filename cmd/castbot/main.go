@@ -117,8 +117,9 @@ func serve(args []string) {
 			}
 		}
 	}()
-	// Record a newer signed release. The check does not install it.
-	// Update now starts the helper. off and a dev build do not fetch.
+	// Record a newer signed release. Automatic mode starts the helper when
+	// a release is ready and no agent is working. Update now uses the same
+	// helper. off and a dev build do not fetch.
 	go update.Run(ctx, update.RunConfig{
 		Version: version,
 		Commit:  commit,
@@ -127,6 +128,10 @@ func serve(args []string) {
 		EnvMode: cfg.UpdateMode,
 		StoredMode: func(c context.Context) (string, error) {
 			return st.InstanceSetting(c, update.ModeKey)
+		},
+		Apply: func(context.Context) error { return startUpdateHelper() },
+		Inflight: func(c context.Context) (int, error) {
+			return st.InflightRuns(c)
 		},
 	})
 	srv := &http.Server{
