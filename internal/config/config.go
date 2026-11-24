@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/scott/castbot/internal/update"
 )
 
 const (
@@ -34,6 +36,11 @@ type Config struct {
 	// DevEcho turns on the local echo runtime. It is off unless
 	// CASTBOT_DEV_ECHO=1. A public https URL refuses it.
 	DevEcho bool
+	// UpdateMode is off, prompt, or auto when CASTBOT_UPDATE_MODE is set
+	// to one of those. An absent or invalid value leaves the field empty
+	// so the stored owner choice, or prompt, still applies. The key is
+	// optional. A file without it still loads.
+	UpdateMode string
 }
 
 // Load reads CASTBOT_ENV_FILE (or castbot.env). The file must be mode 0600.
@@ -116,6 +123,9 @@ func LoadFile(path string) (Config, error) {
 		AllowWideProxies: vals["CASTBOT_ALLOW_WIDE_PROXIES"] == "1",
 		DevEcho:          vals["CASTBOT_DEV_ECHO"] == "1",
 	}
+	if mode, ok := update.ParseMode(vals["CASTBOT_UPDATE_MODE"]); ok {
+		cfg.UpdateMode = mode
+	}
 	if cfg.Addr == "" {
 		cfg.Addr = defaultAddr
 	}
@@ -150,6 +160,11 @@ func LoadFile(path string) (Config, error) {
 	}
 	if v, ok := os.LookupEnv("CASTBOT_DEV_ECHO"); ok {
 		cfg.DevEcho = v == "1"
+	}
+	if v, ok := os.LookupEnv("CASTBOT_UPDATE_MODE"); ok {
+		if mode, good := update.ParseMode(v); good {
+			cfg.UpdateMode = mode
+		}
 	}
 	return cfg, nil
 }

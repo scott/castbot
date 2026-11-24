@@ -61,6 +61,16 @@ type Input struct {
 
 // Validate checks the fields that do not depend on file bytes.
 func (in Input) Validate() error {
+	if err := in.validateMeta(); err != nil {
+		return err
+	}
+	if in.AMD64 == "" || in.ARM64 == "" {
+		return errors.New("both binaries are required")
+	}
+	return nil
+}
+
+func (in Input) validateMeta() error {
 	if in.Version == "" || !versionRE.MatchString(in.Version) {
 		return errors.New("version is unexpected")
 	}
@@ -73,17 +83,41 @@ func (in Input) Validate() error {
 	if !guestRE.MatchString(in.GuestID) {
 		return errors.New("guest id is unexpected")
 	}
-	wantImage := "ghcr.io/scott/castbot-runtime:" + in.RuntimeImageCommit
+	wantImage := RuntimeImagePrefix + in.RuntimeImageCommit
 	if in.RuntimeImage != wantImage || !shaRE.MatchString(in.RuntimeImageCommit) {
 		return errors.New("runtime image is unexpected")
 	}
 	if in.Notes != "https://github.com/scott/castbot/releases/tag/v"+in.Version {
 		return errors.New("notes url is unexpected")
 	}
-	if in.AMD64 == "" || in.ARM64 == "" {
-		return errors.New("both binaries are required")
+	return nil
+}
+
+// Validate checks a decoded manifest, including the two binary asset rows.
+func (m Manifest) Validate() error {
+	if m.Manifest != ManifestVersion {
+		return errors.New("manifest version is unexpected")
+	}
+	in := Input{
+		Version:            m.Version,
+		Commit:             m.Commit,
+		Schema:             m.Schema,
+		GuestID:            m.GuestID,
+		RuntimeImage:       m.RuntimeImage,
+		RuntimeImageCommit: m.RuntimeImageCommit,
+		Notes:              m.Notes,
+	}
+	if err := in.validateMeta(); err != nil {
+		return err
+	}
+	if !assetOK(m.Assets["linux-amd64"], "castbot_linux_amd64") || !assetOK(m.Assets["linux-arm64"], "castbot_linux_arm64") {
+		return errors.New("asset is unexpected")
 	}
 	return nil
+}
+
+func assetOK(a Asset, name string) bool {
+	return a.Name == name && sumRE.MatchString(a.SHA256) && a.Size > 0 && a.Size <= maxAsset
 }
 
 // HashFile returns the size and sha256 of path. The file must be non-empty

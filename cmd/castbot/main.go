@@ -25,6 +25,7 @@ import (
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/runtime"
 	"github.com/scott/castbot/internal/store"
+	"github.com/scott/castbot/internal/update"
 	"github.com/scott/castbot/internal/web"
 	"golang.org/x/term"
 )
@@ -110,6 +111,18 @@ func serve(args []string) {
 			}
 		}
 	}()
+	// Record a newer signed release. This does not install it.
+	// off and a dev build do not fetch.
+	go update.Run(ctx, update.RunConfig{
+		Version: version,
+		Commit:  commit,
+		Schema:  store.SchemaVersion,
+		Image:   cfg.Image,
+		EnvMode: cfg.UpdateMode,
+		StoredMode: func(c context.Context) (string, error) {
+			return st.InstanceSetting(c, update.ModeKey)
+		},
+	})
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           app.Handler(),

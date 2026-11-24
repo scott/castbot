@@ -26,4 +26,10 @@ The notes are the commit subjects since the previous `v*` tag. A subject that co
 
 ## What a release does not do
 
-The workflow does not deploy a host. `scripts/deploy.sh` remains the laptop path. An installed host does not update itself from this slice.
+The workflow does not deploy a host. `scripts/deploy.sh` remains the laptop path.
+
+## How an installed host checks
+
+The server asks for the latest release about six hours after a successful check, and once shortly after startup. The request is a GET with user agent `castbot-update`. It does not send the hostname, the account, or an instance id.
+
+A verified newer release is recorded in `/opt/castbot/update.json` (mode 0600). A failed check leaves that file as it was. `CASTBOT_UPDATE_MODE=off` skips the request. The key is optional, so an env file without it still starts. The server records the release and does not install it yet.

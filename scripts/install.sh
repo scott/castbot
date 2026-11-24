@@ -1012,6 +1012,14 @@ install_binary() {
   printf '%s\n' "$SHA" > "$APP_DIR/RELEASE"
   printf '%s\n' "$REL_VERSION" > "$APP_DIR/VERSION"
   printf '%s\n' "$REL_VERSION" > "$APP_DIR/releases/${SHA}/VERSION"
+  # The service user rewrites this file in place. The directory stays
+  # root-owned, so the service cannot replace the binary symlink.
+  # A second install keeps a check that is already recorded.
+  if [[ ! -e "$APP_DIR/update.json" ]]; then
+    cache_tmp=$(mktemp)
+    install_owned -m 0600 "$cache_tmp" "$APP_DIR/update.json"
+    rm -f "$cache_tmp"
+  fi
   if [[ -z "${CASTBOT_BINARY:-}" ]]; then
     rm -f "$built"
   fi

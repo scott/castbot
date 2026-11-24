@@ -240,6 +240,10 @@ fi
 [[ "$(tr -d '[:space:]' < "$prefix/opt/castbot/releases/$sha/VERSION")" == "0.0.0+$sha" ]] || fail "release VERSION"
 [[ -x "$prefix/opt/castbot/releases/$sha/castbot" ]] || fail "binary mode"
 [[ "$(readlink "$prefix/opt/castbot/bin/castbot")" == "$prefix/opt/castbot/releases/$sha/castbot" ]] || fail "symlink"
+cache="$prefix/opt/castbot/update.json"
+[[ -f "$cache" ]] || fail "missing update cache"
+[[ "$(stat -c '%a' "$cache")" == "600" ]] || fail "update cache mode"
+[[ ! -s "$cache" ]] || fail "update cache was not empty"
 
 envfile="$prefix/etc/castbot/castbot.env"
 [[ "$(stat -c '%a' "$envfile")" == "600" ]] || fail "env mode"
@@ -306,6 +310,7 @@ if grep -q "$password" "$prefix/stub.log"; then
 fi
 
 sum_before=$(sha256sum "$envfile")
+printf 'keep\n' > "$cache"
 out2=$(run_install "$prefix" \
   CASTBOT_PUBLIC_HOST='https://bot.example.com/login' \
   CASTBOT_DO_TOKEN='install-test-other-token' \
@@ -318,6 +323,7 @@ if printf '%s\n' "$out" | grep -q "$session" || printf '%s\n' "$out2" | grep -q 
   fail "session key in output"
 fi
 [[ "$(sha256sum "$envfile")" == "$sum_before" ]] || fail "env file changed"
+[[ "$(cat "$cache")" == "keep" ]] || fail "update cache replaced"
 grep -q 'account-exists' "$prefix/stub.log" || fail "second create-user"
 printf '%s\n' "$out2" | grep -q 'castbot is installed.' || fail "re-run success banner"
 [[ "$(cmd_count 'systemctl reload-or-restart caddy' "$prefix/host-cmd.log")" -eq 2 ]] || fail "caddy not reloaded on re-run"

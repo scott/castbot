@@ -58,6 +58,53 @@ func TestLoadKey(t *testing.T) {
 	}
 }
 
+func TestUpdateModeIsOptional(t *testing.T) {
+	// A CASTBOT_UPDATE_MODE in the shell running the tests must not decide
+	// the result. Clear it for this test; t.Setenv restores it afterwards.
+	t.Setenv("CASTBOT_UPDATE_MODE", "")
+	os.Unsetenv("CASTBOT_UPDATE_MODE")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "castbot.env")
+	body := "CASTBOT_SESSION_KEY=" + fakeSessionKey() + "\nCASTBOT_SECRETS_KEY=" + fakeSecretsKey() + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UpdateMode != "" {
+		t.Fatalf("mode %q", cfg.UpdateMode)
+	}
+	body += "CASTBOT_UPDATE_MODE=off\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UpdateMode != "off" {
+		t.Fatalf("file mode %q", cfg.UpdateMode)
+	}
+	t.Setenv("CASTBOT_UPDATE_MODE", "auto")
+	cfg, err = LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UpdateMode != "auto" {
+		t.Fatalf("env mode %q", cfg.UpdateMode)
+	}
+	t.Setenv("CASTBOT_UPDATE_MODE", "sometimes")
+	cfg, err = LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UpdateMode != "off" {
+		t.Fatalf("invalid env overrode %q", cfg.UpdateMode)
+	}
+}
+
 func TestIgnoresAmbientDigitalOceanToken(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "castbot.env")
