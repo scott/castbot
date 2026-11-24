@@ -1029,6 +1029,140 @@ if grep -q 'systemctl start castbot.service' "$prefix/host-cmd.log"; then
 fi
 rm -rf "$prefix"
 
+# A signed fixture is installed without the Go toolchain. The production
+# key rejects that fixture. A flipped byte and a mismatched tag do too.
+fixture=$(mktemp -d)
+cat >"$fixture/stub.go" <<'EOF'
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if log := os.Getenv("CASTBOT_STUB_LOG"); log != "" {
+		f, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err == nil {
+			fmt.Fprintln(f, os.Args[1:])
+			f.Close()
+		}
+	}
+	if len(os.Args) < 2 {
+		os.Exit(2)
+	}
+	switch os.Args[1] {
+	case "create-user":
+		buf := make([]byte, 1)
+		_, _ = os.Stdin.Read(buf)
+		fmt.Println("Authenticator secret: TESTSECRET234567")
+		fmt.Println("otpauth://totp/castbot:admin?secret=TESTSECRET234567")
+	case "create-assistant":
+		fmt.Println("created CastBot abcdef")
+	default:
+		fmt.Fprintln(os.Stderr, "unknown command")
+		os.Exit(2)
+	}
+}
+EOF
+(
+  cd "$fixture"
+  go mod init stub >/dev/null
+  CGO_ENABLED=0 go build -o "$fixture/stub" .
+)
+(cd "$root" && CASTBOT_FIXTURE_DIR="$fixture" go test -count=1 -timeout 120s -run TestWriteInstallFixture ./internal/update)
+relcommit=fedcba9876543210fedcba9876543210fedcba98
+keyline=$(awk 'NR==2' "$fixture/key.pub")
+copy=$(mktemp)
+python3 - "$install" "$copy" "$keyline" <<'PY'
+import pathlib, sys
+src, dst, key = sys.argv[1:]
+text = pathlib.Path(src).read_text()
+needle = 'CASTBOT_MINISIGN_PUBLIC_KEY="'
+start = text.find(needle)
+end = text.find('"', start + len(needle))
+if start < 0 or end < 0:
+    raise SystemExit("key line missing")
+text = text[: start + len(needle)] + key + text[end:]
+pathlib.Path(dst).write_text(text)
+PY
+chmod 0755 "$copy"
+
+run_release() {
+  local prefix=$1 script=$2
+  shift 2
+  env \
+    CASTBOT_INSTALL_PREFIX="$prefix" \
+    CASTBOT_INSTALL_NONINTERACTIVE=1 \
+    CASTBOT_ADMIN_EMAIL="$email" \
+    CASTBOT_ADMIN_NAME="$name" \
+    CASTBOT_ADMIN_PASSWORD="$password" \
+    CASTBOT_STUB_LOG="$prefix/stub.log" \
+    CASTBOT_RELEASE_FIXTURE="$fixture/out" \
+    "$@" \
+    bash "$script"
+}
+
+prefix=$(mktemp -d)
+out=$(run_release "$prefix" "$copy")
+printf '%s\n' "$out" | grep -q 'created CastBot abcdef' || fail "release assistant"
+[[ "$(tr -d '[:space:]' <"$prefix/opt/castbot/RELEASE")" == "$relcommit" ]] || fail "release commit"
+[[ "$(tr -d '[:space:]' <"$prefix/opt/castbot/VERSION")" == "0.20261124.1" ]] || fail "release version"
+[[ -x "$prefix/opt/castbot/releases/$relcommit/castbot" ]] || fail "release binary"
+grep -F 'release_kind)" == "source"' "$install" >/dev/null || fail "go stays off the release path"
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+out=$(run_release "$prefix" "$copy" CASTBOT_REF=v0.20261124.1)
+[[ "$(tr -d '[:space:]' <"$prefix/opt/castbot/VERSION")" == "0.20261124.1" ]] || fail "tagged release version"
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+set +e
+run_release "$prefix" "$copy" CASTBOT_REF=v0.20261124.2 >/tmp/castbot-install-fail.out 2>/tmp/castbot-install-fail.err
+code=$?
+set -e
+[[ "$code" -ne 0 ]] || fail "mismatched tag was accepted"
+grep -q 'release version does not match' /tmp/castbot-install-fail.err || fail "mismatch message"
+[[ ! -d "$prefix/opt/castbot" ]] || fail "mismatch created the app dir"
+rm -rf "$prefix"
+
+flipped="$fixture/flipped"
+rm -rf "$flipped"
+cp -a "$fixture/out" "$flipped"
+case "$(uname -m)" in
+  aarch64 | arm64) flip_arch=arm64 ;;
+  *) flip_arch=amd64 ;;
+esac
+python3 - "$flipped/castbot_linux_${flip_arch}" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+raw = bytearray(p.read_bytes())
+raw[0] ^= 0xFF
+p.write_bytes(raw)
+PY
+prefix=$(mktemp -d)
+set +e
+env \
+  CASTBOT_INSTALL_PREFIX="$prefix" \
+  CASTBOT_INSTALL_NONINTERACTIVE=1 \
+  CASTBOT_ADMIN_EMAIL="$email" \
+  CASTBOT_ADMIN_NAME="$name" \
+  CASTBOT_ADMIN_PASSWORD="$password" \
+  CASTBOT_RELEASE_FIXTURE="$flipped" \
+  bash "$copy" >/tmp/castbot-install-fail.out 2>/tmp/castbot-install-fail.err
+code=$?
+set -e
+[[ "$code" -ne 0 ]] || fail "flipped release was accepted"
+grep -q 'release hash was rejected' /tmp/castbot-install-fail.err || fail "flip message"
+[[ ! -d "$prefix/opt/castbot" ]] || fail "flipped release created the app dir"
+rm -rf "$prefix"
+
+prefix=$(mktemp -d)
+expect_fail "$prefix" CASTBOT_RELEASE_FIXTURE="$fixture/out"
+grep -q 'release signature was rejected' /tmp/castbot-install-fail.err || fail "foreign signature"
+rm -rf "$prefix" "$fixture" "$copy"
+
 rm -f /tmp/castbot-install-xtrace.out /tmp/castbot-install-xtrace.err \
   /tmp/castbot-install-args.out /tmp/castbot-install-args.err \
   /tmp/castbot-install-nobody.out /tmp/castbot-install-nobody.err \
