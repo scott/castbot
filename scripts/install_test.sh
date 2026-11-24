@@ -236,6 +236,8 @@ fi
 
 [[ -f "$prefix/opt/castbot/RELEASE" ]] || fail "missing RELEASE"
 [[ "$(tr -d '[:space:]' < "$prefix/opt/castbot/RELEASE")" == "$sha" ]] || fail "RELEASE sha"
+[[ "$(tr -d '[:space:]' < "$prefix/opt/castbot/VERSION")" == "0.0.0+$sha" ]] || fail "VERSION"
+[[ "$(tr -d '[:space:]' < "$prefix/opt/castbot/releases/$sha/VERSION")" == "0.0.0+$sha" ]] || fail "release VERSION"
 [[ -x "$prefix/opt/castbot/releases/$sha/castbot" ]] || fail "binary mode"
 [[ "$(readlink "$prefix/opt/castbot/bin/castbot")" == "$prefix/opt/castbot/releases/$sha/castbot" ]] || fail "symlink"
 

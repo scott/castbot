@@ -793,6 +793,22 @@ install_owned() {
   fi
 }
 
+# release_label_for prints the version stored next to RELEASE.
+# A tag ref vMAJOR.MINOR.PATCH uses that number. Any other ref uses
+# 0.0.0 plus the commit.
+release_label_for() {
+  local sha=$1 ref=$2 ver
+  if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+    die "source revision is not a commit"
+  fi
+  if [[ "$ref" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    ver=${BASH_REMATCH[1]}
+  else
+    ver="0.0.0+${sha}"
+  fi
+  printf '%s' "$ver"
+}
+
 install_binary() {
   local built
   if [[ -n "${CASTBOT_BINARY:-}" ]]; then
@@ -820,17 +836,24 @@ install_binary() {
       die "source revision is not a commit"
     fi
     built=$(mktemp)
+    REL_VERSION=$(release_label_for "$SHA" "$REF")
     (
       cd "$SRC_DIR" || exit 1
-      CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -trimpath -ldflags='-s -w' -o "$built" ./cmd/castbot
+      ldflags="-s -w -X github.com/scott/castbot/cmd/castbot.version=${REL_VERSION} -X github.com/scott/castbot/cmd/castbot.commit=${SHA}"
+      CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -trimpath -ldflags="$ldflags" -o "$built" ./cmd/castbot
     )
     assert_static "$built"
+  fi
+  if [[ -z "${REL_VERSION:-}" ]]; then
+    REL_VERSION=$(release_label_for "$SHA" "")
   fi
   install -d -m 0755 "$APP_DIR" "$APP_DIR/bin" "$APP_DIR/releases/${SHA}"
   install_owned -d -m 0700 "$APP_DIR/data"
   install_owned -m 0755 "$built" "$APP_DIR/releases/${SHA}/castbot"
   ln -sfn "$APP_DIR/releases/${SHA}/castbot" "$APP_DIR/bin/castbot"
   printf '%s\n' "$SHA" > "$APP_DIR/RELEASE"
+  printf '%s\n' "$REL_VERSION" > "$APP_DIR/VERSION"
+  printf '%s\n' "$REL_VERSION" > "$APP_DIR/releases/${SHA}/VERSION"
   if [[ -z "${CASTBOT_BINARY:-}" ]]; then
     rm -f "$built"
   fi

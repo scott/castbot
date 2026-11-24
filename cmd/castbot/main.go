@@ -51,8 +51,10 @@ func main() {
 		saveProviderKey(args)
 	case "admin":
 		os.Exit(adminCmd(args))
+	case "version":
+		versionCmd(args)
 	default:
-		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo|create-assistant|list-models|save-provider-key|admin]")
+		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo|create-assistant|list-models|save-provider-key|admin|version]")
 		os.Exit(2)
 	}
 }
@@ -115,6 +117,7 @@ func serve(args []string) {
 	go func() {
 		errCh <- srv.ListenAndServe()
 	}()
+	logVersion()
 	log.Printf("castbot listening on %s", cfg.Addr)
 	select {
 	case err := <-errCh:

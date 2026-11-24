@@ -24,13 +24,14 @@ The host layout the script expects:
 | `/opt/castbot/bin/castbot` | Symlink to the live release |
 | `/opt/castbot/releases/<sha>/castbot` | One binary per commit |
 | `/opt/castbot/RELEASE` | The live commit |
+| `/opt/castbot/VERSION` | The live version. A tagged release is `MAJOR.MINOR.PATCH`. Any other commit is `0.0.0` plus that commit. |
 | `/opt/castbot/data/castbot.db` | The SQLite database |
 | `/opt/castbot/backups/<YYYY-MM-DD_HHMM>/` | A consistent backup, mode 0700 |
 | `/etc/castbot/castbot.env` | Server env file |
 
 `/opt/castbot` is the default `DEPLOY_APP_DIR`. The database path is always `<app>/data/castbot.db`. The script does not read `CASTBOT_DB` from the server env file, so the service has to be using that file. On the reference host the unit's WorkingDirectory is `<app>/data` and the env file sets `CASTBOT_DB` to the absolute `<app>/data/castbot.db`. If your host stores the database elsewhere, the script's in-flight, backup, and schema checks will read the wrong file.
 
-The SSH user does not own the app directory. `bin/`, `releases/`, and `RELEASE` are root-owned, `data/` is mode 0700, and the env file is not readable by the SSH user. The unit hides `/proc/<pid>`, and the SSH user is not in the group that can read the journal. The user needs passwordless `sudo -n`. The script uses it for the image line, every `sqlite3` call, the backup directory and its record, the release directory, the symlink, `RELEASE`, prune, `/proc/<pid>/exe`, `journalctl`, the lock, and `systemctl restart`. A preflight runs `sudo -n true`.
+The SSH user does not own the app directory. `bin/`, `releases/`, and `RELEASE` are root-owned, `data/` is mode 0700, and the env file is not readable by the SSH user. The unit hides `/proc/<pid>`, and the SSH user is not in the group that can read the journal. The user needs passwordless `sudo -n`. The script uses it for the image line, every `sqlite3` call, the backup directory and its record, the release directory, the symlink, `RELEASE`, `VERSION`, prune, `/proc/<pid>/exe`, `journalctl`, the lock, and `systemctl restart`. A preflight runs `sudo -n true`.
 
 The binary is uploaded with `scp` into a temporary directory the SSH user can write, then `sudo -n install -o castbot -g castbot -m 0755` places it in `releases/<sha>/`. The schema migrates when the process starts. The script does not run a migration command of its own.
 

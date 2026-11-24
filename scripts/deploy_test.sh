@@ -668,6 +668,8 @@ happy() {
   printf 'skip-me' >"$app/data/files/.part-upload"
   run_deploy "$dir"
   [[ "$(tr -d '[:space:]' <"$app/RELEASE")" == "$sha" ]]
+  [[ "$(tr -d '[:space:]' <"$app/VERSION")" == "0.0.0+$sha" ]]
+  [[ "$(tr -d '[:space:]' <"$app/releases/$sha/VERSION")" == "0.0.0+$sha" ]]
   [[ "$(readlink -f "$app/bin/castbot")" == "$app/releases/$sha/castbot" ]]
   [[ "$(stat -c '%a' "$app/releases/$sha/castbot")" == "755" ]]
   local backup record
