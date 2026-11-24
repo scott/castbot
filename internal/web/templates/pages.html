@@ -145,6 +145,7 @@
 <div class="sb-top"><a class="brand" href="/" aria-label="castbot home">{{template "mark" .}}{{template "word" .}}</a><a class="ibtn ph-only" href="/settings" aria-label="Settings"><span class="av me xs">{{.Initials}}</span></a><a class="ibtn solid{{if eq .Page "create"}} on{{end}}" href="/new-agent" aria-label="New agent">{{template "plus" .}}</a></div>
 <div class="search{{if .SearchQuery}} on{{end}}"><svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input id="search" type="search" placeholder="Search agents and chats" aria-label="Search agents and chats" autocomplete="off" value="{{.SearchQuery}}"><kbd>/</kbd></div>
 <div id="search-pop"{{if not .SearchQuery}} hidden{{end}}>{{template "searchResults" .}}</div>
+{{if and .Update.Banner (eq .Page "home")}}<div class="banner ok sb-up" role="status"><span class="grow">Castbot {{.Update.Offer}} is ready. <a class="link" href="/settings#update">Settings</a></span></div>{{end}}
 {{template "sidebarSections" .}}
 <div class="sb-foot"><a class="acct{{if eq .Page "settings" "password" "two-factor" "stub" "secrets" "connections"}} on{{end}}" href="/settings" aria-label="Account and settings"><span class="av me">{{.Initials}}</span><span class="grow"><span class="nm">{{.User.DisplayName}}</span><br><span class="sub">{{.User.WorkspaceName}} workspace</span></span>{{template "gear" .}}</a></div>
 </aside>
@@ -283,6 +284,26 @@
 <div class="set-row"><div class="grow"><div class="k">Password</div><div class="v">{{.PasswordOn}}</div></div><a class="btn sm" href="/settings/password">Change password</a></div>
 <div class="set-row"><div class="grow"><div class="k">Two-factor</div>{{if .TwoFactorOn}}<div class="v"><span class="chip run"><span class="pip"></span>On</span> Authenticator app</div><span class="t2">A code is required when you sign in on a new device.</span>{{else}}<div class="v"><span class="chip"><span class="pip"></span>Off</span> Optional</div><span class="t2">Sign-in uses your password. You can add an authenticator later.</span>{{end}}</div>{{if .TwoFactorOn}}<a class="btn sm" href="/settings/two-factor">Manage</a>{{else}}<a class="btn sm" href="/settings/two-factor">Set up</a>{{end}}</div>
 </section>
+{{if .Update.On}}
+<section class="card" id="update" aria-labelledby="s-up"><div class="card-h"><h3 id="s-up">Update</h3></div>
+<p class="fineprint">castbot checks for a published release and does not send the hostname or the account.</p>
+{{if .Update.Dev}}<p>This copy was built from a checkout.</p>{{else}}
+<div class="set-row"><div class="grow"><div class="k">This copy</div><div class="v">{{.Update.Running}}</div>{{if .Update.Commit}}<span class="t2">{{.Update.Commit}}</span>{{end}}</div></div>
+{{if eq .Update.Mode "off"}}{{else if .Update.Blocked}}
+<div class="set-row"><div class="grow"><div class="k">Castbot {{.Update.Offer}}</div><span class="t2">The machine image has to be published for this release before the update can run.</span>{{if .Update.Notes}}<div class="v"><a class="link" href="{{.Update.Notes}}">Release notes</a></div>{{end}}</div></div>
+{{else if .Update.Ready}}
+<div class="set-row"><div class="grow"><div class="k">Castbot {{.Update.Offer}} is ready.</div>{{if .Update.Notes}}<div class="v"><a class="link" href="{{.Update.Notes}}">Release notes</a></div>{{end}}{{if .Update.Moves}}<span class="t2">Agents already running keep their current machine until Replace machine.</span>{{end}}{{if .Update.Busy}}<span class="t2">Try again when the agent is idle.</span>{{end}}</div><form method="post" action="/settings/update/apply"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm pri" type="submit">Update now</button></form></div>
+{{else}}<p class="fineprint">Up to date.</p>{{end}}{{end}}
+<form method="post" action="/settings/update"><input type="hidden" name="csrf" value="{{.CSRF}}">
+<fieldset class="up-modes"><legend>When a release is ready</legend>
+<label class="up-mode"><input type="radio" name="mode" value="prompt"{{if eq .Update.Mode "prompt"}} checked{{end}}{{if .Update.Pinned}} disabled{{end}}>Ask me</label>
+<label class="up-mode"><input type="radio" name="mode" value="auto"{{if eq .Update.Mode "auto"}} checked{{end}}{{if .Update.Pinned}} disabled{{end}}>Install updates</label>
+<label class="up-mode"><input type="radio" name="mode" value="off"{{if eq .Update.Mode "off"}} checked{{end}}{{if .Update.Pinned}} disabled{{end}}>Don't check</label>
+</fieldset>
+{{if .Update.Pinned}}<p class="fineprint">The host file chooses this.</p>{{else}}<button class="btn sm pri" type="submit">Save</button>{{end}}
+</form>
+</section>
+{{end}}
 <section class="card" id="people" aria-labelledby="s-people"><div class="card-h"><h3 id="s-people">People</h3><span class="side">{{.User.WorkspaceName}}</span></div>
 <p class="fineprint">People here share group chats you add them to. Agents, secrets, and machines stay with the person who created them.</p>
 {{if .InviteLink}}<div class="field"><span class="lab">Invite link</span><div class="inp"><input readonly value="{{.InviteLink}}" aria-label="Invite link"></div></div>{{end}}

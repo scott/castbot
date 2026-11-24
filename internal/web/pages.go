@@ -665,6 +665,7 @@ func (s *Server) shell(r *http.Request, user store.User) (page, error) {
 		return page{}, err
 	}
 	s.attachSearch(r, &p)
+	s.fillUpdate(r.Context(), user, &p)
 	return p, nil
 }
 
@@ -935,6 +936,7 @@ var notices = map[string]string{
 	"password":   "Password changed.",
 	"sessions":   "Other sessions were signed out.",
 	"two-factor": "Two-factor is on. A code is required when you sign in on a new device.",
+	"update":     "Saved.",
 }
 
 func back(r *http.Request) string {

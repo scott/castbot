@@ -265,6 +265,11 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .banner.ok .ico { color: var(--ok); }
 .banner b { font-weight: 700; }
 .banner .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.sb-up { margin: 0 14px 10px; align-items: flex-start; }
+.sb-up .grow { min-width: 0; overflow-wrap: anywhere; }
+.up-modes { border: 0; margin: 0; padding: 0; min-width: 0; }
+.up-modes legend { padding: 0; font-size: 13px; font-weight: 650; color: var(--tx2); }
+.up-mode { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 
 /* composer */
 .comp-wrap { width: 100%; max-width: 780px; margin: 0 auto; padding: 8px 28px 22px; display: grid; gap: 8px; }
