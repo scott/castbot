@@ -20,6 +20,17 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
+func TestSchemaVersionMatchesMigration(t *testing.T) {
+	s := testStore(t)
+	var n int
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != SchemaVersion {
+		t.Fatalf("schema %d, SchemaVersion %d", n, SchemaVersion)
+	}
+}
+
 func TestWALAndOwnerColumns(t *testing.T) {
 	s := testStore(t)
 	mode, err := s.JournalMode(context.Background())

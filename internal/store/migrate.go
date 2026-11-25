@@ -5,6 +5,10 @@ import (
 	"strings"
 )
 
+// SchemaVersion is the highest schema_migrations value this process records.
+// migrate records that row. A test fails when the two drift.
+const SchemaVersion = 37
+
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY

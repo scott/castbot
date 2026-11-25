@@ -25,6 +25,7 @@ ROOT=""
 SHA=""
 BIN=""
 BIN_SHA=""
+BUILD_VERSION=""
 PREV=""
 IMAGE_VALUE=""
 SCHEMA_BEFORE=""
@@ -655,14 +656,36 @@ assert_build_meta() {
   [[ "$mod" == "false" ]] || die "vcs.modified is not false"
 }
 
+# version_for_commit prints the release label for a commit.
+# A tag vMAJOR.MINOR.PATCH on that commit wins. Otherwise the label is
+# 0.0.0 plus the commit, which sorts below every real release.
+version_for_commit() {
+  local repo=$1 sha=$2 lines ver
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  lines=$(git -C "$repo" tag --points-at "$sha") || return 1
+  ver=$(printf '%s\n' "$lines" | sed -n 's/^v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+  ver=$(trim_spaces "$ver")
+  if [[ -z "$ver" ]]; then
+    ver="0.0.0+${sha}"
+  fi
+  printf '%s' "$ver"
+}
+
+valid_version() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9a-f]{40})?$ ]]
+}
+
 build_binary() {
   BUILD_DIR=$(mktemp -d)
   WT="${BUILD_DIR}/src"
   git -C "$ROOT" worktree add --detach "$WT" "$SHA" >/dev/null
+  BUILD_VERSION=$(version_for_commit "$ROOT" "$SHA") || die "could not read the version"
+  valid_version "$BUILD_VERSION" || die "version is unexpected"
   BIN="${BUILD_DIR}/castbot"
   (
     cd "$WT"
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o "$BIN" ./cmd/castbot
+    ldflags="-s -w -X github.com/scott/castbot/cmd/castbot.version=${BUILD_VERSION} -X github.com/scott/castbot/cmd/castbot.commit=${SHA}"
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$ldflags" -o "$BIN" ./cmd/castbot
   )
   assert_static "$BIN"
   assert_build_meta "$BIN" "$SHA"
@@ -823,13 +846,24 @@ upload_binary() {
   remote_sum=$(remote_root "sha256sum -- $(q "$dest")") || die "could not hash the remote binary"
   remote_sum=${remote_sum%% *}
   [[ "$remote_sum" == "$BIN_SHA" ]] || die "remote sha256 does not match"
+  remote_root "printf '%s\n' $(q "$BUILD_VERSION") > $(q "$dir/VERSION.next") && mv -Tf -- $(q "$dir/VERSION.next") $(q "$dir/VERSION")" || die "could not write the release version"
+}
+
+# release_label reads releases/<sha>/VERSION. A release from before
+# version files existed gets 0.0.0 plus its commit.
+release_label() {
+  local sha=$1 raw
+  raw=$(remote_root "if [[ -f $(q "$DEPLOY_APP_DIR/releases/$sha/VERSION") ]]; then tr -d '[:space:]' < $(q "$DEPLOY_APP_DIR/releases/$sha/VERSION"); else printf '0.0.0+%s' $(q "$sha"); fi") || return 1
+  trim_spaces "$raw"
 }
 
 switch_to() {
   local sha=$1
   local bin="$DEPLOY_APP_DIR/releases/$sha/castbot"
-  local script
+  local script ver
   remote_root "test -x $(q "$bin")" || return 1
+  ver=$(release_label "$sha") || return 1
+  valid_version "$ver" || return 1
   SWITCHED=1
   script=$(cat <<EOF
 mkdir -p -- $(q "$DEPLOY_APP_DIR/bin")
@@ -837,6 +871,8 @@ ln -sfn -- $(q "$bin") $(q "$DEPLOY_APP_DIR/bin/castbot.next")
 mv -Tf -- $(q "$DEPLOY_APP_DIR/bin/castbot.next") $(q "$DEPLOY_APP_DIR/bin/castbot")
 printf '%s\n' $(q "$sha") > $(q "$DEPLOY_APP_DIR/RELEASE.next")
 mv -Tf -- $(q "$DEPLOY_APP_DIR/RELEASE.next") $(q "$DEPLOY_APP_DIR/RELEASE")
+printf '%s\n' $(q "$ver") > $(q "$DEPLOY_APP_DIR/VERSION.next")
+mv -Tf -- $(q "$DEPLOY_APP_DIR/VERSION.next") $(q "$DEPLOY_APP_DIR/VERSION")
 EOF
 )
   remote_root "$script" || return 1
@@ -881,7 +917,7 @@ wait_health() {
 verify_release() {
   local expect=$1
   local since=$2
-  local got link pid exe live_sum file_sum copy meta after image logs count copy_sum remote_tmp rev mod unit
+  local got link pid exe live_sum file_sum copy meta after image logs count copy_sum remote_tmp rev mod unit want_ver got_ver
   got=$(read_release_file) || {
     printf 'could not read RELEASE\n' >&2
     return 1
@@ -889,6 +925,19 @@ verify_release() {
   got=$(trim_spaces "$got")
   [[ "$got" == "$expect" ]] || {
     printf 'RELEASE does not match\n' >&2
+    return 1
+  }
+  want_ver=$(release_label "$expect") || {
+    printf 'could not read the release version\n' >&2
+    return 1
+  }
+  got_ver=$(remote_root "if [[ -f $(q "$DEPLOY_APP_DIR/VERSION") ]]; then tr -d '[:space:]' < $(q "$DEPLOY_APP_DIR/VERSION"); fi") || {
+    printf 'could not read VERSION\n' >&2
+    return 1
+  }
+  got_ver=$(trim_spaces "$got_ver")
+  [[ -n "$got_ver" && "$got_ver" == "$want_ver" ]] || {
+    printf 'VERSION does not match\n' >&2
     return 1
   }
   link=$(read_link_sha) || {
@@ -1186,6 +1235,7 @@ would copy data/files into that backup when the directory exists
 would install ${DEPLOY_APP_DIR}/releases/${SHA}/castbot
 would link ${DEPLOY_APP_DIR}/bin/castbot
 would write ${DEPLOY_APP_DIR}/RELEASE
+would write ${DEPLOY_APP_DIR}/VERSION
 would restart castbot
 would keep ${DEPLOY_KEEP_RELEASES} releases
 no backup, upload, or restart

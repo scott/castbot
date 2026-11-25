@@ -21,6 +21,7 @@ The model provider is optional. The prompt says Model provider. It lists OpenRou
 | `/opt/castbot/bin/castbot` | Symlink to the live release |
 | `/opt/castbot/releases/<sha>/castbot` | The control-plane binary |
 | `/opt/castbot/RELEASE` | The live commit |
+| `/opt/castbot/VERSION` | The live version. A tagged release is `MAJOR.MINOR.PATCH`. Any other commit is `0.0.0` plus that commit. |
 | `/opt/castbot/data/castbot.db` | The SQLite database |
 | `/etc/castbot/castbot.env` | Server env file, mode 0600, owner `castbot` |
 | `/etc/systemd/system/castbot.service` | The service |
