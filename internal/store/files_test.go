@@ -130,3 +130,28 @@ func TestObserveWorkspaceKeepsSeenAt(t *testing.T) {
 		t.Fatalf("other usage %d %v", otherUsage, err)
 	}
 }
+
+func TestObserveWorkspaceKeepsCatchAll(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	owner := makeUser(t, s, "catch-owner@example.com", "Owner")
+	sec, err := s.SystemSection(ctx, owner.ID, "agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, _, err := s.CreateAgent(ctx, owner.ID, AgentInput{SectionID: sec.ID, Name: "Juno", Title: "Coder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const catchAll = "issuetest/docs-site/src/pages/[...slug].astro"
+	if err := s.ObserveWorkspace(ctx, owner.ID, agent.ID, []ListedFile{
+		{Name: catchAll, Size: 12},
+		{Name: "docs/../../secret", Size: 4},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListCached(ctx, owner.ID, agent.ID)
+	if err != nil || len(rows) != 1 || rows[0].Name != catchAll || rows[0].Size != 12 {
+		t.Fatalf("cache %#v %v", rows, err)
+	}
+}

@@ -522,6 +522,18 @@ func assertNoSecrets(t *testing.T, r *rig, token string) {
 	}
 }
 
+func TestOneNameAllowsCatchAll(t *testing.T) {
+	const catchAll = "issuetest/docs-site/src/pages/[...slug].astro"
+	if !oneName(catchAll) || !oneName("notes..md") {
+		t.Fatal("dropped a coding name")
+	}
+	for _, name := range []string{"", "..", "../etc/passwd", "docs/../../secret", "/etc/passwd", "foo/./bar", "foo//bar", "bad\x00name"} {
+		if oneName(name) {
+			t.Fatalf("allowed %q", name)
+		}
+	}
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

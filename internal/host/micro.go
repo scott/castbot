@@ -691,17 +691,34 @@ func (m *MicroVM) Logs(ctx context.Context, endpoint, agentToken string) (string
 	return string(body), nil
 }
 
+// maxWorkspaceList bounds GET /castlet/files. A coding checkout can list
+// tens of thousands of names. Reading only 1 MiB cut the JSON, so the
+// copy stopped before any file moved.
+const maxWorkspaceList = 64 << 20
+
 // ListWorkspace reads GET /castlet/files.
 func (m *MicroVM) ListWorkspace(ctx context.Context, endpoint, agentToken string) ([]WorkspaceFile, error) {
 	if err := m.checkEdge(endpoint, agentToken); err != nil {
 		return nil, err
 	}
-	body, code, err := m.streamRead(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/castlet/files", agentToken, nil)
-	if err != nil || code != http.StatusOK {
+	rc, err := m.streamOpen(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/castlet/files", agentToken, nil)
+	if err != nil {
+		return nil, ErrGuest
+	}
+	defer rc.Close()
+	return parseWorkspaceList(rc, maxWorkspaceList)
+}
+
+func parseWorkspaceList(r io.Reader, limit int64) ([]WorkspaceFile, error) {
+	if limit < 0 {
+		return nil, ErrGuest
+	}
+	raw, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil || int64(len(raw)) > limit {
 		return nil, ErrGuest
 	}
 	var listed []workspaceList
-	if json.Unmarshal(body, &listed) != nil {
+	if json.Unmarshal(raw, &listed) != nil {
 		return nil, ErrGuest
 	}
 	out := make([]WorkspaceFile, 0, len(listed))
@@ -832,7 +849,7 @@ func (m *MicroVM) WriteWorkspace(ctx context.Context, endpoint, agentToken, name
 
 func safeWorkspace(name string) bool {
 	name = strings.TrimSpace(name)
-	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.Contains(name, "..") || strings.ContainsRune(name, 0) {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.ContainsRune(name, 0) {
 		return false
 	}
 	low := strings.ToLower(name)
@@ -1262,12 +1279,17 @@ func machineTags(spec CreateSpec) []string {
 
 func cleanName(name string) (string, error) {
 	name = strings.TrimSpace(name)
-	if name == "" || strings.Contains(name, "\\") || strings.Contains(name, "..") {
+	if name == "" || strings.Contains(name, "\\") {
 		return "", errors.New("file name is invalid")
 	}
 	name = strings.Trim(name, "/")
 	if name == "" || strings.Contains(name, "//") {
 		return "", errors.New("file name is invalid")
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", errors.New("file name is invalid")
+		}
 	}
 	return name, nil
 }

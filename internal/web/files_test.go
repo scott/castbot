@@ -814,6 +814,25 @@ func TestDiskLowFailsClosed(t *testing.T) {
 	}
 }
 
+func TestCatchAllWorkspaceName(t *testing.T) {
+	const catchAll = "issuetest/docs-site/src/pages/[...slug].astro"
+	if !safeGuestPath(catchAll) {
+		t.Fatal("dropped catch-all")
+	}
+	for _, name := range []string{"../etc/passwd", "docs/../../secret", "/etc/passwd", "..", "foo/.."} {
+		if safeGuestPath(name) {
+			t.Fatalf("allowed %q", name)
+		}
+	}
+	got, ok := cleanUploadName("[...slug].astro")
+	if !ok || got != "[...slug].astro" {
+		t.Fatalf("upload %q %v", got, ok)
+	}
+	if _, ok := cleanUploadName(".."); ok {
+		t.Fatal("allowed ..")
+	}
+}
+
 func TestEscapePaths(t *testing.T) {
 	ip := "203.0.113.162:9"
 	h, fake, agent := fileMachine(t, ip, "running")

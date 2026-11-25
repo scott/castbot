@@ -2,9 +2,12 @@ package host
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -78,5 +81,90 @@ func TestWorkspaceMethodsRejectEscapes(t *testing.T) {
 	}
 	if hits != before {
 		t.Fatalf("escape made %d calls", hits-before)
+	}
+}
+
+func TestWorkspaceListReadsACodingCheckout(t *testing.T) {
+	const catchAll = "issuetest/docs-site/src/pages/[...slug].astro"
+	var b strings.Builder
+	b.WriteByte('[')
+	const n = 40000
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"name":"src/file-`)
+		b.WriteString(strconv.Itoa(i))
+		b.WriteString(`.ts","size":1}`)
+	}
+	b.WriteString(`,{"name":"` + catchAll + `","size":12}]`)
+	raw := b.String()
+	if len(raw) <= 1<<20 {
+		t.Fatalf("fixture %d bytes", len(raw))
+	}
+	var gotPath string
+	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/castlet/files" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, raw)
+			return
+		}
+		gotPath = r.URL.EscapedPath()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(edge.Close)
+	m := newTestClient(t, newScriptAPI(t, ""), "do-token")
+	listed, err := m.ListWorkspace(context.Background(), edge.URL, "agent-token")
+	if err != nil || len(listed) != n+1 {
+		t.Fatalf("list %d %v", len(listed), err)
+	}
+	if listed[n].Name != catchAll || listed[n].Size != 12 {
+		t.Fatalf("last %#v", listed[n])
+	}
+	rc, err := m.ReadWorkspace(context.Background(), edge.URL, "agent-token", catchAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.Close()
+	if !strings.Contains(gotPath, "%5B...slug%5D.astro") {
+		t.Fatalf("path %s", gotPath)
+	}
+	dec, err := url.PathUnescape(gotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range strings.Split(dec, "/") {
+		if part == "." || part == ".." {
+			t.Fatalf("segment in %s", gotPath)
+		}
+	}
+}
+
+func TestWorkspaceListStopsWhenTheBodyIsTooBig(t *testing.T) {
+	raw := `[{"name":"notes.txt","size":1}]`
+	if _, err := parseWorkspaceList(strings.NewReader(raw+"x"), int64(len(raw))); !errors.Is(err, ErrGuest) {
+		t.Fatal(err)
+	}
+	listed, err := parseWorkspaceList(strings.NewReader(raw), int64(len(raw)))
+	if err != nil || len(listed) != 1 || listed[0].Name != "notes.txt" {
+		t.Fatalf("%#v %v", listed, err)
+	}
+	mixed := `[{"name":"docs/../../secret","size":1},{"name":"app/pages/[...slug].tsx","size":2}]`
+	listed, err = parseWorkspaceList(strings.NewReader(mixed), int64(len(mixed)))
+	if err != nil || len(listed) != 1 || listed[0].Name != "app/pages/[...slug].tsx" || listed[0].Size != 2 {
+		t.Fatalf("%#v %v", listed, err)
+	}
+}
+
+func TestCleanNameAllowsCatchAll(t *testing.T) {
+	const catchAll = "issuetest/docs-site/src/pages/[...slug].astro"
+	got, err := cleanName(catchAll)
+	if err != nil || got != catchAll {
+		t.Fatalf("%q %v", got, err)
+	}
+	for _, name := range []string{"../etc/passwd", "docs/../../secret", "..", "foo/..", "foo/./bar"} {
+		if _, err := cleanName(name); err == nil {
+			t.Fatalf("allowed %q", name)
+		}
 	}
 }
