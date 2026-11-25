@@ -175,6 +175,8 @@ func (s *Server) runOrganize(ctx context.Context, user store.User, name string, 
 		return s.deleteSectionTool(ctx, user, args)
 	case grouptool.ToolMoveAgents:
 		return s.moveAgentsTool(ctx, user, args)
+	case grouptool.ToolPlaceGroup:
+		return s.placeGroupTool(ctx, user, args)
 	default:
 		return "That request was rejected.", true
 	}
@@ -509,6 +511,44 @@ func (s *Server) moveAgentsTool(ctx context.Context, user store.User, args organ
 	}
 	_ = s.store.ExpandSection(ctx, user.ID, dest.ID)
 	return moveSentence(moved, already, dest.Name), false
+}
+
+func (s *Server) placeGroupTool(ctx context.Context, user store.User, args organizeArgs) (string, bool) {
+	if args.Group == "" {
+		return "Say which group.", true
+	}
+	card, msg, failed := s.resolveGroup(ctx, user.ID, args.Group, false)
+	if failed {
+		return msg, true
+	}
+	section := strings.TrimSpace(args.Section)
+	destID := ""
+	destName := "Groups"
+	if section != "" && section != "groups" {
+		sec, resolveMsg, resolveFailed := s.resolveSection(ctx, user.ID, section)
+		if resolveFailed {
+			return resolveMsg, true
+		}
+		destID = sec.ID
+		destName = sec.Name
+	}
+	if card.SectionID == destID {
+		return card.Title + " is already in " + destName + ".", false
+	}
+	target := destID
+	if destID == "" {
+		target = "groups"
+	}
+	if err := s.store.PlaceGroup(ctx, user.ID, card.ID, target); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return "That section was not found.", true
+		}
+		return "That group could not be moved.", true
+	}
+	if destID == "" {
+		return "Moved " + card.Title + " back to Groups.", false
+	}
+	return "Moved " + card.Title + " to " + destName + ".", false
 }
 
 func moveSentence(moved, already []string, dest string) string {

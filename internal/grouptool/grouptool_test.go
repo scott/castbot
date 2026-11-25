@@ -23,8 +23,11 @@ func TestSkillFiles(t *testing.T) {
 		t.Fatal("guide once")
 	}
 	yaml := Apply("name: Ada\n")
-	if !strings.Contains(yaml, SkillName) || !strings.Contains(yaml, ToolCreateGroup+": always-allow") || !strings.Contains(yaml, ToolMoveAgents+": always-allow") {
+	if !strings.Contains(yaml, SkillName) || !strings.Contains(yaml, ToolCreateGroup+": always-allow") || !strings.Contains(yaml, ToolMoveAgents+": always-allow") || !strings.Contains(yaml, ToolPlaceGroup+": always-allow") {
 		t.Fatal(yaml)
+	}
+	if !strings.Contains(SkillMarkdown(), ToolPlaceGroup) || !strings.Contains(SkillMarkdown(), "sidebar only") || !strings.Contains(SkillMarkdown(), "Groups list") {
+		t.Fatal("place skill")
 	}
 	if Apply(":\n") != ":\n" || Apply("*alias") != "*alias" {
 		t.Fatal("invalid yaml changed")
@@ -55,5 +58,19 @@ func TestParseFence(t *testing.T) {
 	_, req, ok = Parse("```castbot-organize\n{\"action\":\"update_group\",\"group\":\"Standup\",\"title\":\"Planning\"}\n```")
 	if !ok || req.Group != "Standup" || req.Title != "Planning" {
 		t.Fatalf("%v %+v", ok, req)
+	}
+	_, req, ok = Parse("```castbot-organize\n{\"action\":\"place_group\",\"group\":\"Standup\",\"section\":\"Research\"}\n```")
+	if !ok || req.Action != ToolPlaceGroup || req.Group != "Standup" || req.Section != "Research" {
+		t.Fatalf("%v %+v", ok, req)
+	}
+	_, req, ok = Parse("```castbot-organize\n{\"action\":\"place_group\",\"group\":\"Standup\"}\n```")
+	if !ok || req.Action != ToolPlaceGroup || req.Section != "" {
+		t.Fatalf("empty section %v %+v", ok, req)
+	}
+	if _, _, ok = Parse("```castbot-organize\n{\"action\":\"place_group\",\"group\":\"NAME\",\"section\":\"Research\"}\n```"); ok {
+		t.Fatal("placeholder group was usable")
+	}
+	if _, _, ok = Parse("```castbot-organize\n{\"action\":\"place_group\",\"section\":\"Research\"}\n```"); ok {
+		t.Fatal("missing group was usable")
 	}
 }
