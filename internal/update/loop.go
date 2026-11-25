@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 )
@@ -20,12 +21,19 @@ type RunConfig struct {
 	SuccessEvery time.Duration
 	RetryEvery   time.Duration
 	Checker      Checker
+	// Apply starts the root helper. Nil records the release and does not install.
+	Apply func(context.Context) error
+	// Inflight is the number of queued, streaming, or waiting runs.
+	// Automatic mode does not install when this is greater than zero.
+	Inflight func(context.Context) (int, error)
 }
 
 // Run checks once shortly after startup, then about six hours after each
 // success. A failed check keeps the previous cache and tries again after
 // RetryEvery, so a short outage does not wait six hours and does not spin.
-// off and a dev build do not fetch. This loop does not install a release.
+// off and a dev build do not fetch. Automatic mode starts Apply only when a
+// release is available and Inflight reports zero. A busy agent waits for the
+// next pass. A nil Apply does not install.
 func Run(ctx context.Context, cfg RunConfig) {
 	startup := cfg.Startup
 	if startup <= 0 {
@@ -55,6 +63,8 @@ func Run(ctx context.Context, cfg RunConfig) {
 			switch status {
 			case "available":
 				log.Printf("update check: a release is available")
+			case "installing":
+				log.Printf("update check: installing")
 			case "blocked":
 				log.Printf("update check: machine image is not published")
 			case "current":
@@ -88,13 +98,29 @@ func (cfg RunConfig) once(ctx context.Context) (string, error) {
 	if err := WriteCache(cfg.CachePath, cache); err != nil {
 		return "", err
 	}
-	if cache.Available {
+	status := "current"
+	if cache.ImageBlocked {
+		status = "blocked"
+	} else if cache.Available {
+		status = "available"
+	}
+	if status != "available" || mode != ModeAuto || cfg.Apply == nil {
+		return status, nil
+	}
+	if cfg.Inflight == nil {
+		return "", errors.New("inflight check failed")
+	}
+	n, err := cfg.Inflight(ctx)
+	if err != nil || n < 0 {
+		return "", errors.New("inflight check failed")
+	}
+	if n > 0 {
 		return "available", nil
 	}
-	if cache.ImageBlocked {
-		return "blocked", nil
+	if err := cfg.Apply(ctx); err != nil {
+		return "", errors.New("update did not start")
 	}
-	return "current", nil
+	return "installing", nil
 }
 
 func (cfg RunConfig) mode(ctx context.Context) (string, error) {
