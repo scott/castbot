@@ -943,7 +943,7 @@ func hashLimit(body io.Reader, limit int64) ([32]byte, error) {
 
 func oneName(name string) bool {
 	name = strings.TrimSpace(name)
-	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.Contains(name, "..") {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.ContainsRune(name, 0) {
 		return false
 	}
 	for _, part := range strings.Split(name, "/") {

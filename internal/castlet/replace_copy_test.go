@@ -195,6 +195,43 @@ func TestArchiveBridgeLeavesLocalBehind(t *testing.T) {
 	}
 }
 
+func TestArchiveBridgeCopiesCatchAll(t *testing.T) {
+	oldSrv, oldDir := guestServer(t, "guest-token")
+	newSrv, newDir := guestServer(t, "guest-token")
+	const rel = "docs-site/src/pages/[...slug].astro"
+	page := filepath.Join(oldDir, "workspace", "docs-site", "src", "pages")
+	if err := os.MkdirAll(page, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(page, "[...slug].astro"), []byte("slug"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, agent := castletAgent(t, oldSrv.URL)
+	h := &castHost{Fake: host.NewFake(), oldURL: oldSrv.URL, newURL: newSrv.URL, token: "guest-token", hideArchive: true}
+	h.Machines["vm-old"] = host.Machine{ID: "vm-old", State: "running", Endpoint: oldSrv.URL, Tags: []string{"agent:" + agent.ID}}
+	h.OnCreate = func(spec host.CreateSpec) {
+		next, err := st.ExchangeBootstrap(context.Background(), spec.AgentID, spec.Bootstrap)
+		if err != nil {
+			t.Errorf("exchange %v", err)
+			return
+		}
+		if _, err := st.PlaceVMToken(context.Background(), spec.AgentID, next); err != nil {
+			t.Errorf("place %v", err)
+		}
+	}
+	if _, err := replace.Run(context.Background(), st, h, replace.Options{
+		UserID: agent.UserID, AgentID: agent.ID, ActorKind: "cli", ActorID: "cli", Actor: "cli",
+		Image: "example.invalid/castbot-runtime:ff6d7ea", PublicURL: "https://castbot.example",
+		DataDir: t.TempDir(), BootWait: time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(newDir, "workspace", rel))
+	if err != nil || string(got) != "slug" {
+		t.Fatalf("page %q %v", got, err)
+	}
+}
+
 func TestArchiveFallsBackWhenNewGuestHasNoArchive(t *testing.T) {
 	oldSrv, oldDir := guestServer(t, "guest-token")
 	newSrv, newDir := guestServer(t, "guest-token")

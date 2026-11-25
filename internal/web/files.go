@@ -570,7 +570,7 @@ func cleanUploadName(name string) (string, bool) {
 	name = strings.TrimSpace(name)
 	name = strings.ReplaceAll(name, "\\", "/")
 	name = filepath.Base(name)
-	if name == "" || name == "." || name == ".." || strings.Contains(name, "/") || strings.Contains(name, "..") {
+	if name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
 		return "", false
 	}
 	name = strings.Map(func(r rune) rune {
@@ -677,7 +677,7 @@ func previewKind(name string) bool {
 
 func safeGuestPath(name string) bool {
 	name = strings.TrimSpace(name)
-	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.Contains(name, "..") || strings.ContainsRune(name, 0) {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.ContainsRune(name, 0) {
 		return false
 	}
 	low := strings.ToLower(name)

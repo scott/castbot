@@ -346,7 +346,7 @@ func (s *Store) ObserveWorkspace(ctx context.Context, userID, agentID string, li
 }
 
 func cacheNameOK(name string) bool {
-	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.Contains(name, "..") || strings.ContainsRune(name, 0) {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, `\`) || strings.ContainsRune(name, 0) {
 		return false
 	}
 	low := strings.ToLower(name)
