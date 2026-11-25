@@ -95,6 +95,36 @@ func TestEmbeddedPublicKeyParses(t *testing.T) {
 	}
 }
 
+// TestWriteInstallFixture packs a signed release when CASTBOT_FIXTURE_DIR
+// is set. scripts/install_test.sh uses it. A normal test run does nothing.
+func TestWriteInstallFixture(t *testing.T) {
+	dir := os.Getenv("CASTBOT_FIXTURE_DIR")
+	if dir == "" {
+		return
+	}
+	stub := filepath.Join(dir, "stub")
+	pub, privText := testKey(t)
+	if err := os.WriteFile(filepath.Join(dir, "key.pub"), pub, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commit := "fedcba9876543210fedcba9876543210fedcba98"
+	guest := "abababababababababababababababababababababababababababababababab"
+	err := Pack(filepath.Join(dir, "out"), Input{
+		Version:            "0.20261124.1",
+		Commit:             commit,
+		Schema:             37,
+		GuestID:            guest,
+		RuntimeImage:       "ghcr.io/scott/castbot-runtime:" + commit,
+		RuntimeImageCommit: commit,
+		Notes:              "https://github.com/scott/castbot/releases/tag/v0.20261124.1",
+		AMD64:              stub,
+		ARM64:              stub,
+	}, privText)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRejectsBadVersion(t *testing.T) {
 	in := Input{Version: "dev", Commit: "0123456789abcdef0123456789abcdef01234567"}
 	if err := in.Validate(); err == nil {

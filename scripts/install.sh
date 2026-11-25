@@ -37,13 +37,15 @@ MODEL_PROVIDER=""
 MODEL=""
 MODEL_SAVED=0
 WORKSPACE="Personal"
-REF="main"
+REF=""
 SHA=""
 GOARCH=""
 OWNER="root"
 GROUP="root"
 ACCOUNT_NEW=0
 SRC_DIR=""
+RELEASE_TMP=""
+MINISIGN_WORK=""
 TMP_ENV=""
 LAST_ERR=""
 INTERACTIVE=0
@@ -89,7 +91,7 @@ Non-interactive settings:
   CASTBOT_MODEL_KEY            optional model key for that provider
   CASTBOT_MODEL                model id from that provider
   CASTBOT_IMAGE                runtime image override
-  CASTBOT_REF                  git branch, tag, or commit (default main)
+  CASTBOT_REF                  release tag, or a git ref to build (default: latest release)
   CASTBOT_WORKSPACE            workspace name (default Personal)
   CASTBOT_HTTPS_WAIT_SECONDS   seconds to wait for https (default 90)
 
@@ -113,6 +115,12 @@ cleanup() {
   local status=$?
   if [[ -n "$SRC_DIR" ]]; then
     rm -rf "$SRC_DIR"
+  fi
+  if [[ -n "$RELEASE_TMP" ]]; then
+    rm -rf "$RELEASE_TMP"
+  fi
+  if [[ -n "$MINISIGN_WORK" ]]; then
+    rm -rf "$MINISIGN_WORK"
   fi
   if [[ -n "$TMP_ENV" ]]; then
     rm -f "$TMP_ENV"
@@ -614,7 +622,7 @@ read_settings() {
     INTERACTIVE=1
   fi
   WORKSPACE=${CASTBOT_WORKSPACE:-Personal}
-  REF=${CASTBOT_REF:-main}
+  REF=${CASTBOT_REF:-}
   if [[ "$INTERACTIVE" == "1" ]]; then
     say_intro
     if [[ -z "${CASTBOT_ADMIN_EMAIL:-}" ]]; then
@@ -689,7 +697,7 @@ read_settings() {
   if [[ -z "$WORKSPACE" || ${#WORKSPACE} -gt 80 || "$WORKSPACE" == *$'\n'* ]]; then
     die "workspace name is not valid"
   fi
-  if ! valid_ref "$REF"; then
+  if [[ -n "$REF" ]] && ! valid_ref "$REF"; then
     die "source ref is not valid"
   fi
   model_choice_ok
@@ -731,7 +739,7 @@ prepare_os() {
     apt-get update
     apt-get install -y caddy
   fi
-  if [[ -z "${CASTBOT_BINARY:-}" ]]; then
+  if [[ -z "${CASTBOT_BINARY:-}" && "$(release_kind)" == "source" ]]; then
     ensure_go
   fi
 }
@@ -801,6 +809,19 @@ install_owned() {
   fi
 }
 
+# release_kind is "latest", "tag", or "source".
+# An empty ref downloads the latest signed release. A vMAJOR.MINOR.PATCH
+# tag downloads that release. Any other ref is cloned and built.
+release_kind() {
+  if [[ -z "$REF" ]]; then
+    printf 'latest\n'
+  elif [[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf 'tag\n'
+  else
+    printf 'source\n'
+  fi
+}
+
 # release_label_for prints the version stored next to RELEASE.
 # A tag ref vMAJOR.MINOR.PATCH uses that number. Any other ref uses
 # 0.0.0 plus the commit.
@@ -817,6 +838,132 @@ release_label_for() {
   printf '%s' "$ver"
 }
 
+# verify_minisign checks a minisign signature over message.
+# The public key is the line embedded in this script.
+verify_minisign() {
+  local message=$1 sigfile=$2
+  local lines trusted comment
+  MINISIGN_WORK=$(mktemp -d)
+  mapfile -t lines <"$sigfile"
+  [[ ${#lines[@]} -eq 4 ]] || die "release signature is unexpected"
+  [[ "${lines[0]}" == "untrusted comment: "* ]] || die "release signature is unexpected"
+  [[ "${lines[2]}" == "trusted comment: "* ]] || die "release signature is unexpected"
+  printf '%s' "$CASTBOT_MINISIGN_PUBLIC_KEY" | base64 -d >"$MINISIGN_WORK/pub.raw" || die "release key is unexpected"
+  printf '%s' "${lines[1]}" | base64 -d >"$MINISIGN_WORK/sigblob" || die "release signature is unexpected"
+  printf '%s' "${lines[3]}" | base64 -d >"$MINISIGN_WORK/csig" || die "release signature is unexpected"
+  [[ $(stat -c '%s' "$MINISIGN_WORK/pub.raw") -eq 42 ]] || die "release key is unexpected"
+  [[ $(stat -c '%s' "$MINISIGN_WORK/sigblob") -eq 74 ]] || die "release signature is unexpected"
+  [[ $(stat -c '%s' "$MINISIGN_WORK/csig") -eq 64 ]] || die "release signature is unexpected"
+  dd if="$MINISIGN_WORK/pub.raw" of="$MINISIGN_WORK/pub.id" bs=1 count=10 status=none
+  dd if="$MINISIGN_WORK/sigblob" of="$MINISIGN_WORK/sig.id" bs=1 count=10 status=none
+  cmp -s "$MINISIGN_WORK/pub.id" "$MINISIGN_WORK/sig.id" || die "release signature was rejected"
+  {
+    printf '%s\n' '-----BEGIN PUBLIC KEY-----'
+    {
+      printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00'
+      dd if="$MINISIGN_WORK/pub.raw" bs=1 skip=10 count=32 status=none
+    } | base64 -w 64
+    printf '%s\n' '-----END PUBLIC KEY-----'
+  } >"$MINISIGN_WORK/pub.pem"
+  dd if="$MINISIGN_WORK/sigblob" of="$MINISIGN_WORK/sig.bin" bs=1 skip=10 count=64 status=none
+  if ! openssl pkeyutl -verify -pubin -inkey "$MINISIGN_WORK/pub.pem" -rawin -in "$message" -sigfile "$MINISIGN_WORK/sig.bin" >/dev/null 2>&1; then
+    die "release signature was rejected"
+  fi
+  trusted=${lines[2]}
+  comment=${trusted#"trusted comment: "}
+  {
+    cat "$MINISIGN_WORK/sig.bin"
+    printf '%s' "$comment"
+  } >"$MINISIGN_WORK/comment.msg"
+  if ! openssl pkeyutl -verify -pubin -inkey "$MINISIGN_WORK/pub.pem" -rawin -in "$MINISIGN_WORK/comment.msg" -sigfile "$MINISIGN_WORK/csig" >/dev/null 2>&1; then
+    die "release signature was rejected"
+  fi
+  rm -rf "$MINISIGN_WORK"
+  MINISIGN_WORK=""
+}
+
+manifest_string() {
+  local key=$1 file=$2 got count
+  count=$(grep -c -E "^  \"${key}\": \"[^\"]*\",?$" "$file" || true)
+  [[ "$count" == "1" ]] || die "release manifest is unexpected"
+  got=$(sed -n "s/^  \"${key}\": \"\\([^\"]*\\)\",\\{0,1\\}$/\\1/p" "$file")
+  [[ -n "$got" && "$got" != *$'\n'* ]] || die "release manifest is unexpected"
+  printf '%s' "$got"
+}
+
+# download_release verifies a signed release and sets SHA, REL_VERSION,
+# and RELEASE_BUILT. Bytes come from the castbot release assets, or from
+# CASTBOT_RELEASE_FIXTURE when a test points at a local directory.
+download_release() {
+  local max_bin=$((100 * 1024 * 1024)) max_meta=$((1024 * 1024))
+  local name version commit guest image image_commit notes asset
+  host_arch
+  asset="castbot_linux_${GOARCH}"
+  RELEASE_TMP=$(mktemp -d)
+  if [[ -n "${CASTBOT_RELEASE_FIXTURE:-}" ]]; then
+    [[ -d "$CASTBOT_RELEASE_FIXTURE" && "$CASTBOT_RELEASE_FIXTURE" != *://* ]] || die "release fixture is not a directory"
+    for name in SHA256SUMS SHA256SUMS.minisig release.json "$asset"; do
+      [[ -f "$CASTBOT_RELEASE_FIXTURE/$name" ]] || die "release fixture is missing a file"
+      local size
+      size=$(stat -c '%s' "$CASTBOT_RELEASE_FIXTURE/$name")
+      if [[ "$name" == "$asset" ]]; then
+        [[ "$size" -gt 0 && "$size" -le "$max_bin" ]] || die "release file size is unexpected"
+      else
+        [[ "$size" -gt 0 && "$size" -le "$max_meta" ]] || die "release file size is unexpected"
+      fi
+      cp "$CASTBOT_RELEASE_FIXTURE/$name" "$RELEASE_TMP/$name"
+    done
+  else
+    if [[ -n "$PREFIX" ]]; then
+      die "CASTBOT_RELEASE_FIXTURE is required when CASTBOT_INSTALL_PREFIX is set"
+    fi
+    local base
+    case "$(release_kind)" in
+      latest) base="https://github.com/scott/castbot/releases/latest/download" ;;
+      tag) base="https://github.com/scott/castbot/releases/download/${REF}" ;;
+      *) die "release ref is unexpected" ;;
+    esac
+    for name in SHA256SUMS SHA256SUMS.minisig release.json "$asset"; do
+      local max=$max_meta
+      if [[ "$name" == "$asset" ]]; then
+        max=$max_bin
+      fi
+      curl -fsSL --retry 3 --proto '=https' --max-redirs 5 --max-filesize "$max" \
+        -o "$RELEASE_TMP/$name" "${base}/${name}" || die "could not download the release"
+      local size
+      size=$(stat -c '%s' "$RELEASE_TMP/$name")
+      [[ "$size" -gt 0 && "$size" -le "$max" ]] || die "release file size is unexpected"
+    done
+  fi
+  verify_minisign "$RELEASE_TMP/SHA256SUMS" "$RELEASE_TMP/SHA256SUMS.minisig"
+  grep -q '^  "manifest": 1,$' "$RELEASE_TMP/release.json" || die "release manifest is unexpected"
+  version=$(manifest_string version "$RELEASE_TMP/release.json")
+  commit=$(manifest_string commit "$RELEASE_TMP/release.json")
+  guest=$(manifest_string guest_id "$RELEASE_TMP/release.json")
+  image=$(manifest_string runtime_image "$RELEASE_TMP/release.json")
+  image_commit=$(manifest_string runtime_image_commit "$RELEASE_TMP/release.json")
+  notes=$(manifest_string notes "$RELEASE_TMP/release.json")
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "release manifest is unexpected"
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "release manifest is unexpected"
+  [[ "$guest" =~ ^[0-9a-f]{64}$ ]] || die "release manifest is unexpected"
+  [[ "$image_commit" =~ ^[0-9a-f]{40}$ ]] || die "release manifest is unexpected"
+  [[ "$image" == "ghcr.io/scott/castbot-runtime:${image_commit}" ]] || die "release manifest is unexpected"
+  [[ "$notes" == "https://github.com/scott/castbot/releases/tag/v${version}" ]] || die "release manifest is unexpected"
+  if [[ "$(release_kind)" == "tag" && "$version" != "${REF#v}" ]]; then
+    die "release version does not match"
+  fi
+  {
+    grep -E "^[0-9a-f]{64}  release\\.json$" "$RELEASE_TMP/SHA256SUMS"
+    grep -E "^[0-9a-f]{64}  ${asset}$" "$RELEASE_TMP/SHA256SUMS"
+  } >"$RELEASE_TMP/check" || die "release sums are missing a file"
+  [[ $(wc -l <"$RELEASE_TMP/check") -eq 2 ]] || die "release sums are unexpected"
+  (cd "$RELEASE_TMP" && sha256sum -c "$RELEASE_TMP/check") >/dev/null || die "release hash was rejected"
+  assert_static "$RELEASE_TMP/$asset"
+  SHA=$commit
+  REL_VERSION=$version
+  RELEASE_BUILT="$RELEASE_TMP/$asset"
+}
+
 install_binary() {
   local built
   if [[ -n "${CASTBOT_BINARY:-}" ]]; then
@@ -828,7 +975,7 @@ install_binary() {
       die "CASTBOT_BINARY is missing"
     fi
     built=$CASTBOT_BINARY
-  else
+  elif [[ "$(release_kind)" == "source" ]]; then
     if [[ -n "$PREFIX" ]]; then
       die "CASTBOT_BINARY is required when CASTBOT_INSTALL_PREFIX is set"
     fi
@@ -851,6 +998,9 @@ install_binary() {
       CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -trimpath -ldflags="$ldflags" -o "$built" ./cmd/castbot
     )
     assert_static "$built"
+  else
+    download_release
+    built=$RELEASE_BUILT
   fi
   if [[ -z "${REL_VERSION:-}" ]]; then
     REL_VERSION=$(release_label_for "$SHA" "")
