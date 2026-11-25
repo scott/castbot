@@ -19,7 +19,7 @@ const (
 	ToolRetry = "retry_run"
 	// ToolList lists this agent's threads, including routine runs.
 	ToolList = "list_threads"
-	// ToolOpen opens the thread the person names.
+	// ToolOpen opens the thread the person names, only from Chat.
 	ToolOpen = "open_thread"
 	// Fence is the markdown language tag used when the tools are absent.
 	Fence = "castbot-chat"
@@ -28,7 +28,7 @@ const (
 	// PlaceholderThread is the sample thread in the fence example.
 	PlaceholderThread = "THREAD"
 	// SkillSummary is the one-line description in the skill file and agent.yaml.
-	SkillSummary = "Stop a reply, retry a failed run, or open a thread when the person in this chat asks."
+	SkillSummary = "Stop a reply, retry a failed run, or open a thread from Chat when the person asks."
 )
 
 const skillBody = `Call these tools only when the person in this chat asks.
@@ -37,7 +37,7 @@ stop_reply stops the reply in progress, the same as the Stop button. Pass thread
 
 retry_run tries a failed reply again. Pass thread when more than one thread has a failed reply. When that thread has more than one failed reply, the latest one is retried.
 
-list_threads lists this agent's threads, including routine runs. open_thread opens the one they name. Pass thread as the title or the id. Chat is the main thread. A routine run uses the routine's name.
+list_threads lists this agent's threads, including routine runs. open_thread returns the recent turns of the one they name, and only while this turn is Chat. A group or a routine cannot open another thread. Pass thread as the title or the id. Chat is the direct chat with the owner. A routine run uses the routine's name.
 
 Do not pass user_id or agent_id. These tools use this agent only.
 
@@ -100,7 +100,7 @@ func Specs() []Spec {
 		{Name: ToolStop, Description: "Stop the reply in progress, the same as the Stop button. Pass thread when more than one reply is in progress.", Thread: true},
 		{Name: ToolRetry, Description: "Try a failed reply again. Pass thread when more than one thread has a failed reply.", Thread: true},
 		{Name: ToolList, Description: "List this agent's threads, including routine runs."},
-		{Name: ToolOpen, Description: "Open the thread the person named. Pass thread as the title or the id.", Thread: true},
+		{Name: ToolOpen, Description: "Open the thread the person named, only while this turn is Chat. Pass thread as the title or the id.", Thread: true},
 	}
 }
 

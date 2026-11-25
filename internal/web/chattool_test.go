@@ -8,6 +8,7 @@ import (
 
 	"github.com/scott/castbot/internal/chattool"
 	"github.com/scott/castbot/internal/host"
+	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/store"
 )
 
@@ -76,11 +77,11 @@ func TestMachineChatStopsRetriesAndOpensThreads(t *testing.T) {
 	}
 
 	code, body = machinePost(t, h, ip, token, caller.ID, "/agents", routinePayload(chattool.ToolOpen, map[string]any{"thread": "sweep", "agent_id": sibling.ID}))
-	if code != http.StatusOK || strings.Contains(body, `"error":true`) || !strings.Contains(body, "Opened Weekly link sweep. Routine.") || !strings.Contains(body, "user: Check the links.") || strings.Contains(body, "Only in the chat.") {
+	if code != http.StatusOK || !strings.Contains(body, `"error":true`) || !strings.Contains(body, "Open a thread from Chat.") || strings.Contains(body, "Check the links.") || strings.Contains(body, "Only in the chat.") {
 		t.Fatalf("open %d %s", code, body)
 	}
 	code, body = machinePost(t, h, ip, token, caller.ID, "/agents", routinePayload(chattool.ToolOpen, map[string]any{"thread": "Chat"}))
-	if code != http.StatusOK || strings.Contains(body, `"error":true`) || !strings.Contains(body, "Opened Chat.") || !strings.Contains(body, "Only in the chat.") || strings.Contains(body, "Check the links.") {
+	if code != http.StatusOK || !strings.Contains(body, `"error":true`) || !strings.Contains(body, "Open a thread from Chat.") || strings.Contains(body, "Only in the chat.") || strings.Contains(body, "Check the links.") {
 		t.Fatalf("open chat %d %s", code, body)
 	}
 
@@ -236,6 +237,155 @@ func TestChatFenceStopsOne(t *testing.T) {
 	if runStatus(t, h, user.ID, queued.ID) != "stopped" {
 		t.Fatal("fence did not stop the run")
 	}
+}
+
+func TestOpenThreadOnlyFromChat(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	user, _ := h.account("chat-open@example.com", "Ada", "correct-horse-1")
+	caller := seedCaller(t, h, user, "Ada")
+	other := seedCaller(t, h, user, "Pip")
+	token := guestToken(t, h, caller)
+	ip := "203.0.113.92:9"
+	routine, err := h.st.CreateThread(ctx, user.ID, "routine", caller.ID, "Weekly link sweep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.CreateMessage(ctx, user.ID, routine.ID, "user", user.ID, "Check the links."); err != nil {
+		t.Fatal(err)
+	}
+	group, err := h.st.CreateGroup(ctx, user.ID, "Standup", []string{caller.ID, other.ID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.CreateMessage(ctx, user.ID, group.ID, "user", user.ID, "Only in the standup."); err != nil {
+		t.Fatal(err)
+	}
+	dm := dmThread(t, h, user.ID, caller.ID)
+	if _, err := h.st.CreateMessage(ctx, user.ID, dm.ID, "user", user.ID, "Only in the chat."); err != nil {
+		t.Fatal(err)
+	}
+	refuse := func(label string) {
+		t.Helper()
+		code, body := machinePost(t, h, ip, token, caller.ID, "/agents", routinePayload(chattool.ToolOpen, map[string]any{"thread": "sweep"}))
+		if code != http.StatusOK || !strings.Contains(body, `"error":true`) || !strings.Contains(body, "Open a thread from Chat.") || strings.Contains(body, "Check the links.") || strings.Contains(body, "Only in the standup.") || strings.Contains(body, "Only in the chat.") {
+			t.Fatalf("%s %d %s", label, code, body)
+		}
+	}
+	refuse("no turn")
+	queued, err := h.st.CreateRun(ctx, user.ID, dm.ID, caller.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refuse("queued chat")
+	if _, err := h.st.FailRun(ctx, user.ID, queued.ID, "This run did not start.", 0); err != nil {
+		t.Fatal(err)
+	}
+	routineRun := streamOn(t, h, user.ID, routine.ID, caller.ID)
+	refuse("routine")
+	if _, err := h.st.FailRun(ctx, user.ID, routineRun, "This run did not start.", 0); err != nil {
+		t.Fatal(err)
+	}
+	groupRun := streamOn(t, h, user.ID, group.ID, caller.ID)
+	refuse("group")
+	dmRun := streamOn(t, h, user.ID, dm.ID, caller.ID)
+	refuse("two turns")
+	if _, err := h.st.FailRun(ctx, user.ID, groupRun, "This run did not start.", 0); err != nil {
+		t.Fatal(err)
+	}
+	code, body := machinePost(t, h, ip, token, caller.ID, "/agents", routinePayload(chattool.ToolOpen, map[string]any{"thread": "sweep", "user_id": other.ID}))
+	if code != http.StatusOK || strings.Contains(body, `"error":true`) || !strings.Contains(body, "Opened Weekly link sweep. Routine.") || !strings.Contains(body, "user: Check the links.") || strings.Contains(body, "Only in the standup.") || strings.Contains(body, "Only in the chat.") {
+		t.Fatalf("open routine %d %s", code, body)
+	}
+	code, body = machinePost(t, h, ip, token, caller.ID, "/agents", routinePayload(chattool.ToolOpen, map[string]any{"thread": "Chat"}))
+	if code != http.StatusOK || strings.Contains(body, `"error":true`) || !strings.Contains(body, "Opened Chat.") || !strings.Contains(body, "Only in the chat.") || strings.Contains(body, "Check the links.") || strings.Contains(body, "Only in the standup.") {
+		t.Fatalf("open chat %d %s", code, body)
+	}
+	if runStatus(t, h, user.ID, dmRun) != "streaming" {
+		t.Fatal("open changed the chat run")
+	}
+}
+
+func TestChatFenceOpenOnlyFromChat(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	user, _ := h.account("chat-fence-open@example.com", "Ada", "correct-horse-1")
+	caller := seedCaller(t, h, user, "Ada")
+	other := seedCaller(t, h, user, "Pip")
+	routine, err := h.st.CreateThread(ctx, user.ID, "routine", caller.ID, "Weekly link sweep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.CreateMessage(ctx, user.ID, routine.ID, "user", user.ID, "Check the links."); err != nil {
+		t.Fatal(err)
+	}
+	group, err := h.st.CreateGroup(ctx, user.ID, "Standup", []string{caller.ID, other.ID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.CreateMessage(ctx, user.ID, group.ID, "user", user.ID, "Only in the standup."); err != nil {
+		t.Fatal(err)
+	}
+	dm := dmThread(t, h, user.ID, caller.ID)
+	if _, err := h.st.CreateMessage(ctx, user.ID, dm.ID, "user", user.ID, "Only in the chat."); err != nil {
+		t.Fatal(err)
+	}
+	openSweep := "```castbot-chat\n{\"action\":\"open_thread\",\"thread\":\"Weekly link sweep\"}\n```\n"
+	openStandup := "```castbot-chat\n{\"action\":\"open_thread\",\"thread\":\"Standup\"}\n```\n"
+	finishChatFence(t, h, user.ID, caller, routine.ID, openStandup)
+	body := lastAgentBody(t, h, user.ID, routine.ID)
+	if strings.Contains(body, "castbot-chat") || !strings.Contains(body, "Open a thread from Chat.") || strings.Contains(body, "Check the links.") || strings.Contains(body, "Only in the standup.") || strings.Contains(body, "Only in the chat.") {
+		t.Fatalf("routine fence %s", body)
+	}
+	finishChatFence(t, h, user.ID, caller, group.ID, openSweep)
+	body = lastAgentBody(t, h, user.ID, group.ID)
+	if strings.Contains(body, "castbot-chat") || !strings.Contains(body, "Open a thread from Chat.") || strings.Contains(body, "Check the links.") || strings.Contains(body, "Only in the standup.") || strings.Contains(body, "Only in the chat.") {
+		t.Fatalf("group fence %s", body)
+	}
+	replyRoutine(t, h, user.ID, caller, openSweep)
+	body = agentReplyBody(t, h, user.ID, caller.ID)
+	if strings.Contains(body, "castbot-chat") || !strings.Contains(body, "Opened Weekly link sweep. Routine.") || !strings.Contains(body, "user: Check the links.") || strings.Contains(body, "Only in the standup.") || strings.Contains(body, "Only in the chat.") {
+		t.Fatalf("chat fence %s", body)
+	}
+}
+
+func streamOn(t *testing.T, h *harness, userID, threadID, agentID string) string {
+	t.Helper()
+	runRow, err := h.st.CreateRun(context.Background(), userID, threadID, agentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.MarkStreaming(context.Background(), userID, runRow.ID); err != nil {
+		t.Fatal(err)
+	}
+	return runRow.ID
+}
+
+func finishChatFence(t *testing.T, h *harness, userID string, caller store.Agent, threadID, body string) {
+	t.Helper()
+	runRow, err := h.st.CreateRun(context.Background(), userID, threadID, caller.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.st.FinishRun(context.Background(), userID, runRow.ID, body, 0); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.maybeChat(run.Job{UserID: userID, ThreadID: threadID, AgentID: caller.ID, RunID: runRow.ID})
+}
+
+func lastAgentBody(t *testing.T, h *harness, userID, threadID string) string {
+	t.Helper()
+	msgs, err := h.st.ListMessages(context.Background(), userID, threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body string
+	for _, msg := range msgs {
+		if msg.AuthorKind == "agent" {
+			body = msg.Body
+		}
+	}
+	return body
 }
 
 func failRun(t *testing.T, h *harness, userID, agentID, threadID, body string) {

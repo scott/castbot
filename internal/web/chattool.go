@@ -28,6 +28,7 @@ const (
 	chatThreads   = "Threads could not be read."
 	chatOpenAsk   = "Say which thread to open."
 	chatOpenMany  = "More than one thread matches. Say which one."
+	chatOpenFrom  = "Open a thread from Chat."
 	chatEmpty     = "No threads yet."
 )
 
@@ -51,7 +52,7 @@ func (s *Server) machineChat(w http.ResponseWriter, r *http.Request, userID, nam
 			return
 		}
 	}
-	text, failed := s.runChatTool(r.Context(), user, caller, name, args)
+	text, failed := s.runChatTool(r.Context(), user, caller, name, args, "")
 	writeAgentResult(w, text, failed)
 }
 
@@ -81,7 +82,7 @@ func (s *Server) maybeChat(job run.Job) {
 	if err != nil {
 		return
 	}
-	text, failed := s.runChatTool(ctx, user, caller, fields.Action, chatArgs{Thread: fields.Thread})
+	text, failed := s.runChatTool(ctx, user, caller, fields.Action, chatArgs{Thread: fields.Thread}, job.ThreadID)
 	body := strings.TrimSpace(visible)
 	if body == "" {
 		body = text
@@ -91,7 +92,7 @@ func (s *Server) maybeChat(job run.Job) {
 	s.replaceReply(ctx, job.UserID, reply.ID, body)
 }
 
-func (s *Server) runChatTool(ctx context.Context, user store.User, caller store.Agent, name string, args chatArgs) (string, bool) {
+func (s *Server) runChatTool(ctx context.Context, user store.User, caller store.Agent, name string, args chatArgs, turnThread string) (string, bool) {
 	switch name {
 	case chattool.ToolStop:
 		return s.stopReplyNow(ctx, user, caller, args.Thread)
@@ -100,10 +101,40 @@ func (s *Server) runChatTool(ctx context.Context, user store.User, caller store.
 	case chattool.ToolList:
 		return s.listThreadText(ctx, user.ID, caller.ID)
 	case chattool.ToolOpen:
+		if !s.chatTurnAllowsOpen(ctx, user.ID, caller.ID, turnThread) {
+			return chatOpenFrom, true
+		}
 		return s.openNamedThread(ctx, user.ID, caller.ID, args.Thread)
 	default:
 		return "That request was rejected.", true
 	}
+}
+
+// chatTurnAllowsOpen is true only for the owner's Chat. A tool call has no
+// thread id, so the single streaming run for this agent is the turn. A fence
+// already names its thread. A group or a routine turn does not open another.
+func (s *Server) chatTurnAllowsOpen(ctx context.Context, userID, agentID, turnThread string) bool {
+	id := strings.TrimSpace(turnThread)
+	if id == "" {
+		rows, err := s.store.ListOpenRuns(ctx, userID)
+		if err != nil {
+			return false
+		}
+		for _, row := range rows {
+			if row.AgentID != agentID || row.Status != "streaming" {
+				continue
+			}
+			if id != "" {
+				return false
+			}
+			id = row.ThreadID
+		}
+		if id == "" {
+			return false
+		}
+	}
+	th, err := s.store.GetThread(ctx, userID, id)
+	return err == nil && th.Kind == "dm"
 }
 
 func (s *Server) stopReplyNow(ctx context.Context, user store.User, caller store.Agent, query string) (string, bool) {
