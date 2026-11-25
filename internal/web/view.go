@@ -265,6 +265,7 @@ type page struct {
 	ResumePoll          bool
 	ResumeChrome        bool
 	ResumeClearAct      bool
+	Update              updatePanel
 }
 
 func finish(p page) page {

@@ -71,6 +71,12 @@ type Server struct {
 
 	devEcho         bool
 	explicitRuntime bool
+	updateSet       bool
+	updateVersion   string
+	updateCommit    string
+	updateEnv       string
+	updateCache     string
+	updateApply     func(context.Context) error
 	log             *slog.Logger
 	// modelProxyUpstream replaces the provider base URL. Tests set it.
 	// An empty value uses the manifest URL.
@@ -355,6 +361,9 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /", s.home)
 	mux.HandleFunc("GET /settings", s.settings)
+	mux.HandleFunc("GET /settings/update", s.updatePage)
+	mux.HandleFunc("POST /settings/update", s.saveUpdateMode)
+	mux.HandleFunc("POST /settings/update/apply", s.applyUpdate)
 	mux.HandleFunc("POST /settings/account", s.saveName)
 	mux.HandleFunc("POST /settings/invites", s.createInvite)
 	mux.HandleFunc("POST /settings/invites/{id}/revoke", s.revokeInvite)

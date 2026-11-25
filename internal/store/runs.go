@@ -108,6 +108,14 @@ func (s *Store) ListThreadRuns(ctx context.Context, userID, threadID string) ([]
 	return out, rows.Err()
 }
 
+// InflightRuns counts queued, streaming, and waiting_approval runs.
+// An update waits until this is zero. The count is for the whole install.
+func (s *Store) InflightRuns(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE status IN ('queued', 'streaming', 'waiting_approval')`).Scan(&n)
+	return n, err
+}
+
 // MarkStreaming moves a queued run to streaming.
 func (s *Store) MarkStreaming(ctx context.Context, userID, id string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE runs SET status = 'streaming' WHERE id = ? AND user_id = ? AND status = 'queued'`, id, userID)

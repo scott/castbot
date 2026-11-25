@@ -83,6 +83,7 @@ func serve(args []string) {
 		log.Fatal(err)
 	}
 	app.SetDevEcho(cfg.DevEcho)
+	app.SetUpdate(version, commit, cfg.UpdateMode, update.DefaultCachePath)
 	app.SetDataDir(filepath.Dir(cfg.DBPath))
 	if cfg.RuntimeURL != "" {
 		app.SetExplicitRuntime(true)

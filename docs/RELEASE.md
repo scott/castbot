@@ -33,3 +33,9 @@ The workflow does not deploy a host. `scripts/deploy.sh` remains the laptop path
 The server asks for the latest release about six hours after a successful check, and once shortly after startup. The request is a GET with user agent `castbot-update`. It does not send the hostname, the account, or an instance id.
 
 A verified newer release is recorded in `/opt/castbot/update.json` (mode 0600). A failed check leaves that file as it was. `CASTBOT_UPDATE_MODE=off` skips the request. The key is optional, so an env file without it still starts. The server records the release and does not install it yet.
+
+## What the owner sees
+
+Settings has an Update section for the workspace owner. It shows this copy's version, whether a release is ready, and a choice of Ask me, Install updates, or Don't check. A host file value of `CASTBOT_UPDATE_MODE` wins, and the page cannot change it. Members do not see the section.
+
+Ask me also shows a banner on the agent list when a release is ready. Update now stays on the page while an agent is working and asks the owner to try again when the agent is idle. Saving the choice does not install a release.
