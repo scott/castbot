@@ -27,6 +27,22 @@ cmd_count() {
   printf '%s\n' "$n"
 }
 
+assert_update_helper() {
+  local prefix=$1
+  local helper="$prefix/usr/local/sbin/castbot-update"
+  local sudoers="$prefix/etc/sudoers.d/castbot-update"
+  [[ -x "$helper" ]] || fail "update helper"
+  [[ "$(stat -c '%a' "$helper")" == "755" ]] || fail "helper mode"
+  grep -F -q "exec $prefix/opt/castbot/bin/castbot update apply" "$helper" || fail "helper exec"
+  if grep -q '\$@' "$helper"; then
+    fail "helper takes arguments"
+  fi
+  [[ "$(stat -c '%a' "$sudoers")" == "440" ]] || fail "sudoers mode"
+  grep -q 'Defaults:castbot env_reset' "$sudoers" || fail "env_reset"
+  grep -F -q 'secure_path="/usr/sbin:/usr/bin:/sbin:/bin"' "$sudoers" || fail "secure_path"
+  grep -F -q "castbot ALL=(root) NOPASSWD: $helper" "$sudoers" || fail "sudoers command"
+}
+
 write_user_stub() {
   local stub=$1
   cat > "$stub" <<'EOF'
@@ -240,6 +256,7 @@ fi
 [[ "$(tr -d '[:space:]' < "$prefix/opt/castbot/releases/$sha/VERSION")" == "0.0.0+$sha" ]] || fail "release VERSION"
 [[ -x "$prefix/opt/castbot/releases/$sha/castbot" ]] || fail "binary mode"
 [[ "$(readlink "$prefix/opt/castbot/bin/castbot")" == "$prefix/opt/castbot/releases/$sha/castbot" ]] || fail "symlink"
+assert_update_helper "$prefix"
 cache="$prefix/opt/castbot/update.json"
 [[ -f "$cache" ]] || fail "missing update cache"
 [[ "$(stat -c '%a' "$cache")" == "600" ]] || fail "update cache mode"
@@ -502,6 +519,7 @@ if grep -q 'CASTBOT_IMAGE=' "$envfile" || grep -q 'CASTBOT_DO_TOKEN=' "$envfile"
   fail "second run stored a machine host"
 fi
 [[ "$(sed -n 's/^CASTBOT_SESSION_KEY=//p' "$envfile")" == "$session" ]] || fail "second run session key"
+assert_update_helper "$prefix"
 if printf '%s\n' "$out2" | grep -q "$session"; then
   fail "session key in second output"
 fi

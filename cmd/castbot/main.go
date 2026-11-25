@@ -56,8 +56,10 @@ func main() {
 		versionCmd(args)
 	case "release":
 		releaseCmd(args)
+	case "update":
+		updateCmd(args)
 	default:
-		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo|create-assistant|list-models|save-provider-key|admin|version|release]")
+		fmt.Fprintln(os.Stderr, "usage: castbot [serve|create-user|seed-demo|create-assistant|list-models|save-provider-key|admin|version|release|update]")
 		os.Exit(2)
 	}
 }
@@ -84,6 +86,9 @@ func serve(args []string) {
 	}
 	app.SetDevEcho(cfg.DevEcho)
 	app.SetUpdate(version, commit, cfg.UpdateMode, update.DefaultCachePath)
+	app.SetUpdateApply(func(context.Context) error {
+		return startUpdateHelper()
+	})
 	app.SetDataDir(filepath.Dir(cfg.DBPath))
 	if cfg.RuntimeURL != "" {
 		app.SetExplicitRuntime(true)
@@ -112,8 +117,8 @@ func serve(args []string) {
 			}
 		}
 	}()
-	// Record a newer signed release. This does not install it.
-	// off and a dev build do not fetch.
+	// Record a newer signed release. The check does not install it.
+	// Update now starts the helper. off and a dev build do not fetch.
 	go update.Run(ctx, update.RunConfig{
 		Version: version,
 		Commit:  commit,

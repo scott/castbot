@@ -994,7 +994,7 @@ install_binary() {
     REL_VERSION=$(release_label_for "$SHA" "$REF")
     (
       cd "$SRC_DIR" || exit 1
-      ldflags="-s -w -X github.com/scott/castbot/cmd/castbot.version=${REL_VERSION} -X github.com/scott/castbot/cmd/castbot.commit=${SHA}"
+      ldflags="-s -w -X main.version=${REL_VERSION} -X main.commit=${SHA}"
       CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -trimpath -ldflags="$ldflags" -o "$built" ./cmd/castbot
     )
     assert_static "$built"
@@ -1023,6 +1023,32 @@ install_binary() {
   if [[ -z "${CASTBOT_BINARY:-}" ]]; then
     rm -f "$built"
   fi
+}
+
+# write_update_helper installs the only root command the service account may run.
+# The helper ignores arguments. sudo resets the environment.
+write_update_helper() {
+  local helper="${PREFIX}/usr/local/sbin/castbot-update"
+  local sudoers="${PREFIX}/etc/sudoers.d/castbot-update"
+  local tmp
+  mkdir -p "${PREFIX}/usr/local/sbin" "${PREFIX}/etc/sudoers.d"
+  tmp=$(mktemp)
+  cat > "$tmp" <<EOF
+#!/bin/sh
+# Arguments are ignored. The helper installs the latest signed release.
+exec ${APP_DIR}/bin/castbot update apply
+EOF
+  install -m 0755 "$tmp" "$helper"
+  rm -f "$tmp"
+  tmp=$(mktemp)
+  cat > "$tmp" <<EOF
+# castbot may start one update. It cannot pass arguments or its environment.
+Defaults:castbot env_reset
+Defaults:castbot secure_path="/usr/sbin:/usr/bin:/sbin:/bin"
+castbot ALL=(root) NOPASSWD: ${helper}
+EOF
+  install -m 0440 "$tmp" "$sudoers"
+  rm -f "$tmp"
 }
 
 # machine_host_wanted is true when a token and a public host are both
@@ -1488,6 +1514,7 @@ main() {
   read_settings
   prepare_os
   install_binary
+  write_update_helper
   choose_model
   model_choice_ok
   resolve_image

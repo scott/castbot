@@ -127,7 +127,7 @@ wait_image() {
 
 build_binary() {
   local out=$1 arch=$2 version=$3 sha=$4 guest=$5 ldflags
-  ldflags="-s -w -X github.com/scott/castbot/cmd/castbot.version=${version} -X github.com/scott/castbot/cmd/castbot.commit=${sha} -X github.com/scott/castbot/cmd/castbot.guestID=${guest}"
+  ldflags="-s -w -X main.version=${version} -X main.commit=${sha} -X main.guestID=${guest}"
   (
     cd "$ROOT"
     CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="$ldflags" -o "$out" ./cmd/castbot

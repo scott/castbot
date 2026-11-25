@@ -32,10 +32,16 @@ The workflow does not deploy a host. `scripts/deploy.sh` remains the laptop path
 
 The server asks for the latest release about six hours after a successful check, and once shortly after startup. The request is a GET with user agent `castbot-update`. It does not send the hostname, the account, or an instance id.
 
-A verified newer release is recorded in `/opt/castbot/update.json` (mode 0600). A failed check leaves that file as it was. `CASTBOT_UPDATE_MODE=off` skips the request. The key is optional, so an env file without it still starts. The server records the release and does not install it yet.
+A verified newer release is recorded in `/opt/castbot/update.json` (mode 0600). A failed check leaves that file as it was. `CASTBOT_UPDATE_MODE=off` skips the request. The key is optional, so an env file without it still starts. The check records the release. It does not install it.
 
 ## What the owner sees
 
 Settings has an Update section for the workspace owner. It shows this copy's version, whether a release is ready, and a choice of Ask me, Install updates, or Don't check. A host file value of `CASTBOT_UPDATE_MODE` wins, and the page cannot change it. Members do not see the section.
 
 Ask me also shows a banner on the agent list when a release is ready. Update now stays on the page while an agent is working and asks the owner to try again when the agent is idle. Saving the choice does not install a release.
+
+## How an update is applied
+
+Update now, when a release is ready and no agent is working, starts one root helper through sudo. The helper downloads that release again, checks the signature, the version, and the machine image policy, and backs up the database. It then switches the running binary and restarts. If the new process does not answer on this machine, the previous binary is put back. The backup stays on disk. The page says castbot is restarting and comes back at Settings.
+
+Choosing Install updates only records the choice. A release is not installed on its own while an agent is idle. An agent that is already running keeps its machine until Replace machine, including when the release changes the machine image.

@@ -177,7 +177,8 @@ func (s *Server) applyUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if apply != nil {
-		if err := apply(r.Context()); err != nil {
+		// The helper must outlive this request. A canceled request must not stop it.
+		if err := apply(context.Background()); err != nil {
 			p, viewErr := s.settingsView(r, user, sess)
 			if viewErr != nil {
 				http.Error(w, "Error", http.StatusInternalServerError)
@@ -187,6 +188,16 @@ func (s *Server) applyUpdate(w http.ResponseWriter, r *http.Request) {
 			s.render(w, http.StatusBadGateway, "app", finish(p))
 			return
 		}
+		p := page{
+			Title:      "Updating",
+			Theme:      user.Theme,
+			CSRF:       from(r).CSRF,
+			Refresh:    "3;url=/settings",
+			BannerLead: "castbot is restarting.",
+			BannerRest: "This page comes back at Settings.",
+		}
+		s.render(w, http.StatusOK, "updateWait", finish(p))
+		return
 	}
 	p, err := s.settingsView(r, user, sess)
 	if err != nil {
