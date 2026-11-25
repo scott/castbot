@@ -35,6 +35,8 @@ const (
 	ToolDeleteSection = "delete_section"
 	// ToolMoveAgents moves agents into a section, or back to Agents.
 	ToolMoveAgents = "move_agents"
+	// ToolPlaceGroup moves a group into a sidebar section, or back to Groups.
+	ToolPlaceGroup = "place_group"
 	// Fence is the markdown language tag used when the tools are absent.
 	Fence = "castbot-organize"
 	// Heading marks the served instructions section. Stored instructions omit it.
@@ -57,13 +59,15 @@ create_group needs a title and at least two agents. Pass people only when they n
 
 create_section adds a sidebar section. rename_section changes a section this person added. delete_section removes one after the agents have been moved out. The Agents and Pinned sections stay. move_agents puts agents in a section. To move an agent out of a section, set out to true. That puts the agent back in Agents.
 
+place_group puts a group in a sidebar section. Pass the group, and a section when they named one. Leave section empty, or pass groups, to put the group back in the Groups list. This places the group in this person's sidebar only.
+
 Use a name or an id. If a name matches more than one, ask which one. Do not pass user_id or agent_id.
 
 If the tools are not listed, end your reply with one castbot-organize fence and no other fence of that type. Do not write that fence after the tools are listed.
 
 ` + "```castbot-organize\n" + `{"action":"create_group","title":"TITLE","agents":["NAME","NAME"]}` + "\n```" + `
 
-Replace TITLE and NAME with what they asked for. Use action update_group, add_group_members, remove_group_members, delete_group, pin_group, unpin_group, create_section, rename_section, delete_section, or move_agents when that is what they asked. For move_agents, pass agents and either section or out. Do not leave TITLE, NAME, or PERSON in place.`
+Replace TITLE and NAME with what they asked for. Use action update_group, add_group_members, remove_group_members, delete_group, pin_group, unpin_group, create_section, rename_section, delete_section, move_agents, or place_group when that is what they asked. For move_agents, pass agents and either section or out. For place_group, pass group and section. Do not leave TITLE, NAME, or PERSON in place.`
 
 // SkillMarkdown is the SKILL.md file, frontmatter plus body.
 func SkillMarkdown() string {
@@ -125,6 +129,7 @@ func Specs() []Spec {
 		{Name: ToolRenameSection, Description: "Rename a sidebar section this person added."},
 		{Name: ToolDeleteSection, Description: "Remove a sidebar section this person added, after its agents have been moved out."},
 		{Name: ToolMoveAgents, Description: "Move this person's agents into a sidebar section, or back to Agents when out is true."},
+		{Name: ToolPlaceGroup, Description: "Move a group into a sidebar section for this person, or back to Groups when section is empty or groups."},
 	}
 }
 

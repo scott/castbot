@@ -314,7 +314,7 @@ func TestServedBundleCarriesRoutineSkill(t *testing.T) {
 		if hdr.Name == "agent.yaml" {
 			body, _ := io.ReadAll(tr)
 			text := string(body)
-			for _, name := range []string{routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolList, routinetool.ToolRun, agentskill.ToolCreate, selftool.ToolUsage, grouptool.ToolCreateGroup, grouptool.ToolMoveAgents, machinetool.ToolPause, machinetool.ToolRefresh, chattool.ToolStop, chattool.ToolRetry, chattool.ToolList, chattool.ToolOpen, settingstool.ToolName, settingstool.ToolTheme} {
+			for _, name := range []string{routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolList, routinetool.ToolRun, agentskill.ToolCreate, selftool.ToolUsage, grouptool.ToolCreateGroup, grouptool.ToolMoveAgents, grouptool.ToolPlaceGroup, machinetool.ToolPause, machinetool.ToolRefresh, chattool.ToolStop, chattool.ToolRetry, chattool.ToolList, chattool.ToolOpen, settingstool.ToolName, settingstool.ToolTheme} {
 				if !strings.Contains(text, name+": always-allow") && !strings.Contains(text, name+":always-allow") {
 					if !strings.Contains(text, name) || !strings.Contains(text, "always-allow") {
 						t.Fatalf("served yaml missing %s\n%s", name, text)
