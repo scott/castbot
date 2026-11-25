@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -102,7 +103,9 @@ func TestStartHelperDoesNotWait(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "helper")
 	marker := filepath.Join(dir, "ran")
-	body := "#!/bin/sh\nprintf 'ran\\n' > '" + marker + "'\nsleep 30\n"
+	// Not "sleep 30". The tool runner test treats any process whose
+	// command line contains sleep and 30 as its own child.
+	body := "#!/bin/sh\nprintf 'ran\\n' > '" + marker + "'\nsleep 5\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -111,10 +114,12 @@ func TestStartHelperDoesNotWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			_, _ = cmd.Process.Wait()
+		if cmd.Process == nil {
+			return
 		}
+		// The helper is a session leader, so kill the whole group.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_, _ = cmd.Process.Wait()
 	})
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
