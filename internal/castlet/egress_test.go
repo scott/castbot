@@ -16,6 +16,7 @@ import (
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
+	"github.com/scott/castbot/internal/pagetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/selftool"
 	"github.com/scott/castbot/internal/settingstool"
@@ -480,6 +481,60 @@ func TestAgentsForwardGroups(t *testing.T) {
 	}
 	if hit.count("/agents") != len(grouptool.Specs()) {
 		t.Fatalf("forwards %d", hit.count("/agents"))
+	}
+}
+
+func TestAgentsForwardPages(t *testing.T) {
+	sup, hit := newEgress(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/agents") {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"text":"Saved Trials.","error":false}`)
+	})
+	for _, spec := range pagetool.Specs() {
+		rec := httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+spec.Name+`","arguments":{}}`))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Saved Trials.") || strings.Contains(rec.Body.String(), fixtureValue) {
+			t.Fatalf("%s %d %s", spec.Name, rec.Code, rec.Body.String())
+		}
+	}
+	if hit.count("/agents") != len(pagetool.Specs()) {
+		t.Fatalf("forwards %d", hit.count("/agents"))
+	}
+}
+
+func TestReadPageReplyCap(t *testing.T) {
+	long := strings.Repeat("a", 9000)
+	exact := strings.Repeat("c", pagetool.ReadCap)
+	over := strings.Repeat("b", pagetool.ReadCap+1)
+	reply := func(text string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, `{"text":"`+text+`","error":false}`)
+		}
+	}
+	readSup, readHit := newEgress(t, reply(long))
+	rec := httptest.NewRecorder()
+	readSup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+pagetool.ToolRead+`","arguments":{}}`))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), long) || strings.Contains(rec.Body.String(), `"error":true`) || readHit.count("/agents") != 1 {
+		t.Fatalf("read %d len %d", rec.Code, rec.Body.Len())
+	}
+	createSup, createHit := newEgress(t, reply(long))
+	rec = httptest.NewRecorder()
+	createSup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+pagetool.ToolCreate+`","arguments":{}}`))
+	if !strings.Contains(rec.Body.String(), egresscontract.Rejected) || strings.Contains(rec.Body.String(), long) || createHit.count("/agents") != 1 {
+		t.Fatalf("create kept a long reply %d", rec.Body.Len())
+	}
+	exactSup, exactHit := newEgress(t, reply(exact))
+	rec = httptest.NewRecorder()
+	exactSup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+pagetool.ToolRead+`","arguments":{}}`))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), exact) || exactHit.count("/agents") != 1 {
+		t.Fatalf("exact read %d len %d", rec.Code, rec.Body.Len())
+	}
+	overSup, overHit := newEgress(t, reply(over))
+	rec = httptest.NewRecorder()
+	overSup.ServeEgress(rec, localReq(http.MethodPost, "/agents", `{"name":"`+pagetool.ToolRead+`","arguments":{}}`))
+	if !strings.Contains(rec.Body.String(), egresscontract.Rejected) || strings.Contains(rec.Body.String(), over) || overHit.count("/agents") != 1 {
+		t.Fatalf("over cap %d", rec.Body.Len())
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
+	"github.com/scott/castbot/internal/pagetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
 	"github.com/scott/castbot/internal/selftool"
@@ -238,6 +239,9 @@ func agentTools() []any {
 	for _, spec := range settingstool.Specs() {
 		tools = append(tools, settingsSchema(spec))
 	}
+	for _, spec := range pagetool.Specs() {
+		tools = append(tools, pageSchema(spec))
+	}
 	return tools
 }
 
@@ -397,6 +401,14 @@ func callAgents(base string, params json.RawMessage) (string, bool) {
 			payload = map[string]any{"name": call.Name, "arguments": forwarded}
 			break
 		}
+		if pagetool.Known(call.Name) {
+			forwarded, ok := pageForwardArgs(call.Arguments)
+			if !ok {
+				return egresscontract.Rejected, true
+			}
+			payload = map[string]any{"name": call.Name, "arguments": forwarded}
+			break
+		}
 		if !grouptool.Known(call.Name) {
 			return egresscontract.Rejected, true
 		}
@@ -485,6 +497,101 @@ func settingsSchema(spec settingstool.Spec) map[string]any {
 		"description": spec.Description,
 		"inputSchema": schema,
 	}
+}
+
+func pageSchema(spec pagetool.Spec) map[string]any {
+	props := map[string]any{}
+	var required []string
+	page := map[string]any{"type": "string", "description": "Page id or token."}
+	title := map[string]any{"type": "string", "description": "Title, up to 80 characters."}
+	document := map[string]any{
+		"description": "Page document JSON, at most 32 KiB.",
+		"oneOf": []any{
+			map[string]any{"type": "object"},
+			map[string]any{"type": "string"},
+		},
+	}
+	switch spec.Name {
+	case pagetool.ToolCreate:
+		props["title"] = title
+		props["document"] = document
+		required = []string{"title", "document"}
+	case pagetool.ToolUpdate:
+		props["page"] = page
+		props["document"] = document
+		props["revision"] = map[string]any{"type": "integer", "description": "Revision from read_page. Omit to write over the current document."}
+		required = []string{"page", "document"}
+	case pagetool.ToolRename:
+		props["page"] = page
+		props["title"] = title
+		required = []string{"page", "title"}
+	case pagetool.ToolDelete, pagetool.ToolRead:
+		props["page"] = page
+		required = []string{"page"}
+	case pagetool.ToolShare:
+		props["page"] = page
+		props["visibility"] = map[string]any{"type": "string", "description": "only_you, workspace, invited, or link."}
+		props["people"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "People in this workspace, by name, email, or id. Used when visibility is invited."}
+		props["agents"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Agents in this workspace, by name or id. Used when visibility is invited."}
+		required = []string{"page", "visibility"}
+	}
+	schema := map[string]any{"type": "object", "properties": props}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return map[string]any{
+		"name":        spec.Name,
+		"description": spec.Description,
+		"inputSchema": schema,
+	}
+}
+
+func pageForwardArgs(raw json.RawMessage) (map[string]any, bool) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return map[string]any{}, true
+	}
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &args); err != nil || args == nil {
+		return nil, false
+	}
+	out := map[string]any{}
+	for _, key := range []string{"page", "title", "visibility"} {
+		value, ok := args[key]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			continue
+		}
+		var text string
+		if json.Unmarshal(value, &text) != nil {
+			return nil, false
+		}
+		out[key] = text
+	}
+	if value, ok := args["document"]; ok && !bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		if !json.Valid(value) {
+			return nil, false
+		}
+		out["document"] = json.RawMessage(bytes.TrimSpace(value))
+	}
+	if value, ok := args["revision"]; ok && !bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		var n int
+		if json.Unmarshal(value, &n) != nil {
+			return nil, false
+		}
+		out["revision"] = n
+	}
+	for _, key := range []string{"people", "agents"} {
+		value, ok := args[key]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			continue
+		}
+		var list []string
+		if json.Unmarshal(value, &list) != nil {
+			return nil, false
+		}
+		out[key] = list
+	}
+	return out, true
 }
 
 func settingsForwardArgs(raw json.RawMessage) (map[string]any, bool) {

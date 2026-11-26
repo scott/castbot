@@ -13,6 +13,7 @@ import (
 	"github.com/scott/castbot/internal/chattool"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
+	"github.com/scott/castbot/internal/pagetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/run"
 	"github.com/scott/castbot/internal/selftool"
@@ -80,6 +81,10 @@ func (s *Server) machineAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if settingstool.Known(call.Name) {
 			s.machineSettings(w, r, userID, call.Name, call.Arguments)
+			return
+		}
+		if pagetool.Known(call.Name) {
+			s.machinePage(w, r, userID, call.Name, call.Arguments)
 			return
 		}
 		writeAgentResult(w, "That request was rejected.", true)
