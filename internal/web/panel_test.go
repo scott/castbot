@@ -211,7 +211,6 @@ func TestPanelCloseAndHistoryHooks(t *testing.T) {
 	_, js, _ := h.do(http.MethodGet, "/static/app.js", "", ip, nil)
 	for _, needle := range []string{
 		"function closeAgentPanel",
-		"history.back()",
 		"pushState",
 		"replaceState",
 		"function onEscape",
@@ -220,6 +219,10 @@ func TestPanelCloseAndHistoryHooks(t *testing.T) {
 		if !strings.Contains(js, needle) {
 			t.Fatalf("app.js missing %s", needle)
 		}
+	}
+	close := jsFunc(t, js, "closeAgentPanel")
+	if strings.Contains(close, "history.back()") || !strings.Contains(close, "chatURL()") || !strings.Contains(close, "hidePanel()") {
+		t.Fatalf("panel close walks history: %s", close)
 	}
 }
 
@@ -248,8 +251,20 @@ func TestSettingsCloseReturns(t *testing.T) {
 		t.Fatal("settings close still sends the person home")
 	}
 	_, js, _ := h.do(http.MethodGet, "/static/app.js", "", ip, nil)
-	if !strings.Contains(js, "function closeSettings") || !strings.Contains(js, "history.back()") || !strings.Contains(js, "castbot.lastAgent") {
-		t.Fatal("settings close does not return to the previous view")
+	close := jsFunc(t, js, "closeSettings")
+	if strings.Contains(close, "history.back()") || !strings.Contains(close, "castbot.back") || !strings.Contains(close, "castbot.lastAgent") || !strings.Contains(close, "location.assign") {
+		t.Fatalf("settings close walks history: %s", close)
+	}
+	if !strings.Contains(jsFunc(t, js, "settleSwitchedChat"), "rememberView()") {
+		t.Fatal("switching chats does not remember the page settings should return to")
+	}
+}
+
+func TestDialogCloseFollowsItsLink(t *testing.T) {
+	h, _, ip := panelSession(t, "dialog-close@example.com", "Alex Rivera")
+	_, js, _ := h.do(http.MethodGet, "/static/secrets.js", "", ip, nil)
+	if strings.Contains(js, "history.back()") || !strings.Contains(js, "location.replace(href)") || !strings.Contains(js, `close.getAttribute("href")`) {
+		t.Fatal("dialog close still walks history")
 	}
 }
 
@@ -508,6 +523,33 @@ func TestPanelCSRFUnchanged(t *testing.T) {
 	if code != http.StatusForbidden {
 		t.Fatalf("bad csrf %d %s", code, body)
 	}
+}
+
+func jsFunc(t *testing.T, src, name string) string {
+	t.Helper()
+	start := strings.Index(src, "function "+name+"(")
+	if start < 0 {
+		t.Fatalf("missing function %s", name)
+	}
+	rest := src[start:]
+	open := strings.Index(rest, "{")
+	if open < 0 {
+		t.Fatalf("missing body %s", name)
+	}
+	depth := 0
+	for i := open; i < len(rest); i++ {
+		switch rest[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return rest[:i+1]
+			}
+		}
+	}
+	t.Fatalf("unclosed function %s", name)
+	return ""
 }
 
 func panelSession(t *testing.T, email, name string) (*harness, store.User, string) {

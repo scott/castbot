@@ -726,13 +726,10 @@ function restoreFocus() {
 
 function closeAgentPanel() {
   storeSet("castbot.panel", "closed");
-  if (history.state && history.state.castbotPanel) {
-    history.back();
-    return;
-  }
   history.replaceState(null, "", chatURL());
   hidePanel();
   restoreFocus();
+  rememberView();
 }
 
 function openDefaultPanel() {
@@ -854,6 +851,7 @@ function settleSwitchedChat() {
   if (box && !sessionGet(threadKey())) {
     box.scrollTop = box.scrollHeight;
   }
+  rememberView();
 }
 
 function rememberView() {
@@ -867,8 +865,9 @@ function closeSettings() {
   var back = sessionGet("castbot.back");
   if (back) {
     try {
-      if (new URL(back).origin === location.origin && history.length > 1) {
-        history.back();
+      var url = new URL(back);
+      if (url.origin === location.origin && url.pathname.indexOf("/settings") !== 0) {
+        location.assign(url.pathname + url.search + url.hash);
         return;
       }
     } catch (err) {}
@@ -1389,6 +1388,7 @@ document.addEventListener("DOMContentLoaded", function () {
         storeSet("castbot.panelTab", panelName);
       }
     }
+    rememberView();
     focusPanelTab(panel);
   });
   document.body.addEventListener("htmx:afterSettle", function (ev) {
