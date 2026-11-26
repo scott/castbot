@@ -37,6 +37,10 @@ var (
 	// ErrRejected is a handoff the control plane refuses.
 	// It is not a missing row. Callers map it to 409.
 	ErrRejected = errors.New("rejected")
+	// ErrPageCap is the page count for one agent or one workspace.
+	ErrPageCap = errors.New("page limit reached")
+	// ErrRevision is an update that named a stale page revision.
+	ErrRevision = errors.New("page revision")
 )
 
 const (
