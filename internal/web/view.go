@@ -71,6 +71,7 @@ type msgView struct {
 	PathLines                                                   []string
 	Steps                                                       []string
 	File                                                        *fileLinkView
+	PageCards                                                   []pageLinkView
 	HTML, Log                                                   template.HTML
 	Copy                                                        string
 }
@@ -179,6 +180,9 @@ type page struct {
 	Usage               string
 	UsageLines          []usageLine
 	Glance              []glanceRow
+	AgentPages          []pageLinkView
+	OwnedPages          []pageLinkView
+	SharedPages         []pageLinkView
 	ModelTitle          string
 	ModelSub            string
 	ApprovalsWaiting    []cardView
@@ -321,7 +325,7 @@ func finish(p page) page {
 		if p.Replace.Confirm || p.Replace.RollbackConfirm {
 			p.BodyClass += " p-confirm"
 		}
-	case "settings", "password", "stub", "new", "edit", "connections", "group-new":
+	case "settings", "password", "stub", "new", "edit", "connections", "group-new", "pages":
 		p.BodyClass = "p-main no-bnav"
 	case "group":
 		p.BodyClass = "p-chat"

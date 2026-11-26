@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/scott/castbot/internal/auth"
 )
@@ -206,6 +207,105 @@ func TestPageCaps(t *testing.T) {
 	second := makeReadyAgent(t, s, owner, "Moss")
 	if _, err := s.CreatePage(ctx, owner.ID, second.ID, "Report", pageBody); !errors.Is(err, ErrPageCap) {
 		t.Fatalf("workspace cap %v", err)
+	}
+}
+
+func TestPageCards(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	when := time.Date(2026, 11, 26, 15, 0, 0, 0, time.UTC)
+	s.SetNow(func() time.Time { return when })
+	owner := makeUser(t, s, "cards-owner@example.com", "Alex Rivera")
+	other := makeUser(t, s, "cards-other@example.com", "Blair Quinn")
+	agent := makeReadyAgent(t, s, owner, "Atlas")
+	otherAgent := makeReadyAgent(t, s, other, "Glen")
+	made, err := s.CreatePage(ctx, owner.ID, agent.ID, "Old report", pageBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	when = when.Add(time.Minute)
+	th, err := s.DMThread(ctx, owner.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runRow, err := s.CreateRun(ctx, owner.ID, th.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.AgentPagesTouched(ctx, owner.ID, agent.ID, runRow.StartedAt)
+	if err != nil || len(before) != 0 {
+		t.Fatalf("older page attached %d %v", len(before), err)
+	}
+	updated, err := s.UpdatePage(ctx, owner.ID, agent.ID, made.ID, pageBody, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	touched, err := s.AgentPagesTouched(ctx, owner.ID, agent.ID, runRow.StartedAt)
+	if err != nil || len(touched) != 1 || touched[0].ID != made.ID {
+		t.Fatalf("touched %d %v", len(touched), err)
+	}
+	msg, _, err := s.FinishRun(ctx, owner.ID, runRow.ID, "Saved.", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddPageCard(ctx, owner.ID, "", made.ID, updated.Revision); err != ErrInvalid {
+		t.Fatalf("empty message %v", err)
+	}
+	if err := s.AddPageCard(ctx, other.ID, msg.ID, made.ID, updated.Revision); err != ErrNotFound {
+		t.Fatalf("other owner %v", err)
+	}
+	oth, err := s.DMThread(ctx, other.ID, otherAgent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRun, err := s.CreateRun(ctx, other.ID, oth.ID, otherAgent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherMsg, _, err := s.FinishRun(ctx, other.ID, otherRun.ID, "No.", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddPageCard(ctx, owner.ID, otherMsg.ID, made.ID, updated.Revision); err != ErrNotFound {
+		t.Fatalf("other message %v", err)
+	}
+	if err := s.AddPageCard(ctx, owner.ID, msg.ID, made.ID, updated.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddPageCard(ctx, owner.ID, msg.ID, made.ID, updated.Revision); err != nil {
+		t.Fatal(err)
+	}
+	cards, err := s.PageCardsForMessages(ctx, owner.WorkspaceID, []string{msg.ID, msg.ID, ""})
+	if err != nil || len(cards) != 1 || cards[0].Title != "Old report" || cards[0].Revision != updated.Revision || cards[0].CurrentRevision != updated.Revision || cards[0].WorkspaceName != "Personal" || cards[0].PageID != made.ID {
+		t.Fatalf("card count %d %v", len(cards), err)
+	}
+	if cards[0].Token != made.Token {
+		t.Fatal("card token")
+	}
+	if rows, err := s.PageCardsForMessages(ctx, other.WorkspaceID, []string{msg.ID}); err != nil || len(rows) != 0 {
+		t.Fatalf("other workspace %d %v", len(rows), err)
+	}
+	later := `{"v":1,"blocks":[{"type":"markdown","text":"Later"}]}`
+	if _, err := s.UpdatePage(ctx, owner.ID, agent.ID, made.ID, later, 0); err != nil {
+		t.Fatal(err)
+	}
+	cards, err = s.PageCardsForMessages(ctx, owner.WorkspaceID, []string{msg.ID})
+	if err != nil || len(cards) != 1 || cards[0].Revision >= cards[0].CurrentRevision || cards[0].Title != "Old report" {
+		t.Fatal("card revision moved")
+	}
+	if err := s.DeletePage(ctx, owner.ID, "", made.ID); err != nil {
+		t.Fatal(err)
+	}
+	cards, err = s.PageCardsForMessages(ctx, owner.WorkspaceID, []string{msg.ID})
+	if err != nil || len(cards) != 1 || cards[0].Title != "Old report" {
+		t.Fatal("deleted page dropped the card")
+	}
+	gone, err := s.AgentPagesTouched(ctx, owner.ID, agent.ID, runRow.StartedAt)
+	if err != nil || len(gone) != 0 {
+		t.Fatalf("deleted page still touched %d %v", len(gone), err)
+	}
+	if err := s.AddPageCard(ctx, owner.ID, msg.ID, made.ID, 1); err != ErrNotFound {
+		t.Fatalf("deleted attach %v", err)
 	}
 }
 

@@ -313,6 +313,124 @@ func (s *Store) ListPagesSharedWithUser(ctx context.Context, userID string) ([]P
 ) ORDER BY p.updated_at DESC, p.id`, user.WorkspaceID, userID, PageWorkspace, userID)
 }
 
+// PageCard is a chat chip for a page. Revision is the revision when the card
+// was attached. CurrentRevision is the page now. The row stays after a delete
+// so the title can still be shown. Open uses the token and the page route.
+type PageCard struct {
+	MessageID       string
+	PageID          string
+	Revision        int
+	Title           string
+	Token           string
+	Visibility      string
+	CurrentRevision int
+	WorkspaceName   string
+}
+
+// AddPageCard records one card on a message the caller owns.
+// A later attach of the same page on that message updates the stored revision.
+// Readers load cards by workspace and message id, because a group message is
+// stored under the thread owner and a member is not that user id.
+func (s *Store) AddPageCard(ctx context.Context, userID, messageID, pageID string, revision int) error {
+	if revision < 0 || strings.TrimSpace(messageID) == "" || strings.TrimSpace(pageID) == "" {
+		return ErrInvalid
+	}
+	row, err := s.pageByID(ctx, userID, pageID)
+	if err != nil {
+		return err
+	}
+	var workspaceID string
+	err = s.db.QueryRowContext(ctx, `SELECT workspace_id FROM messages WHERE id = ? AND user_id = ? AND workspace_id = ?`,
+		messageID, userID, row.WorkspaceID).Scan(&workspaceID)
+	if err != nil {
+		return scanErr(err)
+	}
+	id, err := newID()
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO page_cards(id, workspace_id, user_id, message_id, page_id, revision, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(message_id, page_id) DO UPDATE SET revision = excluded.revision`,
+		id, row.WorkspaceID, userID, messageID, pageID, revision, s.stamp(s.Now()))
+	return err
+}
+
+// PageCardsForMessages returns cards for messages in one workspace.
+// It does not require page_cards.user_id to equal the viewer.
+func (s *Store) PageCardsForMessages(ctx context.Context, workspaceID string, messageIDs []string) ([]PageCard, error) {
+	if strings.TrimSpace(workspaceID) == "" || len(messageIDs) == 0 {
+		return nil, nil
+	}
+	var ids []string
+	seen := map[string]bool{}
+	for _, id := range messageIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var out []PageCard
+	for start := 0; start < len(ids); start += 400 {
+		end := start + 400
+		if end > len(ids) {
+			end = len(ids)
+		}
+		part, err := s.pageCardsBatch(ctx, workspaceID, ids[start:end])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, part...)
+	}
+	return out, nil
+}
+
+func (s *Store) pageCardsBatch(ctx context.Context, workspaceID string, ids []string) ([]PageCard, error) {
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, workspaceID)
+	holders := make([]string, len(ids))
+	for i, id := range ids {
+		holders[i] = "?"
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT c.message_id, c.page_id, c.revision, p.title, p.token, p.visibility, p.revision, COALESCE(w.name, '')
+FROM page_cards c
+JOIN pages p ON p.id = c.page_id
+LEFT JOIN workspaces w ON w.id = p.workspace_id
+WHERE c.workspace_id = ? AND c.message_id IN (`+strings.Join(holders, ",")+`)
+ORDER BY c.created_at, c.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PageCard
+	for rows.Next() {
+		var row PageCard
+		if err := rows.Scan(&row.MessageID, &row.PageID, &row.Revision, &row.Title, &row.Token, &row.Visibility, &row.CurrentRevision, &row.WorkspaceName); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// AgentPagesTouched returns live pages this agent saved at or after since.
+// since is a run start, so an older page is not attached to a later reply.
+func (s *Store) AgentPagesTouched(ctx context.Context, userID, agentID, since string) ([]Page, error) {
+	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(since) == "" {
+		return nil, nil
+	}
+	return s.listPages(ctx, pageListSelect+` WHERE user_id = ? AND agent_id = ? AND deleted_at IS NULL AND updated_at >= ? ORDER BY updated_at, id`, userID, agentID, since)
+}
+
 // PageGrants returns the invite list for a page the caller owns.
 func (s *Store) PageGrants(ctx context.Context, userID, pageID string) ([]PageGrant, error) {
 	page, err := s.ownedPage(ctx, userID, "", pageID)

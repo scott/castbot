@@ -462,6 +462,9 @@ func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User
 	s.maybeMachine(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	s.maybeChat(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
 	s.maybeSettings(run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID})
+	pageJob := run.Job{UserID: user.ID, ThreadID: runRow.ThreadID, AgentID: runRow.AgentID, RunID: runRow.ID}
+	s.maybePage(pageJob)
+	s.attachPageCards(pageJob)
 	msg, err := s.store.GetMessage(ctx, user.ID, messageID)
 	if err != nil {
 		return err
@@ -472,6 +475,7 @@ func (s *Server) writeDone(ctx context.Context, fw *frameWriter, user store.User
 	}
 	views := presentMessages([]store.Message{msg}, agent, s.store.Now(), userLocation(user.Timezone))
 	s.linkMentionedFiles(ctx, user.ID, runRow.AgentID, views)
+	s.fillPageCards(ctx, user.WorkspaceID, views)
 	if len(views) == 0 {
 		return fw.write("done", "")
 	}

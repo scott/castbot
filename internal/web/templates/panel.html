@@ -31,6 +31,7 @@
 {{template "panelChrome" .}}
 <div class="pbody">
 <section class="psec"><div class="psec-h"><h4>Agent</h4><a class="link" href="/agents/{{.Agent.ID}}/edit">Edit</a></div><p class="fineprint">Name, instructions, and model.</p></section>
+<section class="psec"><div class="psec-h"><h4>Pages</h4><a class="link" href="/pages">All pages</a></div>{{if .AgentPages}}{{range .AgentPages}}<a class="page-row" href="/p/{{.Token}}"><span class="grow"><span class="t1">{{.Title}}</span><span class="t2">{{.Sub}}</span></span><span class="open">Open</span></a>{{end}}{{else}}<p class="fineprint">A page appears when an agent makes one.</p>{{end}}</section>
 <section class="psec"><div class="psec-h"><h4>Model</h4></div><div class="model"><span class="pv">{{.Agent.Letter}}</span><div class="grow"><div class="t1">{{if .ModelTitle}}{{.ModelTitle}}{{else}}No model saved{{end}}</div><div class="t2">{{if .ModelSub}}{{.ModelSub}}{{else}}Keys stay on your account.{{end}}</div></div></div></section>
 <section class="psec"><div class="psec-h"><h4>Memory</h4></div><p class="fineprint">Memory arrives in a later update.</p></section>
 <section class="psec"><div class="psec-h"><h4>At a glance</h4></div>{{range .Glance}}<a class="glance" href="{{.Href}}" data-open-panel data-panel-tab hx-get="{{.Href}}" hx-target="#agent-panel" hx-swap="outerHTML" hx-push-url="false"><span class="t1">{{.Title}}</span><span class="t2">{{.Sub}}</span></a>{{end}}</section>

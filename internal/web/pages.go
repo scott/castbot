@@ -302,6 +302,7 @@ func (s *Server) renderAgent(w http.ResponseWriter, r *http.Request, user store.
 	if p.Page == "chat" {
 		s.attachBoot(r, user, agent, &p)
 	}
+	s.fillPageCards(r.Context(), user.WorkspaceID, p.Messages)
 	s.armChatResume(&p, agent.ID, machine)
 	if status == 0 {
 		status = http.StatusOK

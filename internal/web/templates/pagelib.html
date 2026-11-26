@@ -1,0 +1,12 @@
+{{define "pageLibrary"}}
+<header class="ph-top ph-only"><a class="ibtn" href="/" aria-label="Back">{{template "backsvg" .}}</a><span class="t">Pages</span></header>
+<div class="page-h"><div><h1 class="dt-only">Pages</h1><p class="sub">Reports an agent saved.</p></div></div>
+<div class="page-b">
+{{if and (not .OwnedPages) (not .SharedPages)}}
+<div class="pempty"><b>No pages yet.</b><span>A page appears when an agent makes one.</span></div>
+{{else}}
+{{if .OwnedPages}}<section class="plist"><div class="psec-h"><h4>Yours</h4></div>{{range .OwnedPages}}<a class="page-row" href="/p/{{.Token}}"><span class="grow"><span class="t1">{{.Title}}</span><span class="t2">{{.Sub}}</span></span><span class="open">Open</span></a>{{end}}</section>{{end}}
+{{if .SharedPages}}<section class="plist"><div class="psec-h"><h4>Shared with you</h4></div>{{range .SharedPages}}<a class="page-row" href="/p/{{.Token}}"><span class="grow"><span class="t1">{{.Title}}</span><span class="t2">{{.Sub}}</span></span><span class="open">Open</span></a>{{end}}</section>{{end}}
+{{end}}
+</div>
+{{end}}
