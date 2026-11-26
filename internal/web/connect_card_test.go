@@ -140,3 +140,35 @@ func TestSlackCardHidesTheKeyFromAnotherUser(t *testing.T) {
 		t.Fatal("other user enabled slack")
 	}
 }
+
+func TestNotionCardHidesTheKeyFromAnotherUser(t *testing.T) {
+	ip := "203.0.113.84:9"
+	h := newHarness(t)
+	owner, secret := h.account("notion-owner@example.com", "Ada", "correct-horse-1")
+	other, _ := h.account("notion-other@example.com", "Bea", "correct-horse-1")
+	h.login("notion-owner@example.com", "correct-horse-1", secret, ip, false)
+	const key = "ntn_sample_integration_key"
+	code, body, hdr := h.do(http.MethodPost, "/settings/connections/notion", h.form(url.Values{
+		"token": {key},
+	}), ip, nil)
+	if code != http.StatusSeeOther || !strings.Contains(hdr.Get("Location"), "notice=connected") || strings.Contains(body, key) {
+		t.Fatalf("connect %d %s", code, hdr.Get("Location"))
+	}
+	code, body, _ = h.do(http.MethodGet, "/settings/connections/notion", "", ip, nil)
+	if code != 200 || !strings.Contains(body, "Integration token") || !strings.Contains(body, "notion_search") || !strings.Contains(body, "notion_append") || strings.Contains(body, key) {
+		t.Fatalf("detail %d", code)
+	}
+	if !strings.Contains(body, "ntn_-xxxxxxx") {
+		t.Fatal("mask")
+	}
+	saved, err := h.st.ConnectionValue(context.Background(), owner.ID, connect.Notion)
+	if err != nil || saved != key {
+		t.Fatal("owner vault")
+	}
+	if _, err := h.st.ConnectionValue(context.Background(), other.ID, connect.Notion); err == nil {
+		t.Fatal("other user read the key")
+	}
+	if err := h.st.EnableConnection(context.Background(), other.ID, "missing-agent", connect.Notion); err == nil {
+		t.Fatal("other user enabled notion")
+	}
+}
