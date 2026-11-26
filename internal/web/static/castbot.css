@@ -1524,3 +1524,33 @@ html.light .m-user.c9.queued { border-color: #aae6f6; }
   .swatch-row { display: grid; grid-template-columns: repeat(5, minmax(44px, 1fr)); gap: 8px 4px; }
   .swatch { min-width: 44px; min-height: 44px; }
 }
+
+/* Hosted pages. A public page follows the system theme. */
+@media (prefers-color-scheme: light) {
+  html.hosted {
+    --bg: #f6f4f1; --bg2: #efece7; --surf: #ffffff; --raise: #f3f0eb; --hover: #ebe6df;
+    --line: #e2dcd3; --line2: #d3cbc0;
+    --tx: #1b2226; --tx2: #4c5a61; --tx3: #6f7d84;
+    --acc: #e8662a; --start: #2b78c9; --ok: #138a55; --warn: #f2c14e;
+    color-scheme: light;
+  }
+}
+.hosted-page { width: 100%; max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; min-width: 0; }
+.hosted-page h1 { font-size: 32px; line-height: 1.15; margin-bottom: 20px; }
+.hosted-block { margin: 0 0 20px; }
+.hosted-block.callout { padding: 12px 14px; border-radius: var(--r); background: var(--raise); }
+.hosted-block.callout.warn { background: var(--err-soft); }
+.hosted-stats { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 12px; }
+.hosted-stats li { min-width: 120px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surf); display: grid; gap: 2px; }
+.hosted-stats span, .hosted-stats em { color: var(--tx2); font-style: normal; font-size: 13px; }
+.hosted-stats strong { font-family: var(--hd); font-size: 22px; }
+.hosted-control { border: 1px solid var(--line); border-radius: var(--r); margin: 0 0 20px; padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.hosted-control legend { padding: 0 6px; color: var(--tx2); font-size: 13px; }
+.hosted-control label { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
+.hosted-scroll { overflow-x: auto; max-width: 100%; }
+.hosted-cap { margin: 0 0 8px; color: var(--tx2); font-size: 13px; }
+.hosted-table { border-collapse: collapse; width: max-content; min-width: 100%; }
+.hosted-table th, .hosted-table td { border-bottom: 1px solid var(--line); text-align: left; padding: 8px 10px; white-space: nowrap; }
+.hosted-chart svg { width: 100%; height: auto; display: block; }
+.hosted-page p { margin: 0 0 10px; }
+.hosted-page pre { overflow-x: auto; max-width: 100%; }

@@ -354,6 +354,7 @@ func (s *Server) keepaliveEvery() time.Duration {
 // Handler is the application router with security headers.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /p/{token}", s.hostedPage)
 	mux.HandleFunc("GET /login", s.loginGet)
 	mux.HandleFunc("POST /login", s.loginPost)
 	mux.HandleFunc("GET /login/code", s.codeGet)
@@ -622,6 +623,11 @@ func (s *Server) loadState(w http.ResponseWriter, r *http.Request) requestState 
 		}
 	}
 	if st.User == nil {
+		// A public page has no form. Skip the anonymous CSRF cookie so opening
+		// a link does not write a cookie for a signed-out visitor.
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/p/") {
+			return st
+		}
 		st.CSRF = s.ensureCSRF(w, r)
 	}
 	return st

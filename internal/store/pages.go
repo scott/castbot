@@ -410,6 +410,23 @@ func (s *Store) PageForAgent(ctx context.Context, userID, agentID, key string) (
 	}
 }
 
+// PageRequiresSignIn reports a live page that is not shared by link.
+// A missing or deleted token is false, so the caller can answer 404
+// without sending a stranger to the login page.
+func (s *Store) PageRequiresSignIn(ctx context.Context, token string) (bool, error) {
+	if !pageTokenShape(token) {
+		return false, nil
+	}
+	row, _, err := s.loadLivePage(ctx, token)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return row.Visibility != PageLink, nil
+}
+
 // PageByLink reads a page that was shared with anyone who has the token.
 // The lookup is by token alone because the visitor has no account.
 func (s *Store) PageByLink(ctx context.Context, token string) (Page, error) {
