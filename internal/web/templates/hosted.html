@@ -14,6 +14,47 @@
 <h1>This page is not available.</h1>
 {{else}}
 <h1>{{.Title}}</h1>
+{{if .Owner}}
+<section class="hosted-owner">
+{{if .Notice}}<p class="hosted-note" role="status">{{.Notice}}</p>{{end}}
+{{if .Error}}<p class="hosted-note err" role="alert">{{.Error}}</p>{{end}}
+<form method="post" action="/p/{{.Owner.Token}}/rename">
+<input type="hidden" name="csrf" value="{{.Owner.CSRF}}">
+<label>Title<input name="title" maxlength="80" value="{{.Owner.Title}}" required></label>
+<button class="btn sm" type="submit">Rename</button>
+</form>
+<form method="post" action="/p/{{.Owner.Token}}/share">
+<input type="hidden" name="csrf" value="{{.Owner.CSRF}}">
+<fieldset class="hosted-share">
+<legend>Who can view</legend>
+<label><input type="radio" name="visibility" value="private"{{if eq .Owner.Visibility "private"}} checked{{end}}> <span>Only you</span></label>
+<label><input type="radio" name="visibility" value="workspace"{{if eq .Owner.Visibility "workspace"}} checked{{end}}> <span>{{.Owner.Workspace}}</span></label>
+<label><input type="radio" name="visibility" value="invited"{{if eq .Owner.Visibility "invited"}} checked{{end}}> <span>People you invite</span></label>
+<label><input type="radio" name="visibility" value="link"{{if eq .Owner.Visibility "link"}} checked{{end}}> <span>Anyone with the link</span></label>
+</fieldset>
+<div class="hosted-pick">
+<p>People</p>
+{{range .Owner.People}}<label><input type="checkbox" name="person" value="{{.ID}}"{{if .Checked}} checked{{end}}> <span>{{.Label}}</span></label>{{end}}
+<p>Agents</p>
+{{range .Owner.Agents}}<label><input type="checkbox" name="agent" value="{{.ID}}"{{if .Checked}} checked{{end}}> <span>{{.Label}}</span></label>{{end}}
+</div>
+<button class="btn sm" type="submit">Save sharing</button>
+</form>
+<div class="hosted-link">
+<label>Link<input readonly value="{{.Owner.Link}}"></label>
+<button class="btn sm" type="button" data-copy="{{.Owner.Link}}">Copy link</button>
+</div>
+<details class="hosted-delete">
+<summary>Delete</summary>
+<form method="post" action="/p/{{.Owner.Token}}/delete">
+<input type="hidden" name="csrf" value="{{.Owner.CSRF}}">
+<p>This link will stop opening the page.</p>
+<input type="hidden" name="confirm" value="yes">
+<button class="btn sm" type="submit">Delete page</button>
+</form>
+</details>
+</section>
+{{end}}
 {{range .Blocks}}
 {{if eq .Kind "control"}}
 <fieldset class="hosted-control">

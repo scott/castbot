@@ -355,6 +355,9 @@ func (s *Server) keepaliveEvery() time.Duration {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /p/{token}", s.hostedPage)
+	mux.HandleFunc("POST /p/{token}/rename", s.hostedRename)
+	mux.HandleFunc("POST /p/{token}/share", s.hostedShare)
+	mux.HandleFunc("POST /p/{token}/delete", s.hostedDelete)
 	mux.HandleFunc("GET /pages", s.pageLibrary)
 	mux.HandleFunc("GET /login", s.loginGet)
 	mux.HandleFunc("POST /login", s.loginPost)

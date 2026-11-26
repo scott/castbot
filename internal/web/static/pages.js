@@ -37,4 +37,16 @@
     if (!t || !t.closest || !t.closest(".hosted-control")) return;
     apply();
   });
+
+  document.addEventListener("click", function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var btn = t.closest("[data-copy]");
+    if (!btn) return;
+    var text = btn.getAttribute("data-copy") || "";
+    if (!text || !navigator.clipboard || !navigator.clipboard.writeText) return;
+    navigator.clipboard.writeText(text).then(function () {
+      btn.textContent = "Copied";
+    }, function () {});
+  });
 })();
