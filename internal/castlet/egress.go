@@ -23,6 +23,7 @@ import (
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
+	"github.com/scott/castbot/internal/pagetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/selftool"
 	"github.com/scott/castbot/internal/settingstool"
@@ -329,8 +330,9 @@ func (s *Supervisor) egressSecret(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(egresscontract.SecretResult{Result: result.Result})
 }
 
-// egressAgents forwards the agent, routine, account read, group, machine, chat, and settings tools.
+// egressAgents forwards the agent, routine, account read, group, machine, chat, settings, and page tools.
 // It is not a connection, so it does not check whether a provider is connected.
+// read_page may return up to 40 KiB. Every other tool still stops at 8000 bytes.
 func (s *Supervisor) egressAgents(w http.ResponseWriter, r *http.Request) {
 	var call struct {
 		Name      string          `json:"name"`
@@ -343,7 +345,7 @@ func (s *Supervisor) egressAgents(w http.ResponseWriter, r *http.Request) {
 	switch call.Name {
 	case agentskill.ToolCreate, agentskill.ToolList, routinetool.ToolList, routinetool.ToolCreate, routinetool.ToolUpdate, routinetool.ToolDelete, routinetool.ToolRun:
 	default:
-		if !selftool.Known(call.Name) && !grouptool.Known(call.Name) && !machinetool.Known(call.Name) && !chattool.Known(call.Name) && !settingstool.Known(call.Name) {
+		if !selftool.Known(call.Name) && !grouptool.Known(call.Name) && !machinetool.Known(call.Name) && !chattool.Known(call.Name) && !settingstool.Known(call.Name) && !pagetool.Known(call.Name) {
 			writeAgentReply(w, egresscontract.Rejected, true)
 			return
 		}
@@ -361,7 +363,11 @@ func (s *Supervisor) egressAgents(w http.ResponseWriter, r *http.Request) {
 		Text  string `json:"text"`
 		Error bool   `json:"error"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil || strings.TrimSpace(result.Text) == "" || len(result.Text) > 8000 {
+	limit := 8000
+	if call.Name == pagetool.ToolRead {
+		limit = pagetool.ReadCap
+	}
+	if err := json.Unmarshal(body, &result); err != nil || strings.TrimSpace(result.Text) == "" || len(result.Text) > limit {
 		writeAgentReply(w, egresscontract.Rejected, true)
 		return
 	}

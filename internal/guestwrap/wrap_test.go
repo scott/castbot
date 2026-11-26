@@ -15,6 +15,7 @@ import (
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
+	"github.com/scott/castbot/internal/pagetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
 	"github.com/scott/castbot/internal/selftool"
@@ -412,6 +413,11 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 			t.Fatalf("list missing %s in %s", spec.Name, out.String())
 		}
 	}
+	for _, spec := range pagetool.Specs() {
+		if !strings.Contains(out.String(), spec.Name) {
+			t.Fatalf("list missing %s in %s", spec.Name, out.String())
+		}
+	}
 	out.Reset()
 	call := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + agentskill.ToolCreate + `","arguments":{"description":"Sort the support inbox and draft replies.","name":"Quill","user_id":"other"}}}` + "\n"
 	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(call), &out); err != nil {
@@ -438,6 +444,14 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 	}
 	if !strings.Contains(posted, `"name":"Ada Lovelace"`) || strings.Contains(posted, "email") || strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") {
 		t.Fatalf("name posted %s", posted)
+	}
+	out.Reset()
+	pageCall := `{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"` + pagetool.ToolCreate + `","arguments":{"title":"Trials","document":{"v":1,"blocks":[{"type":"markdown","text":"Hello from the page"}]},"user_id":"other","agent_id":"other-agent"}}}` + "\n"
+	if err := ServeMCP(agentskill.ServerName, srv.URL, strings.NewReader(pageCall), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(posted, `"title":"Trials"`) || !strings.Contains(posted, `"v":1`) || !strings.Contains(posted, "Hello from the page") || strings.Contains(posted, "user_id") || strings.Contains(posted, "agent_id") {
+		t.Fatalf("page posted %s", posted)
 	}
 	out.Reset()
 	bad := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"delete_agent","arguments":{}}}` + "\n"
