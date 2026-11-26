@@ -27,8 +27,9 @@ func TestReadUnderRejectsASymlinkSwap(t *testing.T) {
 		t.Fatal("symlink read succeeded")
 	}
 	stop := make(chan struct{})
-	defer close(stop)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for {
 			select {
 			case <-stop:
@@ -42,6 +43,12 @@ func TestReadUnderRejectsASymlinkSwap(t *testing.T) {
 			_ = os.WriteFile(filepath.Join(dir, "note"), []byte("workspace-ok"), 0o644)
 		}
 	}()
+	// TempDir removes root after this test returns. The swap loop has to be
+	// finished first, or RemoveAll races a recreate and leaves the directory.
+	t.Cleanup(func() {
+		close(stop)
+		<-done
+	})
 	deadline := time.Now().Add(400 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		buf, err := ReadUnder(root, "box/note")
