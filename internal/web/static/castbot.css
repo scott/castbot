@@ -1544,6 +1544,24 @@ html.light .m-user.c9.queued { border-color: #aae6f6; }
 }
 .hosted-page { width: 100%; max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; min-width: 0; }
 .hosted-page h1 { font-size: 32px; line-height: 1.15; margin-bottom: 20px; }
+.hosted-owner { display: grid; gap: 16px; min-width: 0; margin: 0 0 28px; }
+.hosted-owner form { display: grid; gap: 10px; min-width: 0; }
+.hosted-owner > form > label, .hosted-link label { display: grid; gap: 4px; min-width: 0; color: var(--tx2); font-size: 13px; }
+.hosted-owner input:not([type=radio]):not([type=checkbox]):not([type=hidden]) { width: 100%; min-width: 0; height: 40px; border-radius: 10px; border: 1px solid var(--line2); background: var(--surf); color: var(--tx); padding: 0 12px; font: inherit; }
+.hosted-share { border: 1px solid var(--line); border-radius: var(--r); margin: 0; padding: 10px 12px 12px; display: grid; gap: 8px; min-width: 0; }
+.hosted-share legend { padding: 0 4px; color: var(--tx2); font-size: 13px; }
+.hosted-share label, .hosted-pick label { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; min-width: 0; min-height: 32px; color: var(--tx); font-size: 14px; }
+.hosted-share label span, .hosted-pick label span { min-width: 0; overflow-wrap: anywhere; }
+.hosted-pick { display: grid; gap: 6px; min-width: 0; }
+.hosted-pick p { margin: 8px 0 0; color: var(--tx2); font-size: 13px; }
+.hosted-link { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; min-width: 0; }
+.hosted-link label { flex: 1 1 12rem; }
+.hosted-owner .btn { justify-self: start; }
+.hosted-note { margin: 0; }
+.hosted-note.err { color: var(--err); }
+.hosted-delete { min-width: 0; }
+.hosted-delete summary { cursor: pointer; color: var(--tx2); min-height: 32px; }
+.hosted-delete p { margin: 8px 0; color: var(--tx2); }
 .hosted-block { margin: 0 0 20px; }
 .hosted-block.callout { padding: 12px 14px; border-radius: var(--r); background: var(--raise); }
 .hosted-block.callout.warn { background: var(--err-soft); }

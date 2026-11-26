@@ -187,6 +187,66 @@ func saveHosted(t *testing.T, ctx context.Context, path string) {
 	}
 }
 
+func TestShotsPageShare(t *testing.T) {
+	browser, cleanup := shotBrowser(t)
+	defer cleanup()
+	dir := filepath.Join("..", "..", "docs", "evidence", "pages")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, vp := range []struct {
+		w, h int
+		name string
+	}{{1280, 800, "1280"}, {390, 844, "390"}} {
+		vp := vp
+		t.Run("invited-"+vp.name, func(t *testing.T) {
+			shootShare(t, browser, dir, vp.w, vp.h, "invited", vp.name)
+		})
+		t.Run("link-"+vp.name, func(t *testing.T) {
+			shootShare(t, browser, dir, vp.w, vp.h, "link", vp.name)
+		})
+	}
+}
+
+func shootShare(t *testing.T, browser context.Context, dir string, width, height int, kind, name string) {
+	t.Helper()
+	h := newHarness(t)
+	ctx := context.Background()
+	owner, _ := h.account("share-shot-"+kind+"-"+name+"@example.com", "Nora Hale", "correct-horse-1")
+	member := acceptHostedInvite(t, h, owner, "pip-"+kind+"-"+name+"@example.com", "Pip Lane")
+	atlas := hostedAgent(t, h.st, owner, "Atlas")
+	moss := hostedAgent(t, h.st, member.User, "Moss")
+	made, err := h.st.CreatePage(ctx, owner.ID, atlas.ID, "North desk notes", `{"v":1,"blocks":[{"type":"markdown","text":"Notes from the north desk."}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind == "invited" {
+		if _, err := h.st.SharePage(ctx, owner.ID, "", made.ID, store.PageInvited, []string{member.ID}, []string{moss.ID}); err != nil {
+			t.Fatal(err)
+		}
+	} else if _, err := h.st.SharePage(ctx, owner.ID, "", made.ID, store.PageLink, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	tabCtx := tab(t, browser)
+	var ready string
+	if kind == "invited" {
+		ready = `(function(){var t=document.body.innerText||'';var invited=document.querySelector('input[name=visibility][value=invited]');var person=document.querySelector('input[name=person]:checked');var agent=document.querySelector('input[name=agent]:checked');var link=document.querySelector('.hosted-link input');return t.indexOf('North desk notes')>=0&&t.indexOf('Pip Lane')>=0&&t.indexOf('Moss')>=0&&t.indexOf('Who can view')>=0&&t.indexOf('Copy link')>=0&&invited&&invited.checked&&person&&agent&&link&&link.value.indexOf('/p/')>=0&&t.indexOf('Nora Hale')<0&&t.indexOf('only_you')<0&&t.indexOf('\u2014')<0;})()`
+	} else {
+		ready = `(function(){var t=document.body.innerText||'';var linkRadio=document.querySelector('input[name=visibility][value=link]');var link=document.querySelector('.hosted-link input');return t.indexOf('North desk notes')>=0&&t.indexOf('Anyone with the link')>=0&&t.indexOf('Copy link')>=0&&linkRadio&&linkRadio.checked&&link&&link.value.indexOf('/p/')>=0&&t.indexOf('Nora Hale')<0&&t.indexOf('only_you')<0&&t.indexOf('\u2014')<0;})()`
+	}
+	steps := append(signedOpen(t, ts.URL, sessionToken(t, h, owner.ID), ts.URL+"/p/"+made.Token, width, height),
+		shotPoll(t, kind, js(ready)),
+	)
+	if err := chromedp.Run(tabCtx, steps...); err != nil {
+		t.Fatal(err)
+	}
+	assertNoSideScroll(t, tabCtx)
+	assertShotClean(t, tabCtx)
+	saveHosted(t, tabCtx, filepath.Join(dir, "share-"+kind+"-"+name+".png"))
+}
+
 func hostedOpen(t *testing.T, page string, width, height int) []chromedp.Action {
 	t.Helper()
 	return []chromedp.Action{

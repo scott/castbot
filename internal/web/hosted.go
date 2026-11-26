@@ -19,6 +19,21 @@ type hostedView struct {
 	Title   string
 	Missing bool
 	Blocks  []hostedBlock
+	Notice  string
+	Error   string
+	Owner   *hostedOwner
+}
+
+// hostedOwner is the signed-in owner's controls. Visitors do not get this block.
+type hostedOwner struct {
+	Token, CSRF, Title, Link, Visibility, Workspace string
+	People                                          []hostedPick
+	Agents                                          []hostedPick
+}
+
+type hostedPick struct {
+	ID, Label string
+	Checked   bool
 }
 
 type hostedBlock struct {
@@ -54,8 +69,11 @@ type hostedOption struct {
 
 func (s *Server) hostedPage(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
+	st := from(r)
+	// A link page is readable without an account. The owner, when signed in,
+	// still gets rename, share, and delete on that same response.
 	if row, err := s.store.PageByLink(r.Context(), token); err == nil {
-		s.writeHosted(w, row)
+		s.writeHosted(w, r, row, st.User, http.StatusOK, hostedNotice(r), "")
 		return
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "Error", http.StatusInternalServerError)
@@ -70,7 +88,6 @@ func (s *Server) hostedPage(w http.ResponseWriter, r *http.Request) {
 		s.renderHosted(w, http.StatusNotFound, hostedView{Title: "Page", Missing: true})
 		return
 	}
-	st := from(r)
 	if st.User == nil {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
@@ -84,16 +101,211 @@ func (s *Server) hostedPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	s.writeHosted(w, row)
+	s.writeHosted(w, r, row, st.User, http.StatusOK, hostedNotice(r), "")
 }
 
-func (s *Server) writeHosted(w http.ResponseWriter, row store.Page) {
+func (s *Server) hostedRename(w http.ResponseWriter, r *http.Request) {
+	user, row, ok := s.ownerPage(w, r)
+	if !ok {
+		return
+	}
+	updated, err := s.store.RenamePage(r.Context(), user.ID, "", row.ID, r.FormValue("title"))
+	if errors.Is(err, store.ErrInvalid) {
+		s.writeHosted(w, r, row, &user, http.StatusBadRequest, "", pageTitle)
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		s.renderHosted(w, http.StatusNotFound, hostedView{Title: "Page", Missing: true})
+		return
+	}
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/p/"+updated.Token+"?notice=renamed", http.StatusSeeOther)
+}
+
+func (s *Server) hostedShare(w http.ResponseWriter, r *http.Request) {
+	user, row, ok := s.ownerPage(w, r)
+	if !ok {
+		return
+	}
+	vis, visOK := pageVisStore(r.FormValue("visibility"))
+	if !visOK {
+		s.writeHosted(w, r, row, &user, http.StatusBadRequest, "", "Choose who can view this page.")
+		return
+	}
+	var userIDs, agentIDs []string
+	if vis == store.PageInvited {
+		var errText string
+		var matched bool
+		userIDs, errText, matched = s.matchPagePeople(r.Context(), user.ID, r.Form["person"])
+		if !matched {
+			s.writeHosted(w, r, row, &user, http.StatusBadRequest, "", errText)
+			return
+		}
+		agentIDs, errText, matched = s.matchPageAgents(r.Context(), user.ID, r.Form["agent"])
+		if !matched {
+			s.writeHosted(w, r, row, &user, http.StatusBadRequest, "", errText)
+			return
+		}
+		if len(userIDs)+len(agentIDs) == 0 {
+			s.writeHosted(w, r, row, &user, http.StatusBadRequest, "", pageWho)
+			return
+		}
+	}
+	updated, err := s.store.SharePage(r.Context(), user.ID, "", row.ID, vis, userIDs, agentIDs)
+	if errors.Is(err, store.ErrInvalid) {
+		s.writeHosted(w, r, row, &user, http.StatusBadRequest, "", pageWho)
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		if _, look := s.store.PageForUser(r.Context(), user.ID, row.ID); errors.Is(look, store.ErrNotFound) {
+			s.renderHosted(w, http.StatusNotFound, hostedView{Title: "Page", Missing: true})
+			return
+		}
+		s.writeHosted(w, r, row, &user, http.StatusBadRequest, "", "Choose people in this workspace.")
+		return
+	}
+	if err != nil {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/p/"+updated.Token+"?notice=shared", http.StatusSeeOther)
+}
+
+func (s *Server) hostedDelete(w http.ResponseWriter, r *http.Request) {
+	user, row, ok := s.ownerPage(w, r)
+	if !ok {
+		return
+	}
+	if r.FormValue("confirm") != "yes" {
+		s.writeHosted(w, r, row, &user, http.StatusBadRequest, "", "Confirm the delete.")
+		return
+	}
+	if err := s.store.DeletePage(r.Context(), user.ID, "", row.ID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.renderHosted(w, http.StatusNotFound, hostedView{Title: "Page", Missing: true})
+			return
+		}
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/p/"+row.Token, http.StatusSeeOther)
+}
+
+// ownerPage loads a page and refuses anyone except its owner.
+// PageForUser also returns a workspace or link page to other people, so the
+// owner check is separate. The response matches a missing page.
+func (s *Server) ownerPage(w http.ResponseWriter, r *http.Request) (store.User, store.Page, bool) {
+	user, _, ok := s.requireUser(w, r)
+	if !ok {
+		return store.User{}, store.Page{}, false
+	}
+	row, err := s.store.PageForUser(r.Context(), user.ID, r.PathValue("token"))
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "Error", http.StatusInternalServerError)
+		return store.User{}, store.Page{}, false
+	}
+	if err != nil || row.UserID != user.ID {
+		s.renderHosted(w, http.StatusNotFound, hostedView{Title: "Page", Missing: true})
+		return store.User{}, store.Page{}, false
+	}
+	return user, row, true
+}
+
+func (s *Server) writeHosted(w http.ResponseWriter, r *http.Request, row store.Page, user *store.User, status int, notice, formErr string) {
 	doc, err := pagedoc.Parse(row.Body)
 	if err != nil {
 		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
-	s.renderHosted(w, http.StatusOK, hostedView{Title: row.Title, Blocks: hostedBlocks(doc)})
+	v := hostedView{Title: row.Title, Blocks: hostedBlocks(doc)}
+	if user != nil && user.ID == row.UserID {
+		owner, err := s.hostedOwner(r, *user, row)
+		if err != nil {
+			http.Error(w, "Error", http.StatusInternalServerError)
+			return
+		}
+		v.Owner = &owner
+		v.Notice = notice
+		v.Error = formErr
+	}
+	s.renderHosted(w, status, v)
+}
+
+func (s *Server) hostedOwner(r *http.Request, user store.User, row store.Page) (hostedOwner, error) {
+	ctx := r.Context()
+	members, err := s.store.ListMembers(ctx, user.ID)
+	if err != nil {
+		return hostedOwner{}, err
+	}
+	grants, err := s.store.PageGrants(ctx, user.ID, row.ID)
+	if err != nil {
+		return hostedOwner{}, err
+	}
+	on := map[string]bool{}
+	for _, grant := range grants {
+		on[grant.Kind+"/"+grant.GranteeID] = true
+	}
+	var people []hostedPick
+	var agents []hostedPick
+	for _, member := range members {
+		if member.ID != user.ID {
+			people = append(people, hostedPick{
+				ID: member.ID, Label: personLabel(member), Checked: on["user/"+member.ID],
+			})
+		}
+		rows, err := s.store.ListAgents(ctx, member.ID)
+		if err != nil {
+			return hostedOwner{}, err
+		}
+		for _, agent := range rows {
+			agents = append(agents, hostedPick{
+				ID: agent.ID, Label: agent.Name, Checked: on["agent/"+agent.ID],
+			})
+		}
+	}
+	workspace := strings.TrimSpace(user.WorkspaceName)
+	if workspace == "" {
+		workspace = "Workspace"
+	}
+	return hostedOwner{
+		Token: row.Token, CSRF: from(r).CSRF, Title: row.Title,
+		Link: pageURL(r, row.Token), Visibility: row.Visibility, Workspace: workspace,
+		People: people, Agents: agents,
+	}, nil
+}
+
+func personLabel(user store.User) string {
+	name := strings.TrimSpace(user.DisplayName)
+	email := strings.TrimSpace(user.Email)
+	if name == "" {
+		return email
+	}
+	if email == "" {
+		return name
+	}
+	return name + " · " + email
+}
+
+func pageURL(r *http.Request, token string) string {
+	scheme := "https"
+	if r.TLS == nil && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "http"
+	}
+	return scheme + "://" + r.Host + "/p/" + token
+}
+
+func hostedNotice(r *http.Request) string {
+	switch r.URL.Query().Get("notice") {
+	case "renamed":
+		return "Title saved."
+	case "shared":
+		return "Sharing saved."
+	default:
+		return ""
+	}
 }
 
 func (s *Server) renderHosted(w http.ResponseWriter, status int, v hostedView) {
