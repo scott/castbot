@@ -30,7 +30,7 @@ func TestCatalogOrderAndAliases(t *testing.T) {
 	if !BlocksGuest("DIGITALOCEAN_ACCESS_TOKEN") || BlocksGuest("SAFE_TOKEN") {
 		t.Fatal("guest block")
 	}
-	if _, err := APIURL("linear", "/v1", ""); err == nil {
+	if _, err := APIURL("widget", "/v1", ""); err == nil {
 		t.Fatal("unknown provider built a URL")
 	}
 	if _, err := GitURL(DigitalOcean, "/v2/account", ""); err == nil {
@@ -39,7 +39,7 @@ func TestCatalogOrderAndAliases(t *testing.T) {
 	if !egresscontract.KnownProvider("linear") || !egresscontract.KnownProvider(" GitHub ") || egresscontract.KnownProvider("not-a-name") || egresscontract.KnownProvider("request_secret") || egresscontract.KnownProvider("agents") {
 		t.Fatal("provider id shape")
 	}
-	if _, ok := ShimYAML("linear"); ok {
+	if _, ok := ShimYAML("widget"); ok {
 		t.Fatal("unknown id wrote a shim")
 	}
 	if yml, ok := ShimYAML(GitHub); !ok || yml == "" {
@@ -73,15 +73,15 @@ func TestVaultPacking(t *testing.T) {
 func TestRegisterRejectsABadEntry(t *testing.T) {
 	before := len(Catalog())
 	mustPanic(t, func() {
-		register(Entry{ID: "Linear", SecretName: "LINEAR_CONNECTION", Hosts: []string{"api.linear.app"}, APIHost: "api.linear.app"})
+		register(Entry{ID: "Widget", SecretName: "WIDGET_CONNECTION", Hosts: []string{"api.example.com"}, APIHost: "api.example.com"})
 	})
 	mustPanic(t, func() {
-		register(Entry{ID: "linear", SecretName: "LINEAR_CONNECTION", Hosts: []string{"api.linear.app"}, APIHost: "evil.example"})
+		register(Entry{ID: "widget", SecretName: "WIDGET_CONNECTION", Hosts: []string{"api.example.com"}, APIHost: "evil.example"})
 	})
 	mustPanic(t, func() {
-		register(Entry{ID: "linear", SecretName: "linear_connection", Hosts: []string{"api.linear.app"}, APIHost: "api.linear.app"})
+		register(Entry{ID: "widget", SecretName: "widget_connection", Hosts: []string{"api.example.com"}, APIHost: "api.example.com"})
 	})
-	if _, ok := Lookup("linear"); ok || len(Catalog()) != before {
+	if _, ok := Lookup("widget"); ok || len(Catalog()) != before {
 		t.Fatal("bad entry registered")
 	}
 }
