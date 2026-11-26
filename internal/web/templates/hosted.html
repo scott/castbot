@@ -1,0 +1,37 @@
+{{define "hosted"}}<!DOCTYPE html>
+<html lang="en" class="hosted">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{{.Title}} · castbot</title>
+<link rel="stylesheet" href="{{static "castbot.css"}}">
+<script src="{{static "pages.js"}}" defer></script>
+</head>
+<body>
+<main class="hosted-page">
+{{if .Missing}}
+<h1>This page is not available.</h1>
+{{else}}
+<h1>{{.Title}}</h1>
+{{range .Blocks}}
+{{if eq .Kind "control"}}
+<fieldset class="hosted-control">
+<legend>{{.Label}}</legend>
+{{range .Options}}<label><input type="radio" name="{{.Name}}" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Value}}</label>{{end}}
+</fieldset>
+{{else}}
+<section class="hosted-block{{if eq .Kind "callout"}} callout {{.Tone}}{{end}}"{{if .When}} data-when="{{.When}}"{{end}}{{if .Hidden}} hidden{{end}}>
+{{if eq .Kind "markdown"}}{{.HTML}}{{end}}
+{{if eq .Kind "callout"}}<p>{{.Text}}</p>{{end}}
+{{if eq .Kind "stats"}}<ul class="hosted-stats">{{range .Items}}<li><span>{{.Label}}</span><strong>{{.Value}}</strong>{{if .Note}}<em>{{.Note}}</em>{{end}}</li>{{end}}</ul>{{end}}
+{{if eq .Kind "table"}}<div class="hosted-scroll">{{if .Caption}}<p class="hosted-cap">{{.Caption}}</p>{{end}}<table class="hosted-table"><thead><tr>{{range .Columns}}<th>{{.}}</th>{{end}}</tr></thead><tbody>{{range .Rows}}<tr{{if .When}} data-when="{{.When}}"{{end}}{{if .Hidden}} hidden{{end}}>{{range .Cells}}<td>{{.}}</td>{{end}}</tr>{{end}}</tbody></table></div>{{end}}
+{{if eq .Kind "chart"}}<div class="hosted-scroll hosted-chart">{{if .Caption}}<p class="hosted-cap">{{.Caption}}</p>{{end}}{{.SVG}}</div>{{end}}
+</section>
+{{end}}
+{{end}}
+{{end}}
+</main>
+</body>
+</html>
+{{end}}
