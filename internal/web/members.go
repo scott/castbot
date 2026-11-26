@@ -438,6 +438,7 @@ func (s *Server) groupPage(r *http.Request, user store.User, threadID string) (p
 	p.Page = "group"
 	p.Title = th.Title
 	p.Messages = presentGroup(msgs, agents, humans, s.store.Now(), loc)
+	s.fillPageCards(r.Context(), th.WorkspaceID, p.Messages)
 	p.Group = groupPage{
 		ID: th.ID, Title: th.Title, Who: groupWho(agents, humans), Poll: open,
 		Owner: th.UserID == user.ID, Pinned: card.Pinned, SectionID: card.SectionID,

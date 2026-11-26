@@ -182,6 +182,7 @@ func (s *Server) applyPanel(w http.ResponseWriter, r *http.Request, user store.U
 	switch panel {
 	case "agent":
 		s.fillGlance(r, user, agent, p)
+		s.fillAgentPages(r, user, agent, p)
 	case "approvals":
 		s.fillApprovals(r, user, agent, p)
 	case "secrets":

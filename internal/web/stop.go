@@ -218,6 +218,7 @@ func (s *Server) stoppedTurnHTML(ctx context.Context, user store.User, row store
 		ID: "stop-note", AuthorKind: "system", AuthorID: row.AgentID, Body: store.StoppedLine, Origin: "notice", CreatedAt: stamp,
 	})
 	views := presentMessages(msgs, agent, s.store.Now(), userLocation(user.Timezone))
+	s.fillPageCards(ctx, user.WorkspaceID, views)
 	for i := range views {
 		views[i].ShowDay = false
 	}

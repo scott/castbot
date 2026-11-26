@@ -79,6 +79,93 @@ func TestShotsPages(t *testing.T) {
 	}
 }
 
+func TestShotsPageCards(t *testing.T) {
+	browser, cleanup := shotBrowser(t)
+	defer cleanup()
+	dir := filepath.Join("..", "..", "docs", "evidence", "pages")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, vp := range []struct {
+		w, h int
+		name string
+	}{{1280, 800, "1280"}, {390, 844, "390"}} {
+		vp := vp
+		t.Run("card-"+vp.name, func(t *testing.T) {
+			shootPageCard(t, browser, dir, vp.w, vp.h, vp.name)
+		})
+		t.Run("list-"+vp.name, func(t *testing.T) {
+			shootEmptyPageList(t, browser, dir, vp.w, vp.h, vp.name)
+		})
+	}
+}
+
+func shootPageCard(t *testing.T, browser context.Context, dir string, width, height int, name string) {
+	t.Helper()
+	h := newHarness(t)
+	user, _ := h.account("page-card-"+name+"@example.com", "Alex Rivera", "correct-horse-1")
+	agent := hostedAgent(t, h.st, user, "Atlas")
+	made := settleOwnedPage(t, h, user.ID, agent, "Weekly trial results for the north campus observation desk", samplePageText("Hello from the weekly report"))
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	ctx := tab(t, browser)
+	steps := append(signedOpen(t, ts.URL, sessionToken(t, h, user.ID), ts.URL+"/agents/"+agent.ID, width, height),
+		shotPoll(t, "card", js(`(function(){var t=document.body.innerText||'';return t.indexOf('Weekly trial results')>=0&&t.indexOf('Only you')>=0&&t.indexOf('Open')>=0&&document.querySelector('.page-card')&&t.indexOf('\u2014')<0;})()`)),
+	)
+	if err := chromedp.Run(ctx, steps...); err != nil {
+		t.Fatal(err)
+	}
+	assertNoSideScroll(t, ctx)
+	assertShotClean(t, ctx)
+	saveHosted(t, ctx, filepath.Join(dir, "card-"+name+".png"))
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(ts.URL+"/p/"+made.Token),
+		pageReady(t),
+		shotPoll(t, "opened", js(`(function(){var t=document.body.innerText||'';return t.indexOf('Weekly trial results')>=0&&t.indexOf('Hello from the weekly report')>=0&&t.indexOf('\u2014')<0;})()`)),
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertNoSideScroll(t, ctx)
+	assertShotClean(t, ctx)
+	saveHosted(t, ctx, filepath.Join(dir, "card-open-"+name+".png"))
+	if made.Token == "" {
+		t.Fatal("missing token")
+	}
+}
+
+func shootEmptyPageList(t *testing.T, browser context.Context, dir string, width, height int, name string) {
+	t.Helper()
+	h := newHarness(t)
+	user, _ := h.account("page-list-"+name+"@example.com", "Alex Rivera", "correct-horse-1")
+	ts := httptest.NewTLSServer(h.srv.Handler())
+	t.Cleanup(ts.Close)
+	ctx := tab(t, browser)
+	steps := append(signedOpen(t, ts.URL, sessionToken(t, h, user.ID), ts.URL+"/pages", width, height),
+		shotPoll(t, "empty", js(`(function(){var t=document.body.innerText||'';return t.indexOf('No pages yet.')>=0&&t.indexOf('A page appears when an agent makes one.')>=0&&t.indexOf('\u2014')<0;})()`)),
+	)
+	if err := chromedp.Run(ctx, steps...); err != nil {
+		t.Fatal(err)
+	}
+	assertNoSideScroll(t, ctx)
+	assertShotClean(t, ctx)
+	saveHosted(t, ctx, filepath.Join(dir, "list-"+name+".png"))
+}
+
+func signedOpen(t *testing.T, origin, token, page string, width, height int) []chromedp.Action {
+	t.Helper()
+	return []chromedp.Action{
+		network.Enable(),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_, err := cdppage.AddScriptToEvaluateOnNewDocument(`window.__errs=[];window.addEventListener('securitypolicyviolation',function(e){window.__errs.push(String(e.violatedDirective||'csp'))});window.addEventListener('error',function(e){window.__errs.push(String(e.message||'error'))});`).Do(ctx)
+			return err
+		}),
+		network.SetCookie("castbot_session", token).WithURL(origin).WithSecure(true).WithHTTPOnly(true).WithSameSite(network.CookieSameSiteStrict),
+		chromedp.EmulateViewport(int64(width), int64(height)),
+		chromedp.Navigate(page),
+		pageReady(t),
+	}
+}
+
 func saveHosted(t *testing.T, ctx context.Context, path string) {
 	t.Helper()
 	var buf []byte
