@@ -4,7 +4,11 @@
 // that image does not list them.
 package pagetool
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/scott/castbot/internal/page"
+)
 
 const (
 	// SkillName is the skill the runtime loads from the agent directory.
@@ -44,9 +48,12 @@ const (
 	SkillSummary = "Build a hosted page when the person asks for a report, a dashboard, a tracker, or an explainer."
 )
 
-const skillBody = `Call these tools only when the person asks for a page, a report, a dashboard, a tracker, or an explainer.
+func skillBodyText() string {
+	return `Call these tools only when the person asks for a page, a report, a dashboard, a tracker, or an explainer.
 
-create_page saves a new private page. Pass title and document. The document is JSON with v set to 1 and a blocks list. A block type is markdown, callout, stats, table, chart, or control. Keep the document under 32 KiB.
+create_page saves one new private page the person can open. Pass title and document. A successful call keeps the page. Save the page they asked for. If the call fails, nothing was saved: fix the document and call create_page again. If a page was already saved, change it with update_page instead of creating another.
+
+` + page.Shape() + `
 
 update_page replaces the document of a page this agent created. Pass page as the id or the token, and document. Pass revision from read_page when you have it. If the page changed, read it and try again.
 
@@ -67,16 +74,17 @@ If the tools are not listed, end your reply with one castbot-page fence and no o
 ` + "```castbot-page\n" + `{"action":"create_page","title":"TITLE","document":"DOCUMENT"}` + "\n```" + `
 
 Replace TITLE and DOCUMENT. Use action update_page, rename_page, delete_page, list_pages, read_page, or share_page when that is what they asked. Those actions take page, except list_pages. Do not leave TITLE, DOCUMENT, or PAGE in place.`
+}
 
 // SkillMarkdown is the SKILL.md file, frontmatter plus body.
 func SkillMarkdown() string {
-	return "---\nname: " + SkillName + "\ndescription: " + SkillSummary + "\n---\n\n" + skillBody + "\n"
+	return "---\nname: " + SkillName + "\ndescription: " + SkillSummary + "\n---\n\n" + skillBodyText() + "\n"
 }
 
 // Guide is the instructions section served with every bundle.
 // The stored instructions file stays unchanged.
 func Guide() string {
-	return Heading + "\n\n" + skillBody + "\n"
+	return Heading + "\n\n" + skillBodyText() + "\n"
 }
 
 // Instructions appends the guide when the heading is not already there.
@@ -117,7 +125,7 @@ type Spec struct {
 // Specs is the tool list, in the order the guest lists it.
 func Specs() []Spec {
 	return []Spec{
-		{Name: ToolCreate, Description: "Save a new private page. Pass title and document. The document is JSON, at most 32 KiB."},
+		{Name: ToolCreate, Description: "Save one new private page. Pass title and document. A successful call keeps the page. The document shape is on the document argument."},
 		{Name: ToolUpdate, Description: "Replace the document of a page this agent created. Pass page and document, and revision when you have it."},
 		{Name: ToolRename, Description: "Change the title of a page this agent created. The link stays the same."},
 		{Name: ToolDelete, Description: "Remove a page this agent created."},

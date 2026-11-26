@@ -35,7 +35,7 @@ func TestPagesAccessAndRevision(t *testing.T) {
 	if made.Visibility != PagePrivate || made.Revision != 1 || made.Title != "Signups" || !pageTokenShape(made.Token) || made.Body != pageBody {
 		t.Fatalf("%+v", made)
 	}
-	if _, err := s.CreatePage(ctx, owner.ID, ownerAgent.ID, "bad", "{"); err != ErrInvalid {
+	if _, err := s.CreatePage(ctx, owner.ID, ownerAgent.ID, "bad", "{"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("bad body %v", err)
 	}
 	if _, err := s.PageForUser(ctx, other.ID, made.ID); err != ErrNotFound {

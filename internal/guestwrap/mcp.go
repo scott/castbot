@@ -16,6 +16,7 @@ import (
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
+	pagedoc "github.com/scott/castbot/internal/page"
 	"github.com/scott/castbot/internal/pagetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
@@ -505,10 +506,19 @@ func pageSchema(spec pagetool.Spec) map[string]any {
 	page := map[string]any{"type": "string", "description": "Page id or token."}
 	title := map[string]any{"type": "string", "description": "Title, up to 80 characters."}
 	document := map[string]any{
-		"description": "Page document JSON, at most 32 KiB.",
+		"description": pagedoc.Shape(),
 		"oneOf": []any{
-			map[string]any{"type": "object"},
-			map[string]any{"type": "string"},
+			map[string]any{
+				"type":        "object",
+				"description": "The page document.",
+				"required":    []any{"v", "blocks"},
+				"properties": map[string]any{
+					"v":      map[string]any{"type": "integer", "description": "Always 1."},
+					"blocks": map[string]any{"type": "array", "minItems": 1, "maxItems": 40, "description": "Stacked regions. The description lists each block type.", "items": map[string]any{"type": "object"}},
+				},
+				"additionalProperties": false,
+			},
+			map[string]any{"type": "string", "description": "The same JSON object encoded as one string."},
 		},
 	}
 	switch spec.Name {

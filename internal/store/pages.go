@@ -11,6 +11,21 @@ import (
 	"github.com/scott/castbot/internal/page"
 )
 
+// PageDocError is a document the page checker rejected.
+// Unwrap returns ErrInvalid so callers that only check the class still match.
+type PageDocError struct {
+	Reason string
+}
+
+func (e *PageDocError) Error() string {
+	if e == nil {
+		return ErrInvalid.Error()
+	}
+	return e.Reason
+}
+
+func (e *PageDocError) Unwrap() error { return ErrInvalid }
+
 const (
 	// PagePrivate is the default. Only the owner and the creating agent can read it.
 	PagePrivate = "private"
@@ -113,7 +128,10 @@ func (s *Store) CreatePage(ctx context.Context, userID, agentID, title, body str
 // revision 0 does not check the current revision. A non-zero revision must match.
 func (s *Store) UpdatePage(ctx context.Context, userID, agentID, key, body string, revision int) (Page, error) {
 	_, body, err := cleanPageWrite("", body, false)
-	if err != nil || revision < 0 {
+	if err != nil {
+		return Page{}, err
+	}
+	if revision < 0 {
 		return Page{}, ErrInvalid
 	}
 	if _, err := s.GetAgent(ctx, userID, agentID); err != nil {
@@ -571,9 +589,20 @@ func cleanPageWrite(title, body string, withTitle bool) (string, string, error) 
 	}
 	body = strings.TrimSpace(body)
 	if _, err := page.Parse(body); err != nil {
-		return "", "", ErrInvalid
+		return "", "", pageDocErr(err)
 	}
 	return title, body, nil
+}
+
+func pageDocErr(err error) error {
+	reason := ""
+	if err != nil {
+		reason = err.Error()
+	}
+	if reason == "" || reason == page.ErrInvalid.Error() {
+		reason = "Check the page format and try again."
+	}
+	return &PageDocError{Reason: reason}
 }
 
 func (s *Store) ownedPage(ctx context.Context, userID, agentID, key string) (Page, error) {

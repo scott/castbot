@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"strings"
@@ -43,7 +44,48 @@ const (
 )
 
 // ErrInvalid means the document or title was rejected.
+// A rejected document wraps this error, and Error returns the reason.
 var ErrInvalid = errors.New("invalid page")
+
+// reject is one document problem. It unwraps to ErrInvalid.
+type reject struct{ msg string }
+
+func (e *reject) Error() string { return e.msg }
+
+func (e *reject) Unwrap() error { return ErrInvalid }
+
+func invalidf(format string, args ...any) error {
+	return &reject{msg: fmt.Sprintf(format, args...)}
+}
+
+// Example is one document that uses every block type.
+func Example() string {
+	return `{
+  "v": 1,
+  "blocks": [
+    {"type": "markdown", "text": "Trials beat the other quotes.", "when": {"range": "30 days"}},
+    {"type": "callout", "tone": "note", "text": "Figures are counts, not money."},
+    {"type": "stats", "items": [{"label": "Trials", "value": "12", "note": "30 days"}]},
+    {"type": "table", "caption": "By day", "columns": ["Day", "Trials"], "rows": [{"cells": ["Mon", "3"], "when": {"range": "7 days"}}, {"cells": ["Tue", "4"]}]},
+    {"type": "chart", "kind": "bar", "title": "Trials", "x": "Day", "y": "Count", "series": [{"name": "Trials", "points": [{"x": "Mon", "y": 3}, {"x": "Tue", "y": 4}]}]},
+    {"type": "control", "id": "range", "label": "Range", "options": ["7 days", "30 days"]}
+  ]
+}`
+}
+
+// Shape is the document contract: the fields, the limits, and one valid example.
+func Shape() string {
+	return `The document is one JSON object. v is 1. blocks has 1 to 40 objects. No other keys are allowed.
+
+markdown has text, up to 8 KiB. callout has tone (note or warn) and text, up to 500 characters. stats has items, 1 to 6, each with label and value (up to 40 characters) and an optional note (up to 80). table has an optional caption, columns (1 to 8 names), and rows (1 to 100). Each row has cells, one string per column, and no other keys. chart has kind (bar or line), an optional title, x, and y, and series (1 to 4). Each series has name and points (1 to 60). Each point has x and a number y. control has id, label, and options (2 to 8 different strings). id starts with a lowercase letter and then uses lowercase letters, digits, or underscores. A page has at most 6 controls, and each id is unique.
+
+when, on a block or a table row, maps a control id to one of that control's options. Omit when to always show it. The control is on the same page.
+
+Pass this object as document. A JSON string of the same object is also accepted. Keep it under 32 KiB.
+
+Example:
+` + "```json\n" + Example() + "\n```"
+}
 
 // Document is a checked page body.
 type Document struct {
@@ -111,8 +153,14 @@ func CleanTitle(title string) (string, bool) {
 // The stored body should be the trimmed raw text, which is what the agent sent.
 func Parse(raw string) (Document, error) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || len(raw) > MaxDocument || !utf8.ValidString(raw) {
-		return Document{}, ErrInvalid
+	if raw == "" {
+		return Document{}, invalidf("The document is empty.")
+	}
+	if len(raw) > MaxDocument {
+		return Document{}, invalidf("The document is over 32 KiB.")
+	}
+	if !utf8.ValidString(raw) {
+		return Document{}, invalidf("The document is not valid text.")
 	}
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -121,43 +169,49 @@ func Parse(raw string) (Document, error) {
 		Blocks []json.RawMessage `json:"blocks"`
 	}
 	if err := dec.Decode(&wire); err != nil {
-		return Document{}, ErrInvalid
+		return Document{}, rejectJSON(err, false)
 	}
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
-		return Document{}, ErrInvalid
+		return Document{}, invalidf("The document is not one JSON object.")
 	}
-	if wire.V != Version || len(wire.Blocks) == 0 || len(wire.Blocks) > MaxBlocks {
-		return Document{}, ErrInvalid
+	if wire.V != Version {
+		return Document{}, invalidf("Set v to 1.")
+	}
+	if len(wire.Blocks) == 0 {
+		return Document{}, invalidf("Add at least one block.")
+	}
+	if len(wire.Blocks) > MaxBlocks {
+		return Document{}, invalidf("Use at most 40 blocks.")
 	}
 	doc := Document{Blocks: make([]Block, 0, len(wire.Blocks))}
 	controls := map[string][]string{}
-	for _, rawBlock := range wire.Blocks {
+	for i, rawBlock := range wire.Blocks {
 		block, err := decodeBlock(rawBlock)
 		if err != nil {
-			return Document{}, ErrInvalid
+			return Document{}, invalidf("Block %d: %s", i+1, err.Error())
 		}
 		if block.Type == "control" {
 			if _, ok := controls[block.ID]; ok {
-				return Document{}, ErrInvalid
+				return Document{}, invalidf("Block %d: each control id is used once.", i+1)
 			}
 			controls[block.ID] = block.Options
 		}
 		doc.Blocks = append(doc.Blocks, block)
 	}
 	if len(controls) > MaxControls {
-		return Document{}, ErrInvalid
+		return Document{}, invalidf("Use at most 6 controls.")
 	}
 	for i := range doc.Blocks {
 		if err := checkWhen(doc.Blocks[i].When, controls); err != nil {
-			return Document{}, ErrInvalid
+			return Document{}, invalidf("Block %d: %s", i+1, err.Error())
 		}
 		if doc.Blocks[i].Type != "table" {
 			continue
 		}
 		for _, row := range doc.Blocks[i].Rows {
 			if err := checkWhen(row.When, controls); err != nil {
-				return Document{}, ErrInvalid
+				return Document{}, invalidf("Block %d: %s", i+1, err.Error())
 			}
 		}
 	}
@@ -169,7 +223,7 @@ func decodeBlock(raw json.RawMessage) (Block, error) {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(raw, &kind); err != nil {
-		return Block{}, ErrInvalid
+		return Block{}, invalidf("This block is not valid JSON.")
 	}
 	switch kind.Type {
 	case "markdown":
@@ -178,8 +232,14 @@ func decodeBlock(raw json.RawMessage) (Block, error) {
 			Text string            `json:"text"`
 			When map[string]string `json:"when"`
 		}
-		if err := strict(raw, &w); err != nil || strings.TrimSpace(w.Text) == "" || len(w.Text) > MaxMarkdown {
-			return Block{}, ErrInvalid
+		if err := strict(raw, &w); err != nil {
+			return Block{}, err
+		}
+		if strings.TrimSpace(w.Text) == "" {
+			return Block{}, invalidf("A markdown block needs text.")
+		}
+		if len(w.Text) > MaxMarkdown {
+			return Block{}, invalidf("A markdown block is over 8 KiB.")
 		}
 		return Block{Type: "markdown", Text: w.Text, When: cleanWhen(w.When)}, nil
 	case "callout":
@@ -189,11 +249,14 @@ func decodeBlock(raw json.RawMessage) (Block, error) {
 			Text string            `json:"text"`
 			When map[string]string `json:"when"`
 		}
-		if err := strict(raw, &w); err != nil || (w.Tone != "note" && w.Tone != "warn") {
-			return Block{}, ErrInvalid
+		if err := strict(raw, &w); err != nil {
+			return Block{}, err
+		}
+		if w.Tone != "note" && w.Tone != "warn" {
+			return Block{}, invalidf("A callout tone is note or warn.")
 		}
 		if strings.TrimSpace(w.Text) == "" || utf8.RuneCountInString(w.Text) > MaxCallout {
-			return Block{}, ErrInvalid
+			return Block{}, invalidf("A callout needs text, at most 500 characters.")
 		}
 		return Block{Type: "callout", Tone: w.Tone, Text: w.Text, When: cleanWhen(w.When)}, nil
 	case "stats":
@@ -202,14 +265,17 @@ func decodeBlock(raw json.RawMessage) (Block, error) {
 			Items []statWire        `json:"items"`
 			When  map[string]string `json:"when"`
 		}
-		if err := strict(raw, &w); err != nil || len(w.Items) == 0 || len(w.Items) > MaxStats {
-			return Block{}, ErrInvalid
+		if err := strict(raw, &w); err != nil {
+			return Block{}, err
+		}
+		if len(w.Items) == 0 || len(w.Items) > MaxStats {
+			return Block{}, invalidf("A stats block needs 1 to 6 items.")
 		}
 		items := make([]Stat, 0, len(w.Items))
 		for _, item := range w.Items {
 			stat, ok := item.clean()
 			if !ok {
-				return Block{}, ErrInvalid
+				return Block{}, invalidf("Each stat needs a label and a value, up to 40 characters, and an optional note up to 80. No line breaks.")
 			}
 			items = append(items, stat)
 		}
@@ -223,23 +289,15 @@ func decodeBlock(raw json.RawMessage) (Block, error) {
 			When    map[string]string `json:"when"`
 		}
 		if err := strict(raw, &w); err != nil {
-			return Block{}, ErrInvalid
+			return Block{}, err
 		}
-		block, ok := tableFrom(w.Caption, w.Columns, w.Rows, w.When)
-		if !ok {
-			return Block{}, ErrInvalid
-		}
-		return block, nil
+		return tableFrom(w.Caption, w.Columns, w.Rows, w.When)
 	case "chart":
 		var w chartWire
 		if err := strict(raw, &w); err != nil {
-			return Block{}, ErrInvalid
+			return Block{}, err
 		}
-		block, ok := w.clean()
-		if !ok {
-			return Block{}, ErrInvalid
-		}
-		return block, nil
+		return w.clean()
 	case "control":
 		var w struct {
 			Type    string   `json:"type"`
@@ -248,15 +306,11 @@ func decodeBlock(raw json.RawMessage) (Block, error) {
 			Options []string `json:"options"`
 		}
 		if err := strict(raw, &w); err != nil {
-			return Block{}, ErrInvalid
+			return Block{}, err
 		}
-		block, ok := cleanControl(w.ID, w.Label, w.Options)
-		if !ok {
-			return Block{}, ErrInvalid
-		}
-		return block, nil
+		return cleanControl(w.ID, w.Label, w.Options)
 	default:
-		return Block{}, ErrInvalid
+		return Block{}, invalidf("A block type is markdown, callout, stats, table, chart, or control.")
 	}
 }
 
@@ -284,37 +338,44 @@ type rowWire struct {
 	When  map[string]string `json:"when"`
 }
 
-func tableFrom(caption string, columns []string, rows []rowWire, when map[string]string) (Block, bool) {
+func tableFrom(caption string, columns []string, rows []rowWire, when map[string]string) (Block, error) {
 	caption = strings.TrimSpace(caption)
 	if utf8.RuneCountInString(caption) > 120 || strings.ContainsAny(caption, "\r\n") {
-		return Block{}, false
+		return Block{}, invalidf("A table caption is at most 120 characters, on one line.")
 	}
-	if len(columns) == 0 || len(columns) > MaxColumns || len(rows) == 0 || len(rows) > MaxRows {
-		return Block{}, false
+	if len(columns) == 0 || len(columns) > MaxColumns {
+		return Block{}, invalidf("A table needs 1 to 8 columns.")
+	}
+	if len(rows) == 0 || len(rows) > MaxRows {
+		return Block{}, invalidf("A table needs 1 to 100 rows.")
 	}
 	cleanCols := make([]string, len(columns))
 	for i, col := range columns {
 		col = strings.TrimSpace(col)
 		if col == "" || utf8.RuneCountInString(col) > 40 || strings.ContainsAny(col, "\r\n") {
-			return Block{}, false
+			return Block{}, invalidf("Each column name is 1 to 40 characters, on one line.")
 		}
 		cleanCols[i] = col
 	}
 	cleanRows := make([]Row, len(rows))
 	for i, row := range rows {
 		if len(row.Cells) != len(cleanCols) {
-			return Block{}, false
+			word := "cells"
+			if len(cleanCols) == 1 {
+				word = "cell"
+			}
+			return Block{}, invalidf("Each table row needs %d %s, one per column.", len(cleanCols), word)
 		}
 		cells := make([]string, len(row.Cells))
 		for j, cell := range row.Cells {
 			if utf8.RuneCountInString(cell) > 200 || strings.ContainsAny(cell, "\r\n") {
-				return Block{}, false
+				return Block{}, invalidf("A table cell is at most 200 characters, on one line.")
 			}
 			cells[j] = cell
 		}
 		cleanRows[i] = Row{Cells: cells, When: cleanWhen(row.When)}
 	}
-	return Block{Type: "table", Caption: caption, Columns: cleanCols, Rows: cleanRows, When: cleanWhen(when)}, true
+	return Block{Type: "table", Caption: caption, Columns: cleanCols, Rows: cleanRows, When: cleanWhen(when)}, nil
 }
 
 type chartWire struct {
@@ -337,38 +398,35 @@ type pointWire struct {
 	Y *float64 `json:"y"`
 }
 
-func (w chartWire) clean() (Block, bool) {
+func (w chartWire) clean() (Block, error) {
 	if w.Kind != "bar" && w.Kind != "line" {
-		return Block{}, false
+		return Block{}, invalidf("A chart kind is bar or line.")
 	}
 	title := strings.TrimSpace(w.Title)
 	xLabel := strings.TrimSpace(w.X)
 	yLabel := strings.TrimSpace(w.Y)
-	if utf8.RuneCountInString(title) > 80 || utf8.RuneCountInString(xLabel) > 40 || utf8.RuneCountInString(yLabel) > 40 {
-		return Block{}, false
-	}
-	if strings.ContainsAny(title, "\r\n") || strings.ContainsAny(xLabel, "\r\n") || strings.ContainsAny(yLabel, "\r\n") {
-		return Block{}, false
+	if utf8.RuneCountInString(title) > 80 || utf8.RuneCountInString(xLabel) > 40 || utf8.RuneCountInString(yLabel) > 40 || strings.ContainsAny(title, "\r\n") || strings.ContainsAny(xLabel, "\r\n") || strings.ContainsAny(yLabel, "\r\n") {
+		return Block{}, invalidf("A chart title is at most 80 characters, and x and y are at most 40, on one line.")
 	}
 	if len(w.Series) == 0 || len(w.Series) > MaxSeries {
-		return Block{}, false
+		return Block{}, invalidf("A chart needs 1 to 4 series.")
 	}
 	series := make([]Series, len(w.Series))
 	names := map[string]bool{}
 	for i, raw := range w.Series {
 		name := strings.TrimSpace(raw.Name)
 		if name == "" || names[name] || utf8.RuneCountInString(name) > 40 || strings.ContainsAny(name, "\r\n") {
-			return Block{}, false
+			return Block{}, invalidf("Each series name is 1 to 40 characters, on one line, and used once.")
 		}
 		names[name] = true
 		if len(raw.Points) == 0 || len(raw.Points) > MaxPoints {
-			return Block{}, false
+			return Block{}, invalidf("Each series needs 1 to 60 points.")
 		}
 		points := make([]Point, len(raw.Points))
 		for j, pt := range raw.Points {
 			x := strings.TrimSpace(pt.X)
 			if pt.Y == nil || x == "" || utf8.RuneCountInString(x) > 40 || strings.ContainsAny(x, "\r\n") || math.IsNaN(*pt.Y) || math.IsInf(*pt.Y, 0) {
-				return Block{}, false
+				return Block{}, invalidf("Each chart point needs x and a finite number y.")
 			}
 			points[j] = Point{X: x, Y: *pt.Y}
 		}
@@ -377,28 +435,31 @@ func (w chartWire) clean() (Block, bool) {
 	return Block{
 		Type: "chart", Kind: w.Kind, Title: title, XLabel: xLabel, YLabel: yLabel,
 		Series: series, When: cleanWhen(w.When),
-	}, true
+	}, nil
 }
 
-func cleanControl(id, label string, options []string) (Block, bool) {
+func cleanControl(id, label string, options []string) (Block, error) {
 	label = strings.TrimSpace(label)
-	if !controlID(id) || label == "" || utf8.RuneCountInString(label) > 80 || strings.ContainsAny(label, "\r\n") {
-		return Block{}, false
+	if !controlID(id) {
+		return Block{}, invalidf("A control id starts with a lowercase letter and uses only lowercase letters, digits, and underscores.")
+	}
+	if label == "" || utf8.RuneCountInString(label) > 80 || strings.ContainsAny(label, "\r\n") {
+		return Block{}, invalidf("A control needs a label, at most 80 characters, on one line.")
 	}
 	if len(options) < 2 || len(options) > MaxOptions {
-		return Block{}, false
+		return Block{}, invalidf("A control needs 2 to 8 different options.")
 	}
 	clean := make([]string, len(options))
 	seen := map[string]bool{}
 	for i, option := range options {
 		option = strings.TrimSpace(option)
 		if option == "" || seen[option] || utf8.RuneCountInString(option) > 40 || strings.ContainsAny(option, "\r\n") {
-			return Block{}, false
+			return Block{}, invalidf("Each control option is 1 to 40 characters, on one line, and used once.")
 		}
 		seen[option] = true
 		clean[i] = option
 	}
-	return Block{Type: "control", ID: id, Label: label, Options: clean}, true
+	return Block{Type: "control", ID: id, Label: label, Options: clean}, nil
 }
 
 func controlID(id string) bool {
@@ -430,7 +491,7 @@ func checkWhen(when map[string]string, controls map[string][]string) error {
 	for id, option := range when {
 		choices, ok := controls[id]
 		if !ok {
-			return ErrInvalid
+			return invalidf("when can only name a control on this page.")
 		}
 		found := false
 		for _, choice := range choices {
@@ -440,7 +501,7 @@ func checkWhen(when map[string]string, controls map[string][]string) error {
 			}
 		}
 		if !found {
-			return ErrInvalid
+			return invalidf("when must use one of that control's options.")
 		}
 	}
 	return nil
@@ -450,11 +511,28 @@ func strict(raw json.RawMessage, dest any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dest); err != nil {
-		return err
+		return rejectJSON(err, true)
 	}
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
-		return ErrInvalid
+		return invalidf("This block is not one JSON object.")
 	}
 	return nil
+}
+
+func rejectJSON(err error, block bool) error {
+	if err != nil {
+		const prefix = `json: unknown field `
+		msg := err.Error()
+		if strings.HasPrefix(msg, prefix) {
+			name := strings.Trim(strings.TrimPrefix(msg, prefix), `"`)
+			if name != "" {
+				return invalidf("Remove the unknown field %s.", name)
+			}
+		}
+	}
+	if block {
+		return invalidf("This block is not valid JSON.")
+	}
+	return invalidf("The document is not one JSON object.")
 }
