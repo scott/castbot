@@ -4,6 +4,7 @@
 package connect
 
 import (
+	"context"
 	"net/url"
 	"sort"
 	"strings"
@@ -59,7 +60,11 @@ type Entry struct {
 	// Aliases are environment names people paste for this token.
 	// The vault stores SecretName, not an alias.
 	Aliases []string
-	Tools   []Tool
+	// ExtraLabel is a second settings field stored in the same vault row.
+	// The agent cannot choose that value. Empty means the token is the
+	// whole vault value.
+	ExtraLabel string
+	Tools      []Tool
 	// Retired are tool names the host must not forward.
 	Retired []string
 }
@@ -74,9 +79,25 @@ type Tool struct {
 	Path string
 	// Query lists argument names copied to the query string.
 	Query []string
+	// Args, when set, are the tool's input fields. The free write body is
+	// not offered. Path and query keys are used when Args is empty.
+	Args []Arg
 	// Build, when set, replaces the path template. The URL it returns
-	// must stay on this connection's allowlist.
-	Build func(args map[string]any) (Call, error)
+	// must stay on this connection's allowlist unless PublicURL is set.
+	// The context carries the vault secret and the optional extra field.
+	Build func(ctx context.Context, args map[string]any) (Call, error)
+	// PublicURL lets Build return one public https URL. The host is not
+	// on the connection allowlist. The dial still refuses a private address.
+	PublicURL bool
+	// ReadBody, when set, replaces the upstream body before the guest sees it.
+	ReadBody func(body []byte) []byte
+}
+
+// Arg is one tool argument the model may pass.
+type Arg struct {
+	Name        string
+	Description string
+	Required    bool
 }
 
 var registry []Entry

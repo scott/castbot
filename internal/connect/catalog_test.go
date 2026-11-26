@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"testing"
 
 	"github.com/scott/castbot/internal/egresscontract"
@@ -43,6 +44,29 @@ func TestCatalogOrderAndAliases(t *testing.T) {
 	}
 	if yml, ok := ShimYAML(GitHub); !ok || yml == "" {
 		t.Fatal("github shim")
+	}
+}
+
+func TestVaultPacking(t *testing.T) {
+	packed, ok := JoinVault("token-value", "chat-1")
+	if !ok || packed != "token-value\tchat-1" {
+		t.Fatalf("%q %v", packed, ok)
+	}
+	secret, extra, ok := SplitVault(packed)
+	if !ok || secret != "token-value" || extra != "chat-1" || VaultSecret(packed) != "token-value" {
+		t.Fatalf("%s %s %v", secret, extra, ok)
+	}
+	plain, ok := JoinVault("only-token", "")
+	if !ok || plain != "only-token" {
+		t.Fatal(plain)
+	}
+	if _, _, ok := SplitVault("a\tb\tc"); ok {
+		t.Fatal("two tabs")
+	}
+	ctx := WithVault(context.Background(), "token-value", "chat-1")
+	gotS, gotE := VaultFrom(ctx)
+	if gotS != "token-value" || gotE != "chat-1" {
+		t.Fatalf("%s %s", gotS, gotE)
 	}
 }
 

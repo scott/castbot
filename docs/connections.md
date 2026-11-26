@@ -15,7 +15,7 @@ The catalog ships GitHub and DigitalOcean. Each connection is one catalog entry,
 
 The vault name is not an environment grant. `GrantSecret` rejects it. The guest pull rejects it. A hand-written grant row still does not leave the control plane: the pull keeps `kind = env` and also drops `GITHUB_CONNECTION` and `DIGITALOCEAN_CONNECTION` if a row is forced into that kind. A later connection's vault name is refused the same way. castlet refuses the whole secrets response if a connection vault name appears.
 
-A catalog id is a lowercase letter followed by up to 31 letters, digits, or underscores. `request_secret` and `agents` are not catalog ids. A later connection adds `docs/connections/<id>.md` and one link in the list below.
+A catalog id is a lowercase letter followed by up to 31 letters, digits, or underscores. `request_secret` and `agents` are not catalog ids. A connection may store a second field in the same vault row, separated from the token by a tab. The agent cannot choose that field. A later connection adds `docs/connections/<id>.md` and one link in the list below.
 
 ## Catalog pages
 

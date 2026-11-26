@@ -86,15 +86,22 @@ func callTool(ctx context.Context, connection string, msg RPC, approved bool, up
 	var call Call
 	var err error
 	if tool.Build != nil {
-		call, err = tool.Build(params.Arguments)
+		call, err = tool.Build(ctx, params.Arguments)
 		if err != nil {
 			return rpcError(msg.ID, "bad arguments"), nil
 		}
-		// The builder cannot retarget the call. The URL stays on this
-		// connection's allowlist, and the token stays this connection's.
+		// The builder cannot retarget the call onto another connection.
+		// The token stays this connection's. A public URL is the only
+		// host outside the allowlist, and only when the tool opted in.
 		call.Connection = connection
 		call.Tool = tool.Name
-		if _, err = CheckURL(connection, call.URL); err != nil {
+		call.PublicURL = tool.PublicURL
+		if tool.PublicURL {
+			_, err = CheckPublicURL(call.URL)
+		} else {
+			_, err = CheckURL(connection, call.URL)
+		}
+		if err != nil {
 			return rpcError(msg.ID, "bad arguments"), nil
 		}
 	} else {
@@ -112,6 +119,9 @@ func callTool(ctx context.Context, connection string, msg RPC, approved bool, up
 			"content": []map[string]string{{"type": "text", "text": Code(err)}},
 			"isError": true,
 		})
+	}
+	if tool.ReadBody != nil {
+		res.Body = tool.ReadBody(res.Body)
 	}
 	text := string(res.Body)
 	if text == "" {
@@ -272,15 +282,28 @@ func toolSchemas(connection string) []map[string]any {
 	for _, tool := range Tools(connection) {
 		props := map[string]any{}
 		var required []string
-		for _, key := range pathKeys(tool.Path) {
-			props[key] = map[string]string{"type": "string"}
-			required = append(required, key)
-		}
-		for _, key := range tool.Query {
-			props[key] = map[string]string{"type": "string"}
-		}
-		if tool.Write {
-			props["body"] = map[string]string{"type": "object", "description": "Fields sent to the API."}
+		if len(tool.Args) > 0 {
+			for _, arg := range tool.Args {
+				prop := map[string]string{"type": "string"}
+				if arg.Description != "" {
+					prop["description"] = arg.Description
+				}
+				props[arg.Name] = prop
+				if arg.Required {
+					required = append(required, arg.Name)
+				}
+			}
+		} else {
+			for _, key := range pathKeys(tool.Path) {
+				props[key] = map[string]string{"type": "string"}
+				required = append(required, key)
+			}
+			for _, key := range tool.Query {
+				props[key] = map[string]string{"type": "string"}
+			}
+			if tool.Write {
+				props["body"] = map[string]string{"type": "object", "description": "Fields sent to the API."}
+			}
 		}
 		schema := map[string]any{"type": "object", "properties": props}
 		if len(required) > 0 {

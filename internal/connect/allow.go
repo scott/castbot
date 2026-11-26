@@ -56,6 +56,36 @@ func hostAllowed(entry Entry, host string) bool {
 	return false
 }
 
+// CheckPublicURL accepts one https URL that is safe to dial.
+// The host does not have to be on a connection allowlist. Userinfo, IP
+// literals, and ports other than 443 are refused. The caller still has
+// to resolve the name and dial a public address.
+func CheckPublicURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil {
+		return nil, errAllow
+	}
+	if !strings.EqualFold(u.Scheme, "https") {
+		return nil, errAllow
+	}
+	if u.User != nil {
+		return nil, errAllow
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" || strings.Contains(host, "..") || net.ParseIP(host) != nil {
+		return nil, errAllow
+	}
+	port := u.Port()
+	if port != "" && port != "443" {
+		return nil, errAllow
+	}
+	u.Host = host
+	if port == "443" {
+		u.Host = host + ":443"
+	}
+	return u, nil
+}
+
 // HostAllowed reports whether host is on the connection allowlist.
 func HostAllowed(connection, host string) bool {
 	entry, ok := Lookup(connection)

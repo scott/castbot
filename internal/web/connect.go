@@ -335,8 +335,13 @@ func (s *Server) machineEgress(w http.ResponseWriter, r *http.Request, git bool)
 		s.finishProxy(w, userID, agentID, call, "", connect.Result{Outcome: connect.OutcomeNoGrant}, connect.ErrNoGrant)
 		return
 	}
-	res, err := connect.Do(r.Context(), token, call, s.dial())
-	s.finishProxy(w, userID, agentID, call, token, res, err)
+	secret, _, okVault := connect.SplitVault(token)
+	if !okVault || secret == "" {
+		s.finishProxy(w, userID, agentID, call, "", connect.Result{Outcome: connect.OutcomeNoGrant}, connect.ErrNoGrant)
+		return
+	}
+	res, err := connect.Do(r.Context(), secret, call, s.dial())
+	s.finishProxy(w, userID, agentID, call, secret, res, err)
 }
 
 func (s *Server) finishProxy(w http.ResponseWriter, userID, agentID string, call connect.Call, token string, res connect.Result, err error) {
@@ -473,6 +478,12 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 		writeMCPFail(w, msg.ID, "not_connected", "")
 		return
 	}
+	secret, extra, okVault := connect.SplitVault(token)
+	if !okVault || secret == "" {
+		writeMCPFail(w, msg.ID, "not_connected", "")
+		return
+	}
+	token = secret
 	var out json.RawMessage
 	if entry, ok := connect.Lookup(server); ok && entry.RemoteMCP != "" {
 		out, err = s.digitalOceanMCP().RoundTrip(r.Context(), server, token, entry.RemoteMCP, body.Message, s.dial())
@@ -490,8 +501,8 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		out, err = connect.HandleRPC(r.Context(), server, msg, true, func(ctx context.Context, call connect.Call) (connect.Result, error) {
-			return connect.Do(ctx, token, call, s.dial())
+		out, err = connect.HandleRPC(connect.WithVault(r.Context(), secret, extra), server, msg, true, func(ctx context.Context, call connect.Call) (connect.Result, error) {
+			return connect.Do(ctx, secret, call, s.dial())
 		})
 		if err != nil && !connect.IsRequest(err) {
 			_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
