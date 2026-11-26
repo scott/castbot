@@ -70,3 +70,41 @@ func TestLinearCardHidesTheKeyFromAnotherUser(t *testing.T) {
 		t.Fatal("other user read the key")
 	}
 }
+
+func TestGoogleCardHidesTheKeyFromAnotherUser(t *testing.T) {
+	ip := "203.0.113.82:9"
+	h := newHarness(t)
+	owner, secret := h.account("google-owner@example.com", "Ada", "correct-horse-1")
+	other, _ := h.account("google-other@example.com", "Bea", "correct-horse-1")
+	h.login("google-owner@example.com", "correct-horse-1", secret, ip, false)
+	const key = "abcdapppasswordvalue"
+	const email = "ada@example.com"
+	code, body, hdr := h.do(http.MethodPost, "/settings/connections/google", h.form(url.Values{
+		"token": {key},
+		"extra": {email},
+	}), ip, nil)
+	if code != http.StatusSeeOther || !strings.Contains(hdr.Get("Location"), "notice=connected") || strings.Contains(body, key) {
+		t.Fatalf("connect %d %s", code, hdr.Get("Location"))
+	}
+	code, body, _ = h.do(http.MethodGet, "/settings/connections/google", "", ip, nil)
+	if code != 200 || !strings.Contains(body, "App password") || !strings.Contains(body, "Gmail address") || !strings.Contains(body, email) || !strings.Contains(body, "google_list_messages") || !strings.Contains(body, "google_send") || strings.Contains(body, key) {
+		t.Fatalf("detail %d", code)
+	}
+	if !strings.Contains(body, "abcd-xxxxxxx") {
+		t.Fatal("mask")
+	}
+	saved, err := h.st.ConnectionValue(context.Background(), owner.ID, connect.Google)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotKey, gotEmail, ok := connect.SplitVault(saved)
+	if !ok || gotKey != key || gotEmail != email {
+		t.Fatal("owner vault")
+	}
+	if _, err := h.st.ConnectionValue(context.Background(), other.ID, connect.Google); err == nil {
+		t.Fatal("other user read the key")
+	}
+	if err := h.st.EnableConnection(context.Background(), other.ID, "missing-agent", connect.Google); err == nil {
+		t.Fatal("other user enabled google")
+	}
+}

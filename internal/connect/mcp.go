@@ -83,6 +83,9 @@ func callTool(ctx context.Context, connection string, msg RPC, approved bool, up
 	if tool.Write && !approved {
 		return nil, ErrDenied
 	}
+	if tool.Run != nil {
+		return runTool(msg, ctx, tool, params.Arguments)
+	}
 	var call Call
 	var err error
 	if tool.Build != nil {
@@ -130,6 +133,28 @@ func callTool(ctx context.Context, connection string, msg RPC, approved bool, up
 	return rpcResult(msg.ID, map[string]any{
 		"content": []map[string]string{{"type": "text", "text": text}},
 		"isError": res.Status >= 400,
+	})
+}
+
+func runTool(msg RPC, ctx context.Context, tool Tool, args map[string]any) (json.RawMessage, error) {
+	body, err := tool.Run(ctx, args)
+	if err != nil {
+		if errors.Is(err, ErrBad) || errors.Is(err, ErrAllow) {
+			return rpcError(msg.ID, "bad arguments"), nil
+		}
+		return rpcResult(msg.ID, map[string]any{
+			"content": []map[string]string{{"type": "text", "text": Code(err)}},
+			"isError": true,
+		})
+	}
+	secret, _ := VaultFrom(ctx)
+	text := Redact(secret, string(body))
+	if text == "" {
+		text = "{}"
+	}
+	return rpcResult(msg.ID, map[string]any{
+		"content": []map[string]string{{"type": "text", "text": text}},
+		"isError": false,
 	})
 }
 

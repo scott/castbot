@@ -31,6 +31,8 @@ const (
 	AuthGitHub = "github"
 	// AuthBasic sends the token as the HTTP basic user, with an empty password.
 	AuthBasic = "basic"
+	// AuthBasicPair sends the extra field as the user and the token as the password.
+	AuthBasicPair = "basic-pair"
 	// AuthHeader sets HeaderName to the token and does not set Authorization.
 	AuthHeader = "header"
 )
@@ -51,7 +53,7 @@ type Entry struct {
 	APIHost string
 	// GitHost is the host for /egress/git. Empty means git is refused.
 	GitHost string
-	// Auth is bearer, github, basic, or header.
+	// Auth is bearer, github, basic, basic-pair, or header.
 	Auth string
 	// HeaderName is the header AuthHeader sets to the vault token.
 	HeaderName string
@@ -91,6 +93,10 @@ type Tool struct {
 	PublicURL bool
 	// ReadBody, when set, replaces the upstream body before the guest sees it.
 	ReadBody func(body []byte) []byte
+	// Run, when set, performs the tool. Mail protocols that are not one
+	// HTTPS request use it. The context carries the vault secret and the
+	// extra field. A write still waits for approval before Run is called.
+	Run func(ctx context.Context, args map[string]any) ([]byte, error)
 }
 
 // Arg is one tool argument the model may pass.
@@ -123,7 +129,7 @@ func register(e Entry) {
 		panic("connection " + e.ID + " git host")
 	}
 	switch e.Auth {
-	case "", AuthBearer, AuthGitHub, AuthBasic:
+	case "", AuthBearer, AuthGitHub, AuthBasic, AuthBasicPair:
 	case AuthHeader:
 		if strings.TrimSpace(e.HeaderName) == "" {
 			panic("connection " + e.ID + " header")

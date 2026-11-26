@@ -41,6 +41,7 @@ func TestConnectionShots(t *testing.T) {
 	}{
 		{"web", `(function(){var t=document.body.innerText||"";return t.indexOf("Search key")>=0&&t.indexOf("web_search")>=0&&t.indexOf("web_read")>=0&&t.indexOf("\u2014")<0&&t.indexOf("\u2013")<0;})()`},
 		{"linear", `(function(){var t=document.body.innerText||"";return t.indexOf("API key")>=0&&t.indexOf("linear_list_issues")>=0&&t.indexOf("linear_create_issue")>=0&&t.indexOf("\u2014")<0&&t.indexOf("\u2013")<0;})()`},
+		{"google", `(function(){var t=document.body.innerText||"";return t.indexOf("App password")>=0&&t.indexOf("Gmail address")>=0&&t.indexOf("google_list_messages")>=0&&t.indexOf("\u2014")<0&&t.indexOf("\u2013")<0;})()`},
 	}
 	for _, card := range cards {
 		for _, vp := range []struct {

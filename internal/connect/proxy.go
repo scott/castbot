@@ -343,6 +343,13 @@ func applyAuth(req *http.Request, connection, token string) {
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	case AuthBasic:
 		req.SetBasicAuth(token, "")
+	case AuthBasicPair:
+		_, extra := VaultFrom(req.Context())
+		extra = strings.TrimSpace(extra)
+		if extra == "" || strings.ContainsAny(extra, "\r\n") {
+			return
+		}
+		req.SetBasicAuth(extra, token)
 	case AuthHeader:
 		if header != "" {
 			req.Header.Set(header, token)
