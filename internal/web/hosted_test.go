@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,9 +25,19 @@ func TestHostedPageAccess(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	// A TOTP step is accepted once. Later sign-ins in this test move the clock.
+	// The scheduler reads this clock from another goroutine.
+	var clockMu sync.Mutex
 	clock := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
-	h.st.SetNow(func() time.Time { return clock })
-	advance := func() { clock = clock.Add(2 * time.Minute) }
+	h.st.SetNow(func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return clock
+	})
+	advance := func() {
+		clockMu.Lock()
+		clock = clock.Add(2 * time.Minute)
+		clockMu.Unlock()
+	}
 	owner, secret := h.account("hosted-owner@example.com", "Alex Rivera", "correct-horse-1")
 	other, otherSecret := h.account("hosted-other@example.com", "Blair Quinn", "correct-horse-1")
 	member := acceptHostedInvite(t, h, owner, "hosted-member@example.com", "Pip Lane")
