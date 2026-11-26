@@ -20,6 +20,69 @@ func (s *Store) migrateV38() error {
 	return err
 }
 
+// migrateV39 stores hosted pages. The link token is a separate column from
+// the id so a public route never accepts the id. Grants stay in the page
+// owner's workspace. Cards record which reply introduced a revision.
+func (s *Store) migrateV39() error {
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS pages (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  token TEXT NOT NULL,
+  visibility TEXT NOT NULL CHECK (visibility IN ('private', 'workspace', 'invited', 'link')),
+  body TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_pages_token ON pages(token)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_pages_agent ON pages(user_id, agent_id)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_pages_workspace ON pages(workspace_id, visibility)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS page_grants (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  page_id TEXT NOT NULL,
+  grantee_kind TEXT NOT NULL CHECK (grantee_kind IN ('user', 'agent')),
+  grantee_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (page_id, grantee_kind, grantee_id)
+)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_page_grants_grantee ON page_grants(workspace_id, grantee_kind, grantee_id)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS page_cards (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  page_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (message_id, page_id)
+)`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_page_cards_message ON page_cards(workspace_id, message_id)`); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO schema_migrations(version) VALUES (39) ON CONFLICT(version) DO NOTHING`)
+	return err
+}
+
 func instanceSettingKeyOK(key string) bool {
 	if key == "" || len(key) > 32 {
 		return false

@@ -7,7 +7,7 @@ import (
 
 // SchemaVersion is the highest schema_migrations value this process records.
 // migrate records that row. A test fails when the two drift.
-const SchemaVersion = 38
+const SchemaVersion = 39
 
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -555,6 +555,10 @@ SELECT id, workspace_id, ? FROM users WHERE id NOT IN (SELECT user_id FROM user_
 	// Version 38 is instance settings such as the update mode.
 	// The table is instance state and has no user id.
 	if err := s.migrateV38(); err != nil {
+		return err
+	}
+	// Version 39 is hosted pages, their grants, and the chat cards that open them.
+	if err := s.migrateV39(); err != nil {
 		return err
 	}
 	return nil
