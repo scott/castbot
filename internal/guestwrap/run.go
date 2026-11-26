@@ -44,12 +44,10 @@ func Plan(name string, args, env []string) Action {
 		if len(args) != 1 {
 			return Action{Stderr: "castbot: " + egresscontract.Rejected, Code: 1}
 		}
-		switch args[0] {
-		case "github", "digitalocean", "request_secret", agentskill.ServerName:
+		if args[0] == "request_secret" || args[0] == agentskill.ServerName || egresscontract.KnownProvider(args[0]) {
 			return Action{Serve: args[0]}
-		default:
-			return Action{Stderr: "castbot: " + egresscontract.Rejected, Code: 1}
 		}
+		return Action{Stderr: "castbot: " + egresscontract.Rejected, Code: 1}
 	default:
 		return Action{Stderr: "castbot: " + egresscontract.NotConnected, Code: 1}
 	}

@@ -5,6 +5,7 @@ package egresscontract
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
 
@@ -42,13 +43,19 @@ func SafeMessage(code string) string {
 	}
 }
 
-// KnownProvider reports whether id is a curated connection.
+// providerID is the catalog id shape. The guest accepts any id of this
+// shape from the host. The host catalog still rejects an unknown id.
+// request_secret and agents stay reserved and are not providers.
+var providerID = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
+// KnownProvider reports whether id can name a catalog connection.
 func KnownProvider(id string) bool {
+	id = strings.ToLower(strings.TrimSpace(id))
 	switch id {
-	case "github", "digitalocean":
-		return true
-	default:
+	case "request_secret", "agents":
 		return false
+	default:
+		return providerID.MatchString(id)
 	}
 }
 
@@ -162,7 +169,7 @@ type MCPResult struct {
 }
 
 // SecretCall is request_secret or delete_secret.
-// Connection is github or digitalocean. Name is an environment variable
+// Connection is a catalog id. Name is an environment variable
 // for any other API key. Action is save or delete. An empty action is save.
 type SecretCall struct {
 	Connection string `json:"connection"`

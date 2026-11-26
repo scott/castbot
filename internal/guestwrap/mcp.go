@@ -131,10 +131,10 @@ func ServeMCP(server, base string, in io.Reader, out io.Writer) error {
 
 func allowedMCP(server string) bool {
 	switch server {
-	case "github", "digitalocean", "request_secret", agentskill.ServerName:
+	case "request_secret", agentskill.ServerName:
 		return true
 	default:
-		return false
+		return egresscontract.KnownProvider(server)
 	}
 }
 
@@ -675,11 +675,11 @@ func routineForwardArgs(raw json.RawMessage) (map[string]any, bool) {
 func requestSecretTool() map[string]any {
 	return map[string]any{
 		"name":        secretask.ToolSave,
-		"description": "Ask to connect GitHub or DigitalOcean, or to save a new API key. For GitHub or DigitalOcean pass connection. For any other API pass name, an environment variable such as SERVICE_API_KEY, plus reason and an optional label. Leave connection empty for a named key. The value is saved on the host and is not returned. A successful save is available on the next turn. The result is saved, declined, expired, already_configured, or rejected.",
+		"description": "Ask to connect a catalog service, or to save a new API key. Pass connection as the catalog id, such as github or digitalocean. For any other API pass name, an environment variable such as SERVICE_API_KEY, plus reason and an optional label. Leave connection empty for a named key. The value is saved on the host and is not returned. A successful save is available on the next turn. The result is saved, declined, expired, already_configured, or rejected.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"connection": map[string]any{"type": "string", "enum": []string{"github", "digitalocean"}},
+				"connection": map[string]any{"type": "string", "description": "Catalog connection id."},
 				"name":       map[string]any{"type": "string", "description": "Environment name for a new API key. Capital letters, digits, and underscores."},
 				"reason":     map[string]any{"type": "string"},
 				"label":      map[string]any{"type": "string", "description": "Short title for the card."},

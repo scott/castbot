@@ -56,6 +56,36 @@ func hostAllowed(entry Entry, host string) bool {
 	return false
 }
 
+// CheckPublicURL accepts one https URL that is safe to dial.
+// The host does not have to be on a connection allowlist. Userinfo, IP
+// literals, and ports other than 443 are refused. The caller still has
+// to resolve the name and dial a public address.
+func CheckPublicURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil {
+		return nil, errAllow
+	}
+	if !strings.EqualFold(u.Scheme, "https") {
+		return nil, errAllow
+	}
+	if u.User != nil {
+		return nil, errAllow
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" || strings.Contains(host, "..") || net.ParseIP(host) != nil {
+		return nil, errAllow
+	}
+	port := u.Port()
+	if port != "" && port != "443" {
+		return nil, errAllow
+	}
+	u.Host = host
+	if port == "443" {
+		u.Host = host + ":443"
+	}
+	return u, nil
+}
+
 // HostAllowed reports whether host is on the connection allowlist.
 func HostAllowed(connection, host string) bool {
 	entry, ok := Lookup(connection)
@@ -236,8 +266,8 @@ func MethodOK(method string) bool {
 }
 
 // APIURL is the allowlisted API URL for a guest path. The guest does not
-// choose the host. github maps to api.github.com. digitalocean maps to
-// api.digitalocean.com. DigitalOcean MCP does not use this function.
+// choose the host. The catalog entry's API host is used. Git uses the
+// entry's git host. A hosted MCP URL does not use this function.
 func APIURL(provider, pth, query string) (string, error) {
 	return upstreamURL(provider, false, pth, query)
 }
@@ -249,19 +279,18 @@ func GitURL(provider, pth, query string) (string, error) {
 
 func upstreamURL(provider string, git bool, pth, query string) (string, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	var host string
-	switch provider {
-	case GitHub:
-		host = "api.github.com"
-		if git {
-			host = "github.com"
-		}
-	case DigitalOcean:
-		if git {
+	entry, ok := Lookup(provider)
+	if !ok {
+		return "", errBad
+	}
+	host := entry.APIHost
+	if git {
+		if entry.GitHost == "" {
 			return "", errBad
 		}
-		host = "api.digitalocean.com"
-	default:
+		host = entry.GitHost
+	}
+	if host == "" {
 		return "", errBad
 	}
 	cleaned, ok := cleanForwardPath(pth)

@@ -24,12 +24,21 @@ func TestConnectionsGridAndDetails(t *testing.T) {
 	if code != 200 || strings.Contains(body, "\u2014") {
 		t.Fatalf("grid %d", code)
 	}
-	for _, want := range []string{"GitHub", "DigitalOcean", "Shell Actions", `href="/settings/connections/github"`, `href="/settings/connections/digitalocean"`, `href="/settings/connections/shell"`, "Not connected", "Connected", `href="/settings/connections" class="on"`} {
+	for _, want := range []string{"Shell Actions", `href="/settings/connections/shell"`, "Not connected", "Connected", `href="/settings/connections" class="on"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("grid missing %s", want)
 		}
 	}
-	if strings.Count(body, "Not connected") < 2 || strings.Count(body, ">Connect<") < 2 || !strings.Contains(body, ">Configure<") || strings.Contains(body, ">Disconnect<") {
+	secretCards := 0
+	for _, entry := range connect.Catalog() {
+		secretCards++
+		for _, want := range []string{entry.Title, `href="/settings/connections/` + entry.ID + `"`} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("grid missing %s", want)
+			}
+		}
+	}
+	if secretCards < 2 || strings.Count(body, "Not connected") < secretCards || strings.Count(body, ">Connect<") < secretCards || !strings.Contains(body, ">Configure<") || strings.Contains(body, ">Disconnect<") {
 		t.Fatalf("grid actions %s", snippet(body))
 	}
 	code, body, _ = h.do(http.MethodGet, "/settings/connections/github", "", ip, nil)
