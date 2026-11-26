@@ -4,8 +4,14 @@ import "testing"
 
 func TestPanelsStayOutOfTheProxyCatalog(t *testing.T) {
 	panels := Panels()
-	if len(panels) != 3 || panels[0].ID != GitHub || panels[1].ID != DigitalOcean || panels[2].ID != Shell {
-		t.Fatalf("%v", panels)
+	catalog := Catalog()
+	if len(panels) != len(catalog)+1 || len(catalog) < 2 || panels[0].ID != GitHub || panels[1].ID != DigitalOcean || panels[len(panels)-1].ID != Shell {
+		t.Fatalf("panels %d catalog %d", len(panels), len(catalog))
+	}
+	for i, entry := range catalog {
+		if panels[i].ID != entry.ID || !panels[i].NeedsSecret {
+			t.Fatalf("panel %d %+v", i, panels[i])
+		}
 	}
 	if _, ok := Lookup(Shell); ok {
 		t.Fatal("shell joined the proxy catalog")

@@ -14,13 +14,20 @@ const ShimCommand = "/usr/local/bin/castbot-mcp"
 // ShimYAML is an MCP server file: command and args only, no environment.
 func ShimYAML(connection string) (string, bool) {
 	switch connection {
-	case RequestTool, GitHub, DigitalOcean:
-		return "command: " + ShimCommand + "\nargs:\n  - " + connection + "\n", true
+	case RequestTool:
+		return commandYAML(connection), true
 	case agentskill.ServerName:
 		return agentskill.ShimYAML(), true
 	default:
-		return "", false
+		if _, ok := Lookup(connection); !ok {
+			return "", false
+		}
+		return commandYAML(connection), true
 	}
+}
+
+func commandYAML(connection string) string {
+	return "command: " + ShimCommand + "\nargs:\n  - " + connection + "\n"
 }
 
 // ShimFiles are the bundle files for request_secret plus each enabled connection.
@@ -45,7 +52,10 @@ func ShimFiles(enabled []string) map[string]string {
 // ServerNames is the tools.mcp list: kept names that are not ours,
 // request_secret, agents, then enabled connections.
 func ServerNames(existing, enabled []string) []string {
-	ours := map[string]bool{RequestTool: true, GitHub: true, DigitalOcean: true, agentskill.ServerName: true}
+	ours := map[string]bool{RequestTool: true, agentskill.ServerName: true}
+	for _, entry := range Catalog() {
+		ours[entry.ID] = true
+	}
 	var out []string
 	seen := map[string]bool{}
 	add := func(name string) {

@@ -232,7 +232,7 @@ func (s *Supervisor) egressMCP(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusBadRequest, "bad_request")
 		return
 	}
-	if call.Server != "github" && call.Server != "digitalocean" {
+	if !egresscontract.KnownProvider(call.Server) {
 		writeFailure(w, http.StatusBadRequest, "bad_request")
 		return
 	}

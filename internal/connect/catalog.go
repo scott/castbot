@@ -3,7 +3,13 @@
 // put them in a guest environment.
 package connect
 
-import "strings"
+import (
+	"net/url"
+	"sort"
+	"strings"
+
+	"github.com/scott/castbot/internal/egresscontract"
+)
 
 const (
 	GitHub       = "github"
@@ -16,35 +22,125 @@ const (
 	SecretNameDigitalOcean = "DIGITALOCEAN_CONNECTION"
 
 	RequestTTL = 60 // minutes, documented for callers that do not import time
+
+	// AuthBearer sends Authorization: Bearer. It is the default.
+	AuthBearer = "bearer"
+	// AuthGitHub sends bearer on the API host, basic x-access-token on the
+	// git host, and the GitHub API version header.
+	AuthGitHub = "github"
+	// AuthBasic sends the token as the HTTP basic user, with an empty password.
+	AuthBasic = "basic"
+	// AuthHeader sets HeaderName to the token and does not set Authorization.
+	AuthHeader = "header"
 )
 
 // Entry is one curated connection. Scopes are whatever the owner put on
 // the token. This list does not add a service subset.
+// A new connection is a file that calls register from init. It does not
+// edit a switch in this file.
 type Entry struct {
 	ID         string
 	Title      string
 	SecretName string
 	Detail     string
 	TokenLabel string
-	Hosts      []string
+	// Hosts is the allowlist. APIHost and GitHost must be in this list.
+	Hosts []string
+	// APIHost is the host for /egress/http. The guest does not choose it.
+	APIHost string
+	// GitHost is the host for /egress/git. Empty means git is refused.
+	GitHost string
+	// Auth is bearer, github, basic, or header.
+	Auth string
+	// HeaderName is the header AuthHeader sets to the vault token.
+	HeaderName string
+	// RemoteMCP is a hosted MCP URL. The in-process adapter is not used.
+	RemoteMCP string
+	// Aliases are environment names people paste for this token.
+	// The vault stores SecretName, not an alias.
+	Aliases []string
+	Tools   []Tool
+	// Retired are tool names the host must not forward.
+	Retired []string
+}
+
+// Tool is one host-adapter tool. Write tools need an approval on the host.
+type Tool struct {
+	Name   string
+	Title  string
+	Write  bool
+	Method string
+	// Path is an upstream path template. {name} is filled from arguments.
+	Path string
+	// Query lists argument names copied to the query string.
+	Query []string
+	// Build, when set, replaces the path template. The URL it returns
+	// must stay on this connection's allowlist.
+	Build func(args map[string]any) (Call, error)
+}
+
+var registry []Entry
+
+// register adds one connection. A duplicate or inconsistent entry panics
+// so a bad file fails at startup. init is the only caller.
+func register(e Entry) {
+	if e.ID != strings.ToLower(strings.TrimSpace(e.ID)) || !egresscontract.KnownProvider(e.ID) {
+		panic("connection id " + e.ID)
+	}
+	for _, cur := range registry {
+		if cur.ID == e.ID {
+			panic("duplicate connection " + e.ID)
+		}
+	}
+	if len(e.Hosts) == 0 || e.SecretName == "" || e.SecretName != strings.ToUpper(e.SecretName) {
+		panic("connection " + e.ID + " is incomplete")
+	}
+	if e.APIHost != "" && !hostAllowed(e, e.APIHost) {
+		panic("connection " + e.ID + " api host")
+	}
+	if e.GitHost != "" && !hostAllowed(e, e.GitHost) {
+		panic("connection " + e.ID + " git host")
+	}
+	switch e.Auth {
+	case "", AuthBearer, AuthGitHub, AuthBasic:
+	case AuthHeader:
+		if strings.TrimSpace(e.HeaderName) == "" {
+			panic("connection " + e.ID + " header")
+		}
+	default:
+		panic("connection " + e.ID + " auth")
+	}
+	if e.RemoteMCP != "" {
+		u, err := url.Parse(e.RemoteMCP)
+		if err != nil || u.Scheme != "https" || u.User != nil || !hostAllowed(e, u.Hostname()) {
+			panic("connection " + e.ID + " remote")
+		}
+	}
+	registry = append(registry, e)
 }
 
 // Catalog is the only set request_secret will accept.
+// GitHub and DigitalOcean stay first. Later entries are sorted by id.
 func Catalog() []Entry {
-	return []Entry{
-		{
-			ID: GitHub, Title: "GitHub", SecretName: SecretNameGitHub,
-			Detail:     "Fine-grained personal access token. Stored in your vault.",
-			TokenLabel: "GitHub token",
-			Hosts:      []string{"api.github.com", "github.com"},
-		},
-		{
-			ID: DigitalOcean, Title: "DigitalOcean", SecretName: SecretNameDigitalOcean,
-			Detail:     "API token. Calls use the MCP server only. You choose what it can access. Stored in your vault.",
-			TokenLabel: "DigitalOcean token",
-			// The MCP host is the tool path. The API host stays for doctl HTTP.
-			Hosts: []string{"mcp.digitalocean.com", "api.digitalocean.com"},
-		},
+	out := append([]Entry(nil), registry...)
+	sort.Slice(out, func(i, j int) bool {
+		ri, rj := catalogRank(out[i].ID), catalogRank(out[j].ID)
+		if ri != rj {
+			return ri < rj
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func catalogRank(id string) int {
+	switch id {
+	case GitHub:
+		return 0
+	case DigitalOcean:
+		return 1
+	default:
+		return 2
 	}
 }
 
@@ -68,17 +164,39 @@ func SecretName(id string) string {
 	return e.SecretName
 }
 
+// VaultName reports a connection vault name. Aliases are not vault names.
+// An alias may already exist as an environment row so it can be moved.
+func VaultName(name string) bool {
+	name = strings.ToUpper(strings.TrimSpace(name))
+	if name == "" {
+		return false
+	}
+	for _, e := range Catalog() {
+		if strings.EqualFold(e.SecretName, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // ProviderEnv maps a name people type for a provider token onto a catalog id.
 // The vault stores the catalog secret name, not this alias.
 func ProviderEnv(name string) (string, bool) {
-	switch strings.ToUpper(strings.TrimSpace(name)) {
-	case "GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", SecretNameGitHub:
-		return GitHub, true
-	case "DIGITALOCEAN_API_TOKEN", "DIGITALOCEAN_TOKEN", "DIGITALOCEAN_ACCESS_TOKEN", SecretNameDigitalOcean:
-		return DigitalOcean, true
-	default:
+	name = strings.ToUpper(strings.TrimSpace(name))
+	if name == "" {
 		return "", false
 	}
+	for _, e := range Catalog() {
+		if strings.EqualFold(e.SecretName, name) {
+			return e.ID, true
+		}
+		for _, alias := range e.Aliases {
+			if strings.EqualFold(alias, name) {
+				return e.ID, true
+			}
+		}
+	}
+	return "", false
 }
 
 // BlocksGuest reports a name the guest pull and child environment must reject.
@@ -90,39 +208,25 @@ func BlocksGuest(name string) bool {
 	return ok
 }
 
-// Tool is one host-adapter tool. Write tools need an approval on the host.
-type Tool struct {
-	Name   string
-	Title  string
-	Write  bool
-	Method string
-	// Path is an upstream path template. {name} is filled from arguments.
-	Path string
-	// Query lists argument names copied to the query string.
-	Query []string
-}
-
 // Tools is the policy catalog for one connection.
-// GitHub entries are the in-process adapter. DigitalOcean entries are the
-// hosted MCP server tools. They are not turned into API requests.
+// GitHub entries are the in-process adapter. A hosted MCP connection lists
+// its router tools here. They are not turned into API requests.
 // See the connections doc.
 func Tools(connection string) []Tool {
-	switch connection {
-	case GitHub:
-		return githubTools
-	case DigitalOcean:
-		return digitalOceanTools
-	default:
+	e, ok := Lookup(connection)
+	if !ok {
 		return nil
 	}
+	return e.Tools
 }
 
-// RetiredTool reports a DigitalOcean adapter name that must not be forwarded.
+// RetiredTool reports a tool name that must not be forwarded.
 func RetiredTool(connection, name string) bool {
-	if connection != DigitalOcean {
+	e, ok := Lookup(connection)
+	if !ok {
 		return false
 	}
-	for _, tool := range retiredDigitalOceanTools {
+	for _, tool := range e.Retired {
 		if tool == name {
 			return true
 		}
@@ -144,41 +248,10 @@ func FindTool(connection, name string) (Tool, bool) {
 func PermNames() []string {
 	out := []string{"mcp", RequestTool}
 	for _, e := range Catalog() {
-		for _, tool := range Tools(e.ID) {
+		for _, tool := range e.Tools {
 			out = append(out, tool.Name)
 		}
+		out = append(out, e.Retired...)
 	}
-	out = append(out, retiredDigitalOceanTools...)
 	return out
-}
-
-var githubTools = []Tool{
-	{Name: "get_me", Title: "GitHub: current user", Method: "GET", Path: "/user"},
-	{Name: "list_repos", Title: "GitHub: list repositories", Method: "GET", Path: "/user/repos", Query: []string{"per_page", "page"}},
-	{Name: "get_file_contents", Title: "GitHub: read a file", Method: "GET", Path: "/repos/{owner}/{repo}/contents/{path}"},
-	{Name: "list_issues", Title: "GitHub: list issues", Method: "GET", Path: "/repos/{owner}/{repo}/issues", Query: []string{"state", "per_page"}},
-	{Name: "get_issue", Title: "GitHub: read an issue", Method: "GET", Path: "/repos/{owner}/{repo}/issues/{issue_number}"},
-	{Name: "list_pull_requests", Title: "GitHub: list pull requests", Method: "GET", Path: "/repos/{owner}/{repo}/pulls", Query: []string{"state", "per_page"}},
-	{Name: "get_pull_request", Title: "GitHub: read a pull request", Method: "GET", Path: "/repos/{owner}/{repo}/pulls/{pull_number}"},
-	{Name: "create_issue", Title: "GitHub: create an issue", Write: true, Method: "POST", Path: "/repos/{owner}/{repo}/issues"},
-	{Name: "add_issue_comment", Title: "GitHub: comment on an issue", Write: true, Method: "POST", Path: "/repos/{owner}/{repo}/issues/{issue_number}/comments"},
-	{Name: "create_pull_request", Title: "GitHub: create a pull request", Write: true, Method: "POST", Path: "/repos/{owner}/{repo}/pulls"},
-	{Name: "create_or_update_file", Title: "GitHub: write a file", Write: true, Method: "PUT", Path: "/repos/{owner}/{repo}/contents/{path}"},
-}
-
-// digitalOceanTools are the hosted MCP router tools. Path stays empty so
-// the adapter cannot turn them into api.digitalocean.com requests.
-var digitalOceanTools = []Tool{
-	{Name: "find_tools", Title: "DigitalOcean: find tools"},
-	{Name: "retrieve_schema", Title: "DigitalOcean: read a tool schema"},
-	{Name: "invoke_tool", Title: "DigitalOcean: run a tool", Write: true},
-}
-
-var retiredDigitalOceanTools = []string{
-	"do_account_get",
-	"do_droplets_list",
-	"do_droplet_get",
-	"do_apps_list",
-	"do_droplet_create",
-	"do_droplet_delete",
 }

@@ -218,7 +218,7 @@ secret = run(["/usr/local/bin/castbot-mcp", "request_secret"], [
     json.dumps({"jsonrpc":"2.0","method":"notifications/initialized"}),
     json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
     json.dumps({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"request_secret","arguments":{"connection":"github","reason":"need a repository"}}}),
-    json.dumps({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"request_secret","arguments":{"connection":"aws","reason":"no"}}}),
+    json.dumps({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"request_secret","arguments":{"connection":"not-a-name","reason":"no"}}}),
 ])
 if "request_secret" not in secret or "Connections are not available on this machine." not in secret or "The connection request was rejected." not in secret:
     sys.exit("request_secret did not fail closed: " + secret)

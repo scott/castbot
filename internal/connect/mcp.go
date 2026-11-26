@@ -40,19 +40,24 @@ func HandleRPC(ctx context.Context, connection string, msg RPC, approved bool, u
 	case "ping":
 		return rpcResult(msg.ID, map[string]any{})
 	case "tools/list":
-		if connection == DigitalOcean {
+		if hostedMCP(connection) {
 			// The hosted server lists its own tools. This adapter does not.
 			return rpcError(msg.ID, "unavailable"), nil
 		}
 		return rpcResult(msg.ID, map[string]any{"tools": toolSchemas(connection)})
 	case "tools/call":
-		if connection == DigitalOcean {
+		if hostedMCP(connection) {
 			return rpcError(msg.ID, "unavailable"), nil
 		}
 		return callTool(ctx, connection, msg, approved, upstream)
 	default:
 		return rpcError(msg.ID, "unknown method"), nil
 	}
+}
+
+func hostedMCP(connection string) bool {
+	entry, ok := Lookup(connection)
+	return ok && entry.RemoteMCP != ""
 }
 
 func callTool(ctx context.Context, connection string, msg RPC, approved bool, upstream Upstream) (json.RawMessage, error) {
@@ -78,9 +83,25 @@ func callTool(ctx context.Context, connection string, msg RPC, approved bool, up
 	if tool.Write && !approved {
 		return nil, ErrDenied
 	}
-	call, err := toolCall(connection, tool, params.Arguments)
-	if err != nil {
-		return rpcError(msg.ID, "bad arguments"), nil
+	var call Call
+	var err error
+	if tool.Build != nil {
+		call, err = tool.Build(params.Arguments)
+		if err != nil {
+			return rpcError(msg.ID, "bad arguments"), nil
+		}
+		// The builder cannot retarget the call. The URL stays on this
+		// connection's allowlist, and the token stays this connection's.
+		call.Connection = connection
+		call.Tool = tool.Name
+		if _, err = CheckURL(connection, call.URL); err != nil {
+			return rpcError(msg.ID, "bad arguments"), nil
+		}
+	} else {
+		call, err = toolCall(connection, tool, params.Arguments)
+		if err != nil {
+			return rpcError(msg.ID, "bad arguments"), nil
+		}
 	}
 	if upstream == nil {
 		return rpcError(msg.ID, "unavailable"), nil
@@ -111,7 +132,11 @@ func toolCall(connection string, tool Tool, args map[string]any) (Call, error) {
 	if err != nil {
 		return Call{}, err
 	}
-	raw := "https://" + entry.Hosts[0] + path
+	host := entry.APIHost
+	if host == "" {
+		host = entry.Hosts[0]
+	}
+	raw := "https://" + host + path
 	if tool.Name == "get_file_contents" || strings.Contains(tool.Path, "/contents/") {
 		// contents stay on the API host, which is Hosts[0] for GitHub.
 	}
@@ -274,15 +299,15 @@ func toolSchemas(connection string) []map[string]any {
 func requestSchema() map[string]any {
 	return map[string]any{
 		"name": RequestTool,
-		"description": "Ask the user to connect GitHub or DigitalOcean. " +
-			"connection is github or digitalocean. reason is a short explanation. " +
+		"description": "Ask the user to connect a catalog service. " +
+			"connection is the catalog id, such as github or digitalocean. reason is a short explanation. " +
 			"The value is saved in their vault and is not returned. " +
 			"The connection is available on the next turn. " +
 			"The result is saved, declined, expired, or already_configured.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"connection": map[string]any{"type": "string", "enum": []string{GitHub, DigitalOcean}},
+				"connection": map[string]string{"type": "string"},
 				"reason":     map[string]string{"type": "string"},
 				"name":       map[string]string{"type": "string"},
 			},

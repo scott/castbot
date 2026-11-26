@@ -296,16 +296,31 @@ func applyAuth(req *http.Request, connection, token string) {
 	req.Header.Del("Authorization")
 	req.Header.Del("Cookie")
 	req.Header.Del("X-Access-Token")
-	switch connection {
-	case GitHub:
-		if req.URL != nil && req.URL.Hostname() == "github.com" {
+	entry, ok := Lookup(connection)
+	mode := AuthBearer
+	header := ""
+	gitHost := ""
+	if ok {
+		if entry.Auth != "" {
+			mode = entry.Auth
+		}
+		header = entry.HeaderName
+		gitHost = entry.GitHost
+	}
+	switch mode {
+	case AuthGitHub:
+		if req.URL != nil && gitHost != "" && req.URL.Hostname() == gitHost {
 			req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token)))
 			return
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	case DigitalOcean:
-		req.Header.Set("Authorization", "Bearer "+token)
+	case AuthBasic:
+		req.SetBasicAuth(token, "")
+	case AuthHeader:
+		if header != "" {
+			req.Header.Set(header, token)
+		}
 	default:
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

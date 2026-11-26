@@ -59,11 +59,11 @@ func TestDigitalOceanMCPIsTheOnlyUpstream(t *testing.T) {
 	defer ts.Close()
 	remote := NewRemote()
 	call := []byte(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"find_tools","arguments":{"query":"droplets"}}}`)
-	out, err := remote.RoundTrip(context.Background(), token, call, dial)
+	out, err := remote.RoundTrip(context.Background(), DigitalOcean, token, DigitalOceanMCPURL, call, dial)
 	if err != nil || strings.Contains(string(out), token) || !strings.Contains(string(out), "[redacted]") {
 		t.Fatalf("%s %v", out, err)
 	}
-	out, err = remote.RoundTrip(context.Background(), token, call, dial)
+	out, err = remote.RoundTrip(context.Background(), DigitalOcean, token, DigitalOceanMCPURL, call, dial)
 	if err != nil || strings.Contains(string(out), token) {
 		t.Fatalf("reuse %s %v", out, err)
 	}
@@ -120,7 +120,7 @@ func TestDigitalOceanMCPParsesSSEAndRefreshesALostSession(t *testing.T) {
 	defer ts.Close()
 	remote := NewRemote()
 	call := []byte(`{"jsonrpc":"2.0","id":7,"method":"tools/list"}`)
-	out, err := remote.RoundTrip(context.Background(), token, call, dial)
+	out, err := remote.RoundTrip(context.Background(), DigitalOcean, token, DigitalOceanMCPURL, call, dial)
 	if err != nil || !strings.Contains(string(out), `"ok":true`) || strings.Contains(string(out), token) {
 		t.Fatalf("%s %v", out, err)
 	}

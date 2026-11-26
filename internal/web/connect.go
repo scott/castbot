@@ -474,8 +474,8 @@ func (s *Server) machineEgressMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var out json.RawMessage
-	if server == connect.DigitalOcean {
-		out, err = s.digitalOceanMCP().RoundTrip(r.Context(), token, body.Message, s.dial())
+	if entry, ok := connect.Lookup(server); ok && entry.RemoteMCP != "" {
+		out, err = s.digitalOceanMCP().RoundTrip(r.Context(), server, token, entry.RemoteMCP, body.Message, s.dial())
 		if err != nil {
 			_ = s.store.RecordConnectAudit(r.Context(), userID, "connection.mcp", agentID, map[string]string{
 				"connection": server, "outcome": connect.Code(err), "tool": clipAudit(rpcTool(msg)),

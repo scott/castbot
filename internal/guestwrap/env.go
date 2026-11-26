@@ -179,7 +179,7 @@ func loopbackNoProxy(existing string) string {
 	return strings.Join(parts, ",")
 }
 
-// proxyLive reports whether any curated provider is connected.
+// proxyLive reports whether any catalog provider is connected.
 func proxyLive(st egresscontract.Status) bool {
-	return st.Has("github") || st.Has("digitalocean")
+	return st.Enabled && len(st.Providers) > 0
 }

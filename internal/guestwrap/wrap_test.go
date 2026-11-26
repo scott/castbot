@@ -100,11 +100,11 @@ func TestFetchStatusFailClosed(t *testing.T) {
 		t.Fatalf("enabled %v after %s", st.Enabled, time.Since(start))
 	}
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"enabled":true,"providers":["github","nope"]}`)
+		_, _ = io.WriteString(w, `{"enabled":true,"providers":["github","nope","not-a-name"]}`)
 	}))
 	defer ok.Close()
 	st = FetchStatus(context.Background(), ok.URL)
-	if !st.Has("github") || st.Has("nope") || st.Has("digitalocean") {
+	if !st.Has("github") || !st.Has("nope") || st.Has("not-a-name") || st.Has("digitalocean") {
 		t.Fatalf("%+v", st)
 	}
 }
@@ -292,7 +292,7 @@ func TestMCPFailClosed(t *testing.T) {
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"request_secret","arguments":{"connection":"github","reason":"need a repository"}}}`,
-		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"request_secret","arguments":{"connection":"aws","reason":"` + fixtureValue + `"}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"request_secret","arguments":{"connection":"not-a-name","reason":"` + fixtureValue + `"}}}`,
 	}, "\n") + "\n"
 	start := time.Now()
 	if err := ServeMCP("request_secret", "http://127.0.0.1:1", strings.NewReader(in), &out); err != nil {
@@ -360,8 +360,11 @@ func TestAgentsMCPIsLocalAndForwardsCreate(t *testing.T) {
 	if act.Serve != agentskill.ServerName || act.Code != 0 {
 		t.Fatalf("%+v", act)
 	}
-	if Plan("castbot-mcp", []string{"other"}, nil).Code != 1 {
-		t.Fatal("unknown server was accepted")
+	if Plan("castbot-mcp", []string{"linear"}, nil).Serve != "linear" || Plan("castbot-mcp", []string{"linear"}, nil).Code != 0 {
+		t.Fatal("catalog id was rejected")
+	}
+	if Plan("castbot-mcp", []string{"not-a-name"}, nil).Code != 1 {
+		t.Fatal("malformed server was accepted")
 	}
 	var hits int
 	var posted string
@@ -612,11 +615,19 @@ func TestNamedSecretToolPassesHostWords(t *testing.T) {
 		t.Fatalf("posted %#v", posted)
 	}
 	out.Reset()
-	aws := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"request_secret","arguments":{"connection":"aws","reason":"` + fixtureValue + `"}}}` + "\n"
-	if err := ServeMCP(secretask.ToolSave, srv.URL, strings.NewReader(aws), &out); err != nil {
+	bad := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"request_secret","arguments":{"connection":"not-a-name","reason":"` + fixtureValue + `"}}}` + "\n"
+	if err := ServeMCP(secretask.ToolSave, srv.URL, strings.NewReader(bad), &out); err != nil {
 		t.Fatal(err)
 	}
 	if len(posted) != 2 || !strings.Contains(out.String(), egresscontract.Rejected) || strings.Contains(out.String(), fixtureValue) {
-		t.Fatalf("aws forwarded %d %s", len(posted), out.String())
+		t.Fatalf("malformed id forwarded %d %s", len(posted), out.String())
+	}
+	out.Reset()
+	later := `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"request_secret","arguments":{"connection":"linear","reason":"need the queue"}}}` + "\n"
+	if err := ServeMCP(secretask.ToolSave, srv.URL, strings.NewReader(later), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) != 3 || !strings.Contains(posted[2], `"connection":"linear"`) || strings.Contains(out.String(), fixtureValue) {
+		t.Fatalf("catalog id was not forwarded %d %s", len(posted), out.String())
 	}
 }
