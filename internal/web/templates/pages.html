@@ -289,7 +289,8 @@
 <section class="card" id="update" aria-labelledby="s-up"><div class="card-h"><h3 id="s-up">Update</h3></div>
 <p class="fineprint">castbot checks for a published release and does not send the hostname or the account.</p>
 {{if .Update.Dev}}<p>This copy was built from a checkout.</p>{{else}}
-<div class="set-row"><div class="grow"><div class="k">This copy</div><div class="v">{{.Update.Running}}</div>{{if .Update.Commit}}<span class="t2">{{.Update.Commit}}</span>{{end}}</div></div>
+<div class="set-row"><div class="grow"><div class="k">This copy</div><div class="v">{{.Update.Running}}</div>{{if .Update.Commit}}<span class="t2">{{.Update.Commit}}</span>{{end}}</div>{{if ne .Update.Mode "off"}}<form method="post" action="/settings/update/check"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn sm" type="submit">Check now</button></form>{{end}}</div>
+{{if .Update.CheckError}}<p class="fineprint" role="alert">{{.Update.CheckError}}</p>{{end}}
 {{if eq .Update.Mode "off"}}{{else if .Update.Blocked}}
 <div class="set-row"><div class="grow"><div class="k">Castbot {{.Update.Offer}}</div><span class="t2">The machine image has to be published for this release before the update can run.</span>{{if .Update.Notes}}<div class="v"><a class="link" href="{{.Update.Notes}}">Release notes</a></div>{{end}}</div></div>
 {{else if .Update.Ready}}

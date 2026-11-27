@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/scott/castbot/internal/store"
 	"github.com/scott/castbot/internal/update"
@@ -11,19 +12,20 @@ import (
 
 // updatePanel is the owner Update section and the home banner.
 type updatePanel struct {
-	On      bool
-	Dev     bool
-	Pinned  bool
-	Ready   bool
-	Blocked bool
-	Moves   bool
-	Busy    bool
-	Banner  bool
-	Mode    string
-	Running string
-	Commit  string
-	Offer   string
-	Notes   string
+	On         bool
+	Dev        bool
+	Pinned     bool
+	Ready      bool
+	Blocked    bool
+	Moves      bool
+	Busy       bool
+	Banner     bool
+	Mode       string
+	Running    string
+	Commit     string
+	Offer      string
+	Notes      string
+	CheckError string
 }
 
 func (s *Server) SetUpdate(version, commit, envMode, cachePath string) {
@@ -41,6 +43,14 @@ func (s *Server) SetUpdate(version, commit, envMode, cachePath string) {
 func (s *Server) SetUpdateApply(fn func(context.Context) error) {
 	s.mu.Lock()
 	s.updateApply = fn
+	s.mu.Unlock()
+}
+
+// SetUpdateCheck runs one release check for Check now.
+// It records the result and does not install. A nil function refuses the button.
+func (s *Server) SetUpdateCheck(fn func(context.Context) error) {
+	s.mu.Lock()
+	s.updateCheck = fn
 	s.mu.Unlock()
 }
 
@@ -134,6 +144,42 @@ func (s *Server) saveUpdateMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/settings?notice=update#update", http.StatusSeeOther)
+}
+
+func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
+	user, sess, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	if user.Role != "owner" {
+		http.NotFound(w, r)
+		return
+	}
+	panel, _ := s.loadUpdate(r.Context(), user)
+	if !panel.On || panel.Dev || panel.Mode == update.ModeOff {
+		http.NotFound(w, r)
+		return
+	}
+	s.mu.Lock()
+	check := s.updateCheck
+	s.mu.Unlock()
+	if check == nil {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	if err := check(ctx); err != nil {
+		p, viewErr := s.settingsView(r, user, sess)
+		if viewErr != nil {
+			http.Error(w, "Error", http.StatusInternalServerError)
+			return
+		}
+		p.Update.CheckError = "The check did not finish. This page still shows the last result."
+		s.render(w, http.StatusBadGateway, "app", finish(p))
+		return
+	}
+	http.Redirect(w, r, "/settings#update", http.StatusSeeOther)
 }
 
 func (s *Server) updatePage(w http.ResponseWriter, r *http.Request) {

@@ -46,12 +46,12 @@ func shootUpdate(t *testing.T, browser context.Context, dir string, width, heigh
 	seedAgent(t, h.st, user.ID, "Atlas")
 	path := filepath.Join(t.TempDir(), "update.json")
 	page := "/settings#update"
-	needle := `(function(){var t=document.body.innerText||'';var n=document.getElementById('update');return !!n&&t.indexOf('Up to date.')>=0&&t.indexOf('Update now')<0&&t.indexOf('v0.20261124.2')<0&&t.indexOf('\u2014')<0&&t.indexOf('\u2013')<0;})()`
+	needle := `(function(){var t=document.body.innerText||'';var n=document.getElementById('update');return !!n&&t.indexOf('Up to date.')>=0&&t.indexOf('Check now')>=0&&t.indexOf('Update now')<0&&t.indexOf('v0.20261124.2')<0&&t.indexOf('\u2014')<0&&t.indexOf('\u2013')<0;})()`
 	file := "settings-current-" + name + ".png"
 	switch kind {
 	case "waiting":
 		writeUpdateCache(t, path, true, true)
-		needle = `(function(){var t=document.body.innerText||'';var n=document.getElementById('update');return !!n&&t.indexOf('Castbot v0.20261124.2 is ready.')>=0&&t.indexOf('Release notes')>=0&&t.indexOf('Replace machine')>=0&&t.indexOf('Update now')>=0&&t.indexOf('Ask me')>=0&&t.indexOf('\u2014')<0&&t.indexOf('\u2013')<0;})()`
+		needle = `(function(){var t=document.body.innerText||'';var n=document.getElementById('update');return !!n&&t.indexOf('Castbot v0.20261124.2 is ready.')>=0&&t.indexOf('Release notes')>=0&&t.indexOf('Replace machine')>=0&&t.indexOf('Check now')>=0&&t.indexOf('Update now')>=0&&t.indexOf('Ask me')>=0&&t.indexOf('\u2014')<0&&t.indexOf('\u2013')<0;})()`
 		file = "settings-waiting-" + name + ".png"
 	case "home":
 		writeUpdateCache(t, path, true, true)
