@@ -210,3 +210,35 @@ func TestTelegramCardHidesTheKeyFromAnotherUser(t *testing.T) {
 		t.Fatal("other user enabled telegram")
 	}
 }
+
+func TestSentryCardHidesTheKeyFromAnotherUser(t *testing.T) {
+	ip := "203.0.113.86:9"
+	h := newHarness(t)
+	owner, secret := h.account("sentry-owner@example.com", "Ada", "correct-horse-1")
+	other, _ := h.account("sentry-other@example.com", "Bea", "correct-horse-1")
+	h.login("sentry-owner@example.com", "correct-horse-1", secret, ip, false)
+	const key = "sntry_sample_auth_token"
+	code, body, hdr := h.do(http.MethodPost, "/settings/connections/sentry", h.form(url.Values{
+		"token": {key},
+	}), ip, nil)
+	if code != http.StatusSeeOther || !strings.Contains(hdr.Get("Location"), "notice=connected") || strings.Contains(body, key) {
+		t.Fatalf("connect %d %s", code, hdr.Get("Location"))
+	}
+	code, body, _ = h.do(http.MethodGet, "/settings/connections/sentry", "", ip, nil)
+	if code != 200 || !strings.Contains(body, "Auth token") || !strings.Contains(body, "sentry_list_orgs") || !strings.Contains(body, "sentry_resolve") || strings.Contains(body, key) {
+		t.Fatalf("detail %d", code)
+	}
+	if !strings.Contains(body, "sntr-xxxxxxx") {
+		t.Fatal("mask")
+	}
+	saved, err := h.st.ConnectionValue(context.Background(), owner.ID, connect.Sentry)
+	if err != nil || saved != key {
+		t.Fatal("owner vault")
+	}
+	if _, err := h.st.ConnectionValue(context.Background(), other.ID, connect.Sentry); err == nil {
+		t.Fatal("other user read the key")
+	}
+	if err := h.st.EnableConnection(context.Background(), other.ID, "missing-agent", connect.Sentry); err == nil {
+		t.Fatal("other user enabled sentry")
+	}
+}
