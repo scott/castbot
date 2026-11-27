@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,9 +16,19 @@ import (
 func TestPageCardsInChatAndList(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
+	// The expiry loop reads this clock from another goroutine.
+	var clockMu sync.Mutex
 	clock := time.Date(2026, 11, 26, 16, 0, 0, 0, time.UTC)
-	h.st.SetNow(func() time.Time { return clock })
-	advance := func(d time.Duration) { clock = clock.Add(d) }
+	h.st.SetNow(func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return clock
+	})
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		clock = clock.Add(d)
+		clockMu.Unlock()
+	}
 	owner, secret := h.account("card-owner@example.com", "Alex Rivera", "correct-horse-1")
 	other, otherSecret := h.account("card-other@example.com", "Blair Quinn", "correct-horse-1")
 	member := acceptHostedInvite(t, h, owner, "card-member@example.com", "Pip Lane")
@@ -111,8 +122,14 @@ func TestPageCardsInChatAndList(t *testing.T) {
 
 func TestAgentPagePreview(t *testing.T) {
 	h := newHarness(t)
+	// The expiry loop reads this clock from another goroutine.
+	var clockMu sync.Mutex
 	clock := time.Date(2026, 11, 26, 18, 0, 0, 0, time.UTC)
-	h.st.SetNow(func() time.Time { return clock })
+	h.st.SetNow(func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return clock
+	})
 	user, secret := h.account("card-preview@example.com", "Alex Rivera", "correct-horse-1")
 	agent := hostedAgent(t, h.st, user, "Atlas")
 	oldest := "Ledger 0"
@@ -121,7 +138,9 @@ func TestAgentPagePreview(t *testing.T) {
 		if _, err := h.st.CreatePage(context.Background(), user.ID, agent.ID, fmt.Sprintf("Ledger %d", i), samplePageText("row")); err != nil {
 			t.Fatal(err)
 		}
+		clockMu.Lock()
 		clock = clock.Add(time.Second)
+		clockMu.Unlock()
 	}
 	h.login(user.Email, "correct-horse-1", secret, "203.0.113.83:9", false)
 	code, body, _ := h.do(http.MethodGet, "/agents/"+agent.ID+"?panel=agent", "", "203.0.113.83:9", nil)

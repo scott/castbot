@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,9 +15,19 @@ import (
 func TestPageShareRenameDelete(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
+	// The expiry loop reads this clock from another goroutine.
+	var clockMu sync.Mutex
 	clock := time.Date(2026, 11, 26, 18, 0, 0, 0, time.UTC)
-	h.st.SetNow(func() time.Time { return clock })
-	advance := func() { clock = clock.Add(2 * time.Minute) }
+	h.st.SetNow(func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return clock
+	})
+	advance := func() {
+		clockMu.Lock()
+		clock = clock.Add(2 * time.Minute)
+		clockMu.Unlock()
+	}
 	owner, secret := h.account("share-owner@example.com", "Nora Hale", "correct-horse-1")
 	other, otherSecret := h.account("share-other@example.com", "Blair Quinn", "correct-horse-1")
 	member := acceptHostedInvite(t, h, owner, "share-member@example.com", "Pip Lane")
