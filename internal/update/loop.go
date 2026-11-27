@@ -77,35 +77,17 @@ func Run(ctx context.Context, cfg RunConfig) {
 	}
 }
 
+// Probe records one release check and does not install.
+// off and a dev build do not fetch. A failed check leaves the previous cache.
+func Probe(ctx context.Context, cfg RunConfig) error {
+	_, _, err := cfg.record(ctx)
+	return err
+}
+
 func (cfg RunConfig) once(ctx context.Context) (string, error) {
-	mode, err := cfg.mode(ctx)
-	if err != nil {
-		return "", err
-	}
-	if mode == ModeOff || cfg.Version == "dev" || cfg.Version == "" {
-		return "skipped", nil
-	}
-	cache, err := cfg.Checker.Check(ctx, State{
-		Version: cfg.Version,
-		Commit:  cfg.Commit,
-		Schema:  cfg.Schema,
-		Image:   cfg.Image,
-		Mode:    mode,
-	})
-	if err != nil {
-		return "", err
-	}
-	if err := WriteCache(cfg.CachePath, cache); err != nil {
-		return "", err
-	}
-	status := "current"
-	if cache.ImageBlocked {
-		status = "blocked"
-	} else if cache.Available {
-		status = "available"
-	}
-	if status != "available" || mode != ModeAuto || cfg.Apply == nil {
-		return status, nil
+	mode, status, err := cfg.record(ctx)
+	if err != nil || status != "available" || mode != ModeAuto || cfg.Apply == nil {
+		return status, err
 	}
 	if cfg.Inflight == nil {
 		return "", errors.New("inflight check failed")
@@ -121,6 +103,39 @@ func (cfg RunConfig) once(ctx context.Context) (string, error) {
 		return "", errors.New("update did not start")
 	}
 	return "installing", nil
+}
+
+func (cfg RunConfig) record(ctx context.Context) (string, string, error) {
+	mode, err := cfg.mode(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	if mode == ModeOff || cfg.Version == "dev" || cfg.Version == "" {
+		return mode, "skipped", nil
+	}
+	if cfg.CachePath == "" {
+		cfg.CachePath = DefaultCachePath
+	}
+	cache, err := cfg.Checker.Check(ctx, State{
+		Version: cfg.Version,
+		Commit:  cfg.Commit,
+		Schema:  cfg.Schema,
+		Image:   cfg.Image,
+		Mode:    mode,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	if err := WriteCache(cfg.CachePath, cache); err != nil {
+		return "", "", err
+	}
+	status := "current"
+	if cache.ImageBlocked {
+		status = "blocked"
+	} else if cache.Available {
+		status = "available"
+	}
+	return mode, status, nil
 }
 
 func (cfg RunConfig) mode(ctx context.Context) (string, error) {

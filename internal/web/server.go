@@ -77,6 +77,7 @@ type Server struct {
 	updateEnv       string
 	updateCache     string
 	updateApply     func(context.Context) error
+	updateCheck     func(context.Context) error
 	log             *slog.Logger
 	// modelProxyUpstream replaces the provider base URL. Tests set it.
 	// An empty value uses the manifest URL.
@@ -371,6 +372,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /settings", s.settings)
 	mux.HandleFunc("GET /settings/update", s.updatePage)
 	mux.HandleFunc("POST /settings/update", s.saveUpdateMode)
+	mux.HandleFunc("POST /settings/update/check", s.checkUpdate)
 	mux.HandleFunc("POST /settings/update/apply", s.applyUpdate)
 	mux.HandleFunc("POST /settings/account", s.saveName)
 	mux.HandleFunc("POST /settings/invites", s.createInvite)

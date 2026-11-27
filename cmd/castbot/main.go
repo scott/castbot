@@ -89,6 +89,24 @@ func serve(args []string) {
 	app.SetUpdateApply(func(context.Context) error {
 		return startUpdateHelper()
 	})
+	updateCfg := update.RunConfig{
+		Version: version,
+		Commit:  commit,
+		Schema:  store.SchemaVersion,
+		Image:   cfg.Image,
+		EnvMode: cfg.UpdateMode,
+		StoredMode: func(c context.Context) (string, error) {
+			return st.InstanceSetting(c, update.ModeKey)
+		},
+		Apply: func(context.Context) error { return startUpdateHelper() },
+		Inflight: func(c context.Context) (int, error) {
+			return st.InflightRuns(c)
+		},
+	}
+	// Check now records a release and does not install it.
+	app.SetUpdateCheck(func(c context.Context) error {
+		return update.Probe(c, updateCfg)
+	})
 	app.SetDataDir(filepath.Dir(cfg.DBPath))
 	if cfg.RuntimeURL != "" {
 		app.SetExplicitRuntime(true)
@@ -120,20 +138,7 @@ func serve(args []string) {
 	// Record a newer signed release. Automatic mode starts the helper when
 	// a release is ready and no agent is working. Update now uses the same
 	// helper. off and a dev build do not fetch.
-	go update.Run(ctx, update.RunConfig{
-		Version: version,
-		Commit:  commit,
-		Schema:  store.SchemaVersion,
-		Image:   cfg.Image,
-		EnvMode: cfg.UpdateMode,
-		StoredMode: func(c context.Context) (string, error) {
-			return st.InstanceSetting(c, update.ModeKey)
-		},
-		Apply: func(context.Context) error { return startUpdateHelper() },
-		Inflight: func(c context.Context) (int, error) {
-			return st.InflightRuns(c)
-		},
-	})
+	go update.Run(ctx, updateCfg)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           app.Handler(),
