@@ -19,6 +19,7 @@ The catalog ships the connections in the table. Each connection is one catalog e
 | Notion | `NOTION_CONNECTION` | `api.notion.com` |
 | Telegram | `TELEGRAM_CONNECTION` | `api.telegram.org` |
 | Sentry | `SENTRY_CONNECTION` | `sentry.io` |
+| Cloudflare | `CLOUDFLARE_CONNECTION` | `api.cloudflare.com` |
 
 The vault name is not an environment grant. `GrantSecret` rejects it. The guest pull rejects it. A hand-written grant row still does not leave the control plane: the pull keeps `kind = env` and also drops `GITHUB_CONNECTION` and `DIGITALOCEAN_CONNECTION` if a row is forced into that kind. A later connection's vault name is refused the same way. castlet refuses the whole secrets response if a connection vault name appears.
 
@@ -35,6 +36,7 @@ A catalog id is a lowercase letter followed by up to 31 letters, digits, or unde
 - [Notion](connections/notion.md)
 - [Telegram](connections/telegram.md)
 - [Sentry](connections/sentry.md)
+- [Cloudflare](connections/cloudflare.md)
 
 The owner chooses the token's own scopes. castbot does not add a service list on top.
 
