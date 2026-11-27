@@ -48,6 +48,7 @@ func TestConnectionShots(t *testing.T) {
 		{"sentry", `(function(){var t=document.body.innerText||"";return t.indexOf("Auth token")>=0&&t.indexOf("sentry_list_orgs")>=0&&t.indexOf("sentry_resolve")>=0&&t.indexOf("\u2014")<0&&t.indexOf("\u2013")<0;})()`},
 		{"cloudflare", `(function(){var t=document.body.innerText||"";return t.indexOf("API token")>=0&&t.indexOf("cloudflare_list_zones")>=0&&t.indexOf("cloudflare_purge_cache")>=0&&t.indexOf("\u2014")<0&&t.indexOf("\u2013")<0;})()`},
 		{"todoist", `(function(){var t=document.body.innerText||"";return t.indexOf("API token")>=0&&t.indexOf("todoist_list_tasks")>=0&&t.indexOf("todoist_complete")>=0&&t.indexOf("\u2014")<0&&t.indexOf("\u2013")<0;})()`},
+		{"stripe", `(function(){var t=document.body.innerText||"";return t.indexOf("Restricted key")>=0&&t.indexOf("stripe_balance")>=0&&t.indexOf("stripe_list_charges")>=0&&t.indexOf("\u2014")<0&&t.indexOf("\u2013")<0;})()`},
 	}
 	for _, card := range cards {
 		for _, vp := range []struct {
