@@ -306,3 +306,35 @@ func TestTodoistCardHidesTheKeyFromAnotherUser(t *testing.T) {
 		t.Fatal("other user enabled todoist")
 	}
 }
+
+func TestStripeCardHidesTheKeyFromAnotherUser(t *testing.T) {
+	ip := "203.0.113.89:9"
+	h := newHarness(t)
+	owner, secret := h.account("stripe-owner@example.com", "Ada", "correct-horse-1")
+	other, _ := h.account("stripe-other@example.com", "Bea", "correct-horse-1")
+	h.login("stripe-owner@example.com", "correct-horse-1", secret, ip, false)
+	const key = "rk_sample_restricted_key"
+	code, body, hdr := h.do(http.MethodPost, "/settings/connections/stripe", h.form(url.Values{
+		"token": {key},
+	}), ip, nil)
+	if code != http.StatusSeeOther || !strings.Contains(hdr.Get("Location"), "notice=connected") || strings.Contains(body, key) {
+		t.Fatalf("connect %d %s", code, hdr.Get("Location"))
+	}
+	code, body, _ = h.do(http.MethodGet, "/settings/connections/stripe", "", ip, nil)
+	if code != 200 || !strings.Contains(body, "Restricted key") || !strings.Contains(body, "stripe_balance") || !strings.Contains(body, "stripe_list_charges") || !strings.Contains(body, "stripe_get_customer") || !strings.Contains(body, "stripe_list_payment_intents") || strings.Contains(body, key) || strings.Contains(body, "stripe_refund") {
+		t.Fatalf("detail %d", code)
+	}
+	if !strings.Contains(body, "rk_s-xxxxxxx") {
+		t.Fatal("mask")
+	}
+	saved, err := h.st.ConnectionValue(context.Background(), owner.ID, connect.Stripe)
+	if err != nil || saved != key {
+		t.Fatal("owner vault")
+	}
+	if _, err := h.st.ConnectionValue(context.Background(), other.ID, connect.Stripe); err == nil {
+		t.Fatal("other user read the key")
+	}
+	if err := h.st.EnableConnection(context.Background(), other.ID, "missing-agent", connect.Stripe); err == nil {
+		t.Fatal("other user enabled stripe")
+	}
+}
