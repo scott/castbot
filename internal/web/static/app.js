@@ -725,14 +725,12 @@ function restoreFocus() {
 }
 
 function closeAgentPanel() {
+  window.__castbotPanelPending = false;
   storeSet("castbot.panel", "closed");
-  if (history.state && history.state.castbotPanel) {
-    history.back();
-    return;
-  }
   history.replaceState(null, "", chatURL());
   hidePanel();
   restoreFocus();
+  rememberView();
 }
 
 function openDefaultPanel() {
@@ -746,7 +744,24 @@ function openDefaultPanel() {
   }
   q.set("panel", tab);
   var url = location.pathname + "?" + q.toString() + location.hash;
-  window.htmx.ajax("GET", url, { target: "#agent-panel", swap: "outerHTML" });
+  // Shot pages click Send as soon as the document is ready. Hold that until
+  // this swap has laid out, or the click lands on the pane instead of Send.
+  window.__castbotPanelPending = true;
+  var req;
+  try {
+    req = window.htmx.ajax("GET", url, { target: "#agent-panel", swap: "outerHTML" });
+  } catch (err) {
+    window.__castbotPanelPending = false;
+  }
+  if (req && typeof req.finally === "function") {
+    req.finally(function () {
+      window.requestAnimationFrame(function () {
+        window.__castbotPanelPending = false;
+      });
+    });
+  } else if (window.__castbotPanelPending) {
+    window.__castbotPanelPending = false;
+  }
   history.pushState({ castbotPanel: true }, "", url);
   storeSet("castbot.panel", "open");
   if (tab !== "group") {
@@ -854,6 +869,7 @@ function settleSwitchedChat() {
   if (box && !sessionGet(threadKey())) {
     box.scrollTop = box.scrollHeight;
   }
+  rememberView();
 }
 
 function rememberView() {
@@ -867,8 +883,9 @@ function closeSettings() {
   var back = sessionGet("castbot.back");
   if (back) {
     try {
-      if (new URL(back).origin === location.origin && history.length > 1) {
-        history.back();
+      var url = new URL(back);
+      if (url.origin === location.origin && url.pathname.indexOf("/settings") !== 0) {
+        location.assign(url.pathname + url.search + url.hash);
         return;
       }
     } catch (err) {}
@@ -1389,6 +1406,7 @@ document.addEventListener("DOMContentLoaded", function () {
         storeSet("castbot.panelTab", panelName);
       }
     }
+    rememberView();
     focusPanelTab(panel);
   });
   document.body.addEventListener("htmx:afterSettle", function (ev) {
@@ -1397,6 +1415,7 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
     syncPanelChrome(document.getElementById("agent-panel"));
+    window.__castbotPanelPending = false;
   });
   document.body.addEventListener("htmx:afterRequest", function (ev) {
     var elt = ev.detail && ev.detail.elt;

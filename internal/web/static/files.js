@@ -462,12 +462,5 @@
       });
     }
 
-    document.addEventListener("keydown", function (ev) {
-      if (ev.key !== "Escape") return;
-      if (!document.body.classList.contains("p-files")) return;
-      if (search && document.activeElement === search && search.value) return;
-      var close = document.querySelector('a[aria-label="Close agent panel (Esc)"]') || document.querySelector('a[aria-label="Back to chat"]');
-      if (close) window.location.href = close.getAttribute("href");
-    });
   });
 })();

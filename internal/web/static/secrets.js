@@ -36,10 +36,11 @@
       return;
     }
     var close = e.target.closest && e.target.closest("[data-close]");
-    if (close && window.history.length > 1) {
-      e.preventDefault();
-      window.history.back();
-    }
+    if (!close || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var href = close.getAttribute("href");
+    if (!href) return;
+    e.preventDefault();
+    window.location.replace(href);
   });
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
@@ -51,7 +52,6 @@
     }
     var close = document.querySelector("[data-close]");
     if (!close) return;
-    if (window.history.length > 1) window.history.back();
-    else window.location.href = close.getAttribute("href") || "/";
+    window.location.replace(close.getAttribute("href") || "/");
   });
 })();
