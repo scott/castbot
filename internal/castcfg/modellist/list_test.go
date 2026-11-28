@@ -139,6 +139,14 @@ func TestFetchModels(t *testing.T) {
 			want: []string{"xai/grok-4.7"}, calls: 1, cached: true,
 		},
 		{
+			name: "opencode-go drops embeddings and decision models", provider: "opencode-go", token: token,
+			handle: func(t *testing.T, w http.ResponseWriter, r *http.Request, n int) {
+				assertNoToken(t, r, token)
+				_, _ = io.WriteString(w, `{"data":[{"id":"kimi-k3"},{"id":"text-embedding-3-small"},{"id":"jev-1.14"},{"id":"gemini-decision-1"}]}`)
+			},
+			want: []string{"opencode-go/kimi-k3"}, calls: 1, cached: true,
+		},
+		{
 			name: "gemini strips models prefix", provider: "gemini", token: token,
 			handle: func(t *testing.T, w http.ResponseWriter, r *http.Request, n int) {
 				assertNoToken(t, r, token)

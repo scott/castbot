@@ -8,7 +8,7 @@
 #   docker build --target standin -t castbot-runtime:s03 .
 #
 # CASTLET_RUNTIME was checked against cast.runtime at
-# 5fc2bdb46c4041831fc51c9f909d59e54f887d31:
+# 1d208ce078c707200060fdc8b34d4dcbaa1f6436:
 #   python -m cast.runtime --agent-path PATH --port PORT --host HOST
 
 FROM golang:1.27.4 AS gobuild
@@ -22,8 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/castlet
  && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/castbot-toolrun ./cmd/castbot-toolrun
 
 FROM python:3.11-slim-bookworm AS cast
-ARG CAST_COMMIT=5fc2bdb46c4041831fc51c9f909d59e54f887d31
-ARG CAST_SHA256=f6df23078ffd4e4a92bb7c77c1445c7d42d1b4e60d0551a1ff2f7f90e41539e9
+ARG CAST_COMMIT=1d208ce078c707200060fdc8b34d4dcbaa1f6436
+ARG CAST_SHA256=adda7604890dd103e43b667e33f8dfce68296edb8364cc2835cff387ff259f9f
 COPY deploy/cast-constraints.txt /tmp/cast-constraints.txt
 # The base image already has CA certificates, so this stage does not run apt.
 RUN python -c "import hashlib,os,urllib.request; c=os.environ['CAST_COMMIT']; urllib.request.urlretrieve('https://github.com/scott/castagent/archive/'+c+'.tar.gz','/tmp/cast.tar.gz'); h=hashlib.sha256(open('/tmp/cast.tar.gz','rb').read()).hexdigest(); assert h==os.environ['CAST_SHA256'], h" \

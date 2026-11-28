@@ -68,7 +68,7 @@ host is where agent machines run. The prompt says Machine host.
 DigitalOcean is supported and asks for an API token, which is a
 personal access token. It then asks for an optional model provider and
 a model key. The prompt says Model provider. That list is OpenRouter,
-DigitalOcean, OpenAI, Anthropic, Google Gemini, and xAI. Choosing
+DigitalOcean, OpenAI, Anthropic, Google Gemini, xAI, and OpenCode Go. Choosing
 DigitalOcean there asks for a model access key. After the program is
 installed, the key is used to list that provider's models. The key is
 stored in the vault. It is not printed. Set CASTBOT_MODEL_PROVIDER,
@@ -399,6 +399,7 @@ openai-api	OpenAI
 anthropic-api	Anthropic
 gemini	Google Gemini
 xai	xAI
+opencode-go	OpenCode Go
 EOF
 }
 # model-providers:end

@@ -141,6 +141,7 @@ func (s *Supervisor) egressModel(w http.ResponseWriter, r *http.Request) {
 	copyModelHeader(up.Header, r.Header, "Accept")
 	copyModelHeader(up.Header, r.Header, "anthropic-version")
 	copyModelHeader(up.Header, r.Header, "anthropic-beta")
+	copyModelHeader(up.Header, r.Header, "x-opencode-session")
 	client, err := s.controlClient()
 	if err != nil {
 		writePlain(w, http.StatusBadGateway, "model unavailable")

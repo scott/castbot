@@ -7,6 +7,19 @@ import (
 	"testing"
 )
 
+func TestInferenceForOpenCodeGo(t *testing.T) {
+	got, ok := InferenceFor("opencode-go/kimi-k3")
+	if !ok || got.Key != "opencode-go" || got.EnvVar != "OPENCODE_API_KEY" || got.Keyless {
+		t.Fatalf("%+v ok %v", got, ok)
+	}
+	if ProviderKeyEnv(got.Key) != "CASTBOT_PROVIDER_KEY_OPENCODE_GO" {
+		t.Fatal(ProviderKeyEnv(got.Key))
+	}
+	if MissingProviderKey(got.Key) != "No key for provider OpenCode Go. Ask the owner to add it." {
+		t.Fatal(MissingProviderKey(got.Key))
+	}
+}
+
 func TestInferenceForDigitalOcean(t *testing.T) {
 	got, ok := InferenceFor("digitalocean/deepseek-v3.2")
 	if !ok || got.Key != "digitalocean" || got.EnvVar != "DIGITALOCEAN_MODEL_ACCESS_KEY" || got.Keyless {
@@ -84,6 +97,7 @@ func TestProviderDisplayNames(t *testing.T) {
 		{"anthropic-api", "Anthropic", "AN"},
 		{"gemini", "Google Gemini", "GG"},
 		{"xai", "xAI", "XA"},
+		{"opencode-go", "OpenCode Go", "OG"},
 	}
 	got := KeyedProviders()
 	if len(got) != len(want) {
@@ -111,6 +125,7 @@ func TestRewritePlaceholderKeepsRealModels(t *testing.T) {
 		"anthropic-api/claude-sonnet-5-5",
 		"gemini/gemini-3.8-flash",
 		"xai/grok-4.7",
+		"opencode-go/kimi-k3",
 		"ollama/qwen3",
 	}
 	for _, id := range real {

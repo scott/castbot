@@ -210,5 +210,25 @@
     "llmDefaultModel": "grok-4.7",
     "missingKeyMessage": "XAI_API_KEY environment variable is required for xAI",
     "defaultParams": {"temperature": 0.7}
+  },
+  {
+    "key": "opencode-go",
+    "name": "OpenCode Go",
+    "default": false,
+    "prefixes": ["opencode-go/"],
+    "envVar": "OPENCODE_API_KEY",
+    "configKey": "providers.opencode_go.api_key",
+    "baseUrl": "https://opencode.ai/inference/go/openai/v1",
+    "acceptsAnyModel": true,
+    "displayName": "OpenCode Go",
+    "modelsPath": "/models",
+    "modelsFilter": "(?i)^(?!.*(?:embed|embedding|decision|jev-)).+$",
+    "fallbackModels": ["kimi-k3", "deepseek-v4.1-flash", "glm-5.3-flash"],
+    "defaultModel": "opencode-go/kimi-k3",
+    "knownModels": [],
+    "impl": "openai-compatible",
+    "llmDefaultModel": "kimi-k3",
+    "missingKeyMessage": "OPENCODE_API_KEY environment variable is required for OpenCode Go. Subscribe in the OpenCode Console and copy your API key.",
+    "defaultParams": {"temperature": 0.7}
   }
 ]
