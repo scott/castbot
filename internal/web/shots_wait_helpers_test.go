@@ -23,10 +23,10 @@ import (
 // spend this time. CASTBOT_SHOT_WAIT overrides it (Go duration, 5s to 2m).
 const shotWaitDefault = 45 * time.Second
 
-// pageReadyExpr is true once the document and its web fonts have loaded.
-// Live chat streams and the held wake request stay open on purpose, so this
-// does not wait for an idle network.
-const pageReadyExpr = `(function(){if(document.readyState!=='complete')return false;if(document.fonts&&document.fonts.status!=='loaded')return false;return true;})()`
+// pageReadyExpr is true once the document, its web fonts, and any default
+// desktop panel swap have finished loading. Live chat streams and the held
+// wake request stay open on purpose, so this does not wait for an idle network.
+const pageReadyExpr = `(function(){if(document.readyState!=='complete')return false;if(document.fonts&&document.fonts.status!=='loaded')return false;if(window.__castbotPanelPending)return false;return true;})()`
 
 var shotRetryUsed sync.Map
 

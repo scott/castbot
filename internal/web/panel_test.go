@@ -224,6 +224,10 @@ func TestPanelCloseAndHistoryHooks(t *testing.T) {
 	if strings.Contains(close, "history.back()") || !strings.Contains(close, "chatURL()") || !strings.Contains(close, "hidePanel()") {
 		t.Fatalf("panel close walks history: %s", close)
 	}
+	open := jsFunc(t, js, "openDefaultPanel")
+	if !strings.Contains(open, "__castbotPanelPending = true") || !strings.Contains(open, "__castbotPanelPending = false") {
+		t.Fatal("opening the default panel does not hold the page until the pane arrives")
+	}
 }
 
 func TestPhonePanelClose(t *testing.T) {

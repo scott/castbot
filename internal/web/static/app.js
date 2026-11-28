@@ -725,6 +725,7 @@ function restoreFocus() {
 }
 
 function closeAgentPanel() {
+  window.__castbotPanelPending = false;
   storeSet("castbot.panel", "closed");
   history.replaceState(null, "", chatURL());
   hidePanel();
@@ -743,7 +744,24 @@ function openDefaultPanel() {
   }
   q.set("panel", tab);
   var url = location.pathname + "?" + q.toString() + location.hash;
-  window.htmx.ajax("GET", url, { target: "#agent-panel", swap: "outerHTML" });
+  // Shot pages click Send as soon as the document is ready. Hold that until
+  // this swap has laid out, or the click lands on the pane instead of Send.
+  window.__castbotPanelPending = true;
+  var req;
+  try {
+    req = window.htmx.ajax("GET", url, { target: "#agent-panel", swap: "outerHTML" });
+  } catch (err) {
+    window.__castbotPanelPending = false;
+  }
+  if (req && typeof req.finally === "function") {
+    req.finally(function () {
+      window.requestAnimationFrame(function () {
+        window.__castbotPanelPending = false;
+      });
+    });
+  } else if (window.__castbotPanelPending) {
+    window.__castbotPanelPending = false;
+  }
   history.pushState({ castbotPanel: true }, "", url);
   storeSet("castbot.panel", "open");
   if (tab !== "group") {
@@ -1397,6 +1415,7 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
     syncPanelChrome(document.getElementById("agent-panel"));
+    window.__castbotPanelPending = false;
   });
   document.body.addEventListener("htmx:afterRequest", function (ev) {
     var elt = ev.detail && ev.detail.elt;
