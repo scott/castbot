@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -73,6 +74,9 @@ type Call struct {
 	// Hash binds an approval to this exact call. Summary is the card text.
 	Hash    string
 	Summary string
+	// PublicURL skips the connection host allowlist and sends no token.
+	// The dial still refuses a private address.
+	PublicURL bool
 }
 
 // Result is the upstream response after the token has been stripped.
@@ -94,6 +98,7 @@ type Dial struct {
 // Do forwards one allowlisted request. token is added to the upstream call
 // and removed from anything returned. A nil dial uses the public resolver.
 func Do(ctx context.Context, token string, call Call, tr *Dial) (Result, error) {
+	token = VaultSecret(token)
 	if strings.TrimSpace(token) == "" {
 		return Result{Outcome: OutcomeNoGrant}, errNoGrant
 	}
@@ -103,7 +108,13 @@ func Do(ctx context.Context, token string, call Call, tr *Dial) (Result, error) 
 	if tokenIn(token, call.URL) || tokenIn(token, string(call.Body)) {
 		return Result{Outcome: OutcomeAllow}, errAllow
 	}
-	u, err := CheckURL(call.Connection, call.URL)
+	var u *url.URL
+	var err error
+	if call.PublicURL {
+		u, err = CheckPublicURL(call.URL)
+	} else {
+		u, err = CheckURL(call.Connection, call.URL)
+	}
 	if err != nil {
 		return Result{Outcome: OutcomeAllow}, errAllow
 	}
@@ -120,8 +131,10 @@ func Do(ctx context.Context, token string, call Call, tr *Dial) (Result, error) 
 		return Result{Outcome: OutcomeBad}, errBad
 	}
 	applyGuestHeaders(req, call.Headers, token)
-	applyAuth(req, call.Connection, token)
-	client := clientFor(call.Connection, token, tr)
+	if !call.PublicURL {
+		applyAuth(req, call.Connection, token)
+	}
+	client := clientFor(call.Connection, token, tr, call.PublicURL)
 	res, err := client.Do(req)
 	if err != nil {
 		if errors.Is(err, errRedirect) {
@@ -148,7 +161,7 @@ func Do(ctx context.Context, token string, call Call, tr *Dial) (Result, error) 
 	return Result{Status: res.StatusCode, Type: headers["content-type"], Headers: headers, Body: raw, Outcome: OutcomeOK}, nil
 }
 
-func clientFor(connection, token string, tr *Dial) *http.Client {
+func clientFor(connection, token string, tr *Dial, public bool) *http.Client {
 	tlsConf := &tls.Config{MinVersion: tls.VersionTLS12}
 	if tr != nil && tr.Roots != nil {
 		tlsConf.RootCAs = tr.Roots
@@ -163,7 +176,11 @@ func clientFor(connection, token string, tr *Dial) *http.Client {
 			if err != nil {
 				return nil, errAllow
 			}
-			if !HostAllowed(connection, host) {
+			if public {
+				if net.ParseIP(host) != nil {
+					return nil, errAllow
+				}
+			} else if !HostAllowed(connection, host) {
 				return nil, errAllow
 			}
 			if tr != nil && tr.DialContext != nil {
@@ -178,6 +195,15 @@ func clientFor(connection, token string, tr *Dial) *http.Client {
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
 				return errRedirect
+			}
+			if public {
+				if _, err := CheckPublicURL(req.URL.String()); err != nil {
+					return errRedirect
+				}
+				req.Header.Del("Authorization")
+				req.Header.Del("Cookie")
+				req.Header.Del("X-Access-Token")
+				return nil
 			}
 			if _, err := CheckURL(connection, req.URL.String()); err != nil {
 				return errRedirect
@@ -296,16 +322,38 @@ func applyAuth(req *http.Request, connection, token string) {
 	req.Header.Del("Authorization")
 	req.Header.Del("Cookie")
 	req.Header.Del("X-Access-Token")
-	switch connection {
-	case GitHub:
-		if req.URL != nil && req.URL.Hostname() == "github.com" {
+	entry, ok := Lookup(connection)
+	mode := AuthBearer
+	header := ""
+	gitHost := ""
+	if ok {
+		if entry.Auth != "" {
+			mode = entry.Auth
+		}
+		header = entry.HeaderName
+		gitHost = entry.GitHost
+	}
+	switch mode {
+	case AuthGitHub:
+		if req.URL != nil && gitHost != "" && req.URL.Hostname() == gitHost {
 			req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token)))
 			return
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	case DigitalOcean:
-		req.Header.Set("Authorization", "Bearer "+token)
+	case AuthBasic:
+		req.SetBasicAuth(token, "")
+	case AuthBasicPair:
+		_, extra := VaultFrom(req.Context())
+		extra = strings.TrimSpace(extra)
+		if extra == "" || strings.ContainsAny(extra, "\r\n") {
+			return
+		}
+		req.SetBasicAuth(extra, token)
+	case AuthHeader:
+		if header != "" {
+			req.Header.Set(header, token)
+		}
 	default:
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

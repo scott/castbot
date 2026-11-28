@@ -25,7 +25,7 @@ func TestHostedPageAccess(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	// A TOTP step is accepted once. Later sign-ins in this test move the clock.
-	// The scheduler reads this clock from another goroutine.
+	// The expiry loop reads this clock from another goroutine.
 	var clockMu sync.Mutex
 	clock := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
 	h.st.SetNow(func() time.Time {

@@ -36,7 +36,7 @@ A verified newer release is recorded in `/opt/castbot/update.json` (mode 0600). 
 
 ## What the owner sees
 
-Settings has an Update section for the workspace owner. It shows this copy's version, whether a release is ready, and a choice of Ask me, Install updates, or Don't check. A host file value of `CASTBOT_UPDATE_MODE` wins, and the page cannot change it. Members do not see the section.
+Settings has an Update section for the workspace owner. It shows this copy's version, whether a release is ready, and a choice of Ask me, Install updates, or Don't check. A host file value of `CASTBOT_UPDATE_MODE` wins, and the page cannot change it. Members do not see the section. Check now runs the same check immediately. A newer release then shows on the card, and Update now is offered when the machine image is published. Check now does not install by itself. Don't check and a checkout build do not offer the button.
 
 Ask me also shows a banner on the agent list when a release is ready. Update now stays on the page while an agent is working and asks the owner to try again when the agent is idle. Saving the choice does not install a release. Install updates installs on a later check, when no agent is working.
 

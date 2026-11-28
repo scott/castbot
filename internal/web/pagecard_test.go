@@ -16,6 +16,7 @@ import (
 func TestPageCardsInChatAndList(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
+	// The expiry loop reads this clock from another goroutine.
 	var clockMu sync.Mutex
 	clock := time.Date(2026, 11, 26, 16, 0, 0, 0, time.UTC)
 	h.st.SetNow(func() time.Time {
@@ -121,6 +122,7 @@ func TestPageCardsInChatAndList(t *testing.T) {
 
 func TestAgentPagePreview(t *testing.T) {
 	h := newHarness(t)
+	// The expiry loop reads this clock from another goroutine.
 	var clockMu sync.Mutex
 	clock := time.Date(2026, 11, 26, 18, 0, 0, 0, time.UTC)
 	h.st.SetNow(func() time.Time {

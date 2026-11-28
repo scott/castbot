@@ -145,6 +145,10 @@ func pageWrite(verb string, row store.Page, err error) (string, bool) {
 }
 
 func pageErr(err error) string {
+	var doc *store.PageDocError
+	if errors.As(err, &doc) && doc.Reason != "" {
+		return "That document was not saved. " + doc.Reason
+	}
 	switch {
 	case errors.Is(err, store.ErrRevision):
 		return pageStale

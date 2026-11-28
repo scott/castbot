@@ -69,8 +69,7 @@ func secretNameBlocked(name string) bool {
 	if BlocksSSHSeed(name) {
 		return true
 	}
-	switch strings.ToUpper(strings.TrimSpace(name)) {
-	case connect.SecretNameGitHub, connect.SecretNameDigitalOcean:
+	if connect.VaultName(name) {
 		return true
 	}
 	switch name {

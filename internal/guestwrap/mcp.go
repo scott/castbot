@@ -16,6 +16,7 @@ import (
 	"github.com/scott/castbot/internal/egresscontract"
 	"github.com/scott/castbot/internal/grouptool"
 	"github.com/scott/castbot/internal/machinetool"
+	pagedoc "github.com/scott/castbot/internal/page"
 	"github.com/scott/castbot/internal/pagetool"
 	"github.com/scott/castbot/internal/routinetool"
 	"github.com/scott/castbot/internal/secretask"
@@ -130,10 +131,10 @@ func ServeMCP(server, base string, in io.Reader, out io.Writer) error {
 
 func allowedMCP(server string) bool {
 	switch server {
-	case "github", "digitalocean", "request_secret", agentskill.ServerName:
+	case "request_secret", agentskill.ServerName:
 		return true
 	default:
-		return false
+		return egresscontract.KnownProvider(server)
 	}
 }
 
@@ -505,10 +506,19 @@ func pageSchema(spec pagetool.Spec) map[string]any {
 	page := map[string]any{"type": "string", "description": "Page id or token."}
 	title := map[string]any{"type": "string", "description": "Title, up to 80 characters."}
 	document := map[string]any{
-		"description": "Page document JSON, at most 32 KiB.",
+		"description": pagedoc.Shape(),
 		"oneOf": []any{
-			map[string]any{"type": "object"},
-			map[string]any{"type": "string"},
+			map[string]any{
+				"type":        "object",
+				"description": "The page document.",
+				"required":    []any{"v", "blocks"},
+				"properties": map[string]any{
+					"v":      map[string]any{"type": "integer", "description": "Always 1."},
+					"blocks": map[string]any{"type": "array", "minItems": 1, "maxItems": 40, "description": "Stacked regions. The description lists each block type.", "items": map[string]any{"type": "object"}},
+				},
+				"additionalProperties": false,
+			},
+			map[string]any{"type": "string", "description": "The same JSON object encoded as one string."},
 		},
 	}
 	switch spec.Name {
@@ -665,11 +675,11 @@ func routineForwardArgs(raw json.RawMessage) (map[string]any, bool) {
 func requestSecretTool() map[string]any {
 	return map[string]any{
 		"name":        secretask.ToolSave,
-		"description": "Ask to connect GitHub or DigitalOcean, or to save a new API key. For GitHub or DigitalOcean pass connection. For any other API pass name, an environment variable such as SERVICE_API_KEY, plus reason and an optional label. Leave connection empty for a named key. The value is saved on the host and is not returned. A successful save is available on the next turn. The result is saved, declined, expired, already_configured, or rejected.",
+		"description": "Ask to connect a catalog service, or to save a new API key. Pass connection as the catalog id, such as github or digitalocean. For any other API pass name, an environment variable such as SERVICE_API_KEY, plus reason and an optional label. Leave connection empty for a named key. The value is saved on the host and is not returned. A successful save is available on the next turn. The result is saved, declined, expired, already_configured, or rejected.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"connection": map[string]any{"type": "string", "enum": []string{"github", "digitalocean"}},
+				"connection": map[string]any{"type": "string", "description": "Catalog connection id."},
 				"name":       map[string]any{"type": "string", "description": "Environment name for a new API key. Capital letters, digits, and underscores."},
 				"reason":     map[string]any{"type": "string"},
 				"label":      map[string]any{"type": "string", "description": "Short title for the card."},

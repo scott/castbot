@@ -3,6 +3,8 @@ package pagetool
 import (
 	"strings"
 	"testing"
+
+	"github.com/scott/castbot/internal/page"
 )
 
 func TestSkillFiles(t *testing.T) {
@@ -12,6 +14,9 @@ func TestSkillFiles(t *testing.T) {
 		}
 		if strings.Contains(body, "\u2014") || strings.Contains(body, "\u2013") {
 			t.Fatalf("%s has a dash", name)
+		}
+		if !strings.Contains(body, "one string per column") || !strings.Contains(body, page.Example()) {
+			t.Fatalf("%s missing the document shape", name)
 		}
 	}
 	merged := MergeExtras(map[string]string{SkillFile: "nope"})

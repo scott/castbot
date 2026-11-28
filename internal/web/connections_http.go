@@ -26,9 +26,9 @@ type connCard struct {
 }
 
 type connDetail struct {
-	ID, Title, Body, TokenLabel, TokenMask, SSHKey string
-	NeedsSecret, On, HasSecret, EditToken          bool
-	Tools                                          []connTool
+	ID, Title, Body, TokenLabel, TokenMask, SSHKey, ExtraLabel, ExtraValue string
+	NeedsSecret, On, HasSecret, EditToken                                  bool
+	Tools                                                                  []connTool
 }
 
 type connTool struct {
@@ -85,6 +85,7 @@ func (s *Server) connectionSave(w http.ResponseWriter, r *http.Request) {
 	}
 	levels, levelErr := postedLevels(r, panel)
 	token := trimSecretInput(r.FormValue("token"))
+	postedToken := token != ""
 	tokenErr := ""
 	if panel.NeedsSecret && token != "" && !secretValueOK(token) {
 		tokenErr = "That token cannot be saved."
@@ -97,6 +98,28 @@ func (s *Server) connectionSave(w http.ResponseWriter, r *http.Request) {
 	if panel.NeedsSecret && token == "" && !hasSecret && tokenErr == "" {
 		tokenErr = panel.Title + " needs a token."
 	}
+	if panel.NeedsSecret && panel.ExtraLabel != "" && tokenErr == "" {
+		extra := trimSecretInput(r.FormValue("extra"))
+		var oldSecret, oldExtra string
+		if hasSecret {
+			if raw, err := s.store.ConnectionValue(r.Context(), user.ID, panel.ID); err == nil {
+				oldSecret, oldExtra, _ = connect.SplitVault(raw)
+			}
+		}
+		if token == "" {
+			token = oldSecret
+		}
+		if extra == "" {
+			extra = oldExtra
+		}
+		joined, okJoin := connect.JoinVault(token, extra)
+		if !okJoin || extra == "" {
+			tokenErr = panel.Title + " needs a token and a " + strings.ToLower(panel.ExtraLabel) + "."
+			token = trimSecretInput(r.FormValue("token"))
+		} else {
+			token = joined
+		}
+	}
 	if levelErr != "" || tokenErr != "" {
 		detail, err := s.connectionDetail(r.Context(), user.ID, panel, levels)
 		if err != nil {
@@ -107,7 +130,7 @@ func (s *Server) connectionSave(w http.ResponseWriter, r *http.Request) {
 		if tokenErr != "" {
 			msg = tokenErr
 		}
-		detail.EditToken = token != ""
+		detail.EditToken = postedToken
 		s.renderConnections(w, r, user, connPage{Phone: panel.Title, Back: true, Detail: detail, Error: msg}, http.StatusBadRequest)
 		return
 	}
@@ -223,6 +246,7 @@ func (s *Server) connectionDetail(ctx context.Context, userID string, panel conn
 	}
 	has := false
 	mask := ""
+	extraValue := ""
 	if panel.NeedsSecret {
 		_, secErr := s.store.ConnectionSecret(ctx, userID, panel.ID)
 		has = secErr == nil
@@ -231,7 +255,11 @@ func (s *Server) connectionDetail(ctx context.Context, userID string, panel conn
 			if verr != nil {
 				return connDetail{}, verr
 			}
-			mask = tokenMask(value)
+			secret, extra, okVault := connect.SplitVault(value)
+			if okVault {
+				mask = tokenMask(secret)
+				extraValue = extra
+			}
 		}
 	}
 	if levels == nil {
@@ -262,7 +290,8 @@ func (s *Server) connectionDetail(ctx context.Context, userID string, panel conn
 	}
 	return connDetail{
 		ID: panel.ID, Title: panel.Title, Body: panel.Body, TokenLabel: panel.TokenLabel,
-		TokenMask: mask, SSHKey: sshKey, NeedsSecret: panel.NeedsSecret, On: on, HasSecret: has, Tools: tools,
+		TokenMask: mask, SSHKey: sshKey, ExtraLabel: panel.ExtraLabel, ExtraValue: extraValue,
+		NeedsSecret: panel.NeedsSecret, On: on, HasSecret: has, Tools: tools,
 	}, nil
 }
 

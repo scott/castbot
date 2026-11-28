@@ -47,22 +47,27 @@ func NewRemote() *Remote {
 
 // RoundTrip posts one guest JSON-RPC message. The token is sent only as the
 // bearer on the allowlisted MCP host, and it is removed from the reply.
-func (r *Remote) RoundTrip(ctx context.Context, token string, msg []byte, dial *Dial) ([]byte, error) {
+func (r *Remote) RoundTrip(ctx context.Context, connection, token, endpoint string, msg []byte, dial *Dial) ([]byte, error) {
 	token = strings.TrimSpace(token)
-	if token == "" || len(msg) == 0 || msg[0] != '{' || !json.Valid(msg) {
+	endpoint = strings.TrimSpace(endpoint)
+	connection = strings.ToLower(strings.TrimSpace(connection))
+	if token == "" || endpoint == "" || len(msg) == 0 || msg[0] != '{' || !json.Valid(msg) {
 		return nil, errBad
 	}
-	key := hex.EncodeToString(sumToken(token))
+	if _, err := CheckURL(connection, endpoint); err != nil {
+		return nil, errBad
+	}
+	key := connection + ":" + hex.EncodeToString(sumToken(token))
 	gate := r.gate(key)
 	gate.Lock()
 	defer gate.Unlock()
 	var last error
 	for attempt := 0; attempt < 2; attempt++ {
-		sess, err := r.ensure(ctx, key, token, dial)
+		sess, err := r.ensure(ctx, key, connection, token, endpoint, dial)
 		if err != nil {
 			return nil, err
 		}
-		res, err := r.post(ctx, token, sess, msg, dial)
+		res, err := r.post(ctx, connection, token, endpoint, sess, msg, dial)
 		if err != nil {
 			return nil, err
 		}
@@ -86,7 +91,7 @@ func (r *Remote) RoundTrip(ctx context.Context, token string, msg []byte, dial *
 	return nil, last
 }
 
-func (r *Remote) ensure(ctx context.Context, key, token string, dial *Dial) (*mcpSession, error) {
+func (r *Remote) ensure(ctx context.Context, key, connection, token, endpoint string, dial *Dial) (*mcpSession, error) {
 	now := r.now()
 	r.mu.Lock()
 	sess := r.sessions[key]
@@ -96,7 +101,7 @@ func (r *Remote) ensure(ctx context.Context, key, token string, dial *Dial) (*mc
 		return sess, nil
 	}
 	r.mu.Unlock()
-	res, err := r.post(ctx, token, &mcpSession{proto: mcpProtocol}, initializeMessage(), dial)
+	res, err := r.post(ctx, connection, token, endpoint, &mcpSession{proto: mcpProtocol}, initializeMessage(), dial)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +115,7 @@ func (r *Remote) ensure(ctx context.Context, key, token string, dial *Dial) (*mc
 		return nil, errUpstream
 	}
 	opened := &mcpSession{id: sid, proto: proto, used: r.now()}
-	note, err := r.post(ctx, token, opened, []byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`), dial)
+	note, err := r.post(ctx, connection, token, endpoint, opened, []byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`), dial)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +128,7 @@ func (r *Remote) ensure(ctx context.Context, key, token string, dial *Dial) (*mc
 	return opened, nil
 }
 
-func (r *Remote) post(ctx context.Context, token string, sess *mcpSession, msg []byte, dial *Dial) (Result, error) {
+func (r *Remote) post(ctx context.Context, connection, token, endpoint string, sess *mcpSession, msg []byte, dial *Dial) (Result, error) {
 	proto := mcpProtocol
 	headers := map[string]string{
 		"Accept":               "application/json, text/event-stream",
@@ -137,9 +142,9 @@ func (r *Remote) post(ctx context.Context, token string, sess *mcpSession, msg [
 		headers["Mcp-Session-Id"] = sess.id
 	}
 	return Do(ctx, token, Call{
-		Connection: DigitalOcean,
+		Connection: connection,
 		Method:     http.MethodPost,
-		URL:        DigitalOceanMCPURL,
+		URL:        endpoint,
 		Headers:    headers,
 		Body:       msg,
 	}, dial)

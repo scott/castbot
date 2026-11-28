@@ -66,8 +66,8 @@ func TestMachinePageTools(t *testing.T) {
 	code, body = machinePost(t, h, ip, token, caller.ID, "/agents", routinePayload(pagetool.ToolCreate, map[string]any{
 		"title": "Broken", "document": map[string]any{"v": 2, "blocks": []any{}},
 	}))
-	if code != http.StatusOK || !strings.Contains(body, `"error":true`) || !strings.Contains(body, "That document was not saved.") || len(mustAgentPages(t, h, user.ID, caller.ID)) != 1 {
-		t.Fatalf("bad document %d", code)
+	if code != http.StatusOK || !strings.Contains(body, `"error":true`) || !strings.Contains(body, "That document was not saved.") || !strings.Contains(body, "Set v to 1.") || len(mustAgentPages(t, h, user.ID, caller.ID)) != 1 {
+		t.Fatalf("bad document %d %s", code, body)
 	}
 
 	code, body = machinePost(t, h, ip, token, caller.ID, "/agents", routinePayload(pagetool.ToolUpdate, map[string]any{

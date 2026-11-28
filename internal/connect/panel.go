@@ -28,6 +28,7 @@ type Panel struct {
 	Blurb       string
 	Body        string
 	TokenLabel  string
+	ExtraLabel  string
 	NeedsSecret bool
 	Tools       []PanelTool
 }
@@ -44,7 +45,7 @@ func Panels() []Panel {
 		body := entry.Detail + " The token stays in your vault. The agent never sees the value. Connecting turns this on for every agent you own. A running agent reloads. No new machine."
 		out = append(out, Panel{
 			ID: entry.ID, Title: entry.Title, Blurb: entry.Detail, Body: body,
-			TokenLabel: entry.TokenLabel, NeedsSecret: true, Tools: tools,
+			TokenLabel: entry.TokenLabel, ExtraLabel: entry.ExtraLabel, NeedsSecret: true, Tools: tools,
 		})
 	}
 	out = append(out, shellPanel())

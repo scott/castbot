@@ -40,19 +40,24 @@ func HandleRPC(ctx context.Context, connection string, msg RPC, approved bool, u
 	case "ping":
 		return rpcResult(msg.ID, map[string]any{})
 	case "tools/list":
-		if connection == DigitalOcean {
+		if hostedMCP(connection) {
 			// The hosted server lists its own tools. This adapter does not.
 			return rpcError(msg.ID, "unavailable"), nil
 		}
 		return rpcResult(msg.ID, map[string]any{"tools": toolSchemas(connection)})
 	case "tools/call":
-		if connection == DigitalOcean {
+		if hostedMCP(connection) {
 			return rpcError(msg.ID, "unavailable"), nil
 		}
 		return callTool(ctx, connection, msg, approved, upstream)
 	default:
 		return rpcError(msg.ID, "unknown method"), nil
 	}
+}
+
+func hostedMCP(connection string) bool {
+	entry, ok := Lookup(connection)
+	return ok && entry.RemoteMCP != ""
 }
 
 func callTool(ctx context.Context, connection string, msg RPC, approved bool, upstream Upstream) (json.RawMessage, error) {
@@ -78,9 +83,35 @@ func callTool(ctx context.Context, connection string, msg RPC, approved bool, up
 	if tool.Write && !approved {
 		return nil, ErrDenied
 	}
-	call, err := toolCall(connection, tool, params.Arguments)
-	if err != nil {
-		return rpcError(msg.ID, "bad arguments"), nil
+	if tool.Run != nil {
+		return runTool(msg, ctx, tool, params.Arguments)
+	}
+	var call Call
+	var err error
+	if tool.Build != nil {
+		call, err = tool.Build(ctx, params.Arguments)
+		if err != nil {
+			return rpcError(msg.ID, "bad arguments"), nil
+		}
+		// The builder cannot retarget the call onto another connection.
+		// The token stays this connection's. A public URL is the only
+		// host outside the allowlist, and only when the tool opted in.
+		call.Connection = connection
+		call.Tool = tool.Name
+		call.PublicURL = tool.PublicURL
+		if tool.PublicURL {
+			_, err = CheckPublicURL(call.URL)
+		} else {
+			_, err = CheckURL(connection, call.URL)
+		}
+		if err != nil {
+			return rpcError(msg.ID, "bad arguments"), nil
+		}
+	} else {
+		call, err = toolCall(connection, tool, params.Arguments)
+		if err != nil {
+			return rpcError(msg.ID, "bad arguments"), nil
+		}
 	}
 	if upstream == nil {
 		return rpcError(msg.ID, "unavailable"), nil
@@ -92,6 +123,9 @@ func callTool(ctx context.Context, connection string, msg RPC, approved bool, up
 			"isError": true,
 		})
 	}
+	if tool.ReadBody != nil {
+		res.Body = tool.ReadBody(res.Body)
+	}
 	text := string(res.Body)
 	if text == "" {
 		text = "{}"
@@ -99,6 +133,28 @@ func callTool(ctx context.Context, connection string, msg RPC, approved bool, up
 	return rpcResult(msg.ID, map[string]any{
 		"content": []map[string]string{{"type": "text", "text": text}},
 		"isError": res.Status >= 400,
+	})
+}
+
+func runTool(msg RPC, ctx context.Context, tool Tool, args map[string]any) (json.RawMessage, error) {
+	body, err := tool.Run(ctx, args)
+	if err != nil {
+		if errors.Is(err, ErrBad) || errors.Is(err, ErrAllow) {
+			return rpcError(msg.ID, "bad arguments"), nil
+		}
+		return rpcResult(msg.ID, map[string]any{
+			"content": []map[string]string{{"type": "text", "text": Code(err)}},
+			"isError": true,
+		})
+	}
+	secret, _ := VaultFrom(ctx)
+	text := Redact(secret, string(body))
+	if text == "" {
+		text = "{}"
+	}
+	return rpcResult(msg.ID, map[string]any{
+		"content": []map[string]string{{"type": "text", "text": text}},
+		"isError": false,
 	})
 }
 
@@ -111,7 +167,11 @@ func toolCall(connection string, tool Tool, args map[string]any) (Call, error) {
 	if err != nil {
 		return Call{}, err
 	}
-	raw := "https://" + entry.Hosts[0] + path
+	host := entry.APIHost
+	if host == "" {
+		host = entry.Hosts[0]
+	}
+	raw := "https://" + host + path
 	if tool.Name == "get_file_contents" || strings.Contains(tool.Path, "/contents/") {
 		// contents stay on the API host, which is Hosts[0] for GitHub.
 	}
@@ -247,15 +307,28 @@ func toolSchemas(connection string) []map[string]any {
 	for _, tool := range Tools(connection) {
 		props := map[string]any{}
 		var required []string
-		for _, key := range pathKeys(tool.Path) {
-			props[key] = map[string]string{"type": "string"}
-			required = append(required, key)
-		}
-		for _, key := range tool.Query {
-			props[key] = map[string]string{"type": "string"}
-		}
-		if tool.Write {
-			props["body"] = map[string]string{"type": "object", "description": "Fields sent to the API."}
+		if len(tool.Args) > 0 {
+			for _, arg := range tool.Args {
+				prop := map[string]string{"type": "string"}
+				if arg.Description != "" {
+					prop["description"] = arg.Description
+				}
+				props[arg.Name] = prop
+				if arg.Required {
+					required = append(required, arg.Name)
+				}
+			}
+		} else {
+			for _, key := range pathKeys(tool.Path) {
+				props[key] = map[string]string{"type": "string"}
+				required = append(required, key)
+			}
+			for _, key := range tool.Query {
+				props[key] = map[string]string{"type": "string"}
+			}
+			if tool.Write {
+				props["body"] = map[string]string{"type": "object", "description": "Fields sent to the API."}
+			}
 		}
 		schema := map[string]any{"type": "object", "properties": props}
 		if len(required) > 0 {
@@ -274,15 +347,15 @@ func toolSchemas(connection string) []map[string]any {
 func requestSchema() map[string]any {
 	return map[string]any{
 		"name": RequestTool,
-		"description": "Ask the user to connect GitHub or DigitalOcean. " +
-			"connection is github or digitalocean. reason is a short explanation. " +
+		"description": "Ask the user to connect a catalog service. " +
+			"connection is the catalog id, such as github or digitalocean. reason is a short explanation. " +
 			"The value is saved in their vault and is not returned. " +
 			"The connection is available on the next turn. " +
 			"The result is saved, declined, expired, or already_configured.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"connection": map[string]any{"type": "string", "enum": []string{GitHub, DigitalOcean}},
+				"connection": map[string]string{"type": "string"},
 				"reason":     map[string]string{"type": "string"},
 				"name":       map[string]string{"type": "string"},
 			},

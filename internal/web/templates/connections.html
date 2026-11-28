@@ -26,6 +26,9 @@
 <div class="inp"><input id="conn-token" class="secret-in" type="password" name="token" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="{{.Connections.Detail.TokenLabel}}"></div>
 <p class="help">{{if .Connections.Detail.HasSecret}}A new value replaces the saved token. Leave this blank to keep it.{{else}}The token stays in your vault. After you save, this page shows the first characters only.{{end}}</p>
 {{end}}
+{{if .Connections.Detail.ExtraLabel}}<label class="lab" for="conn-extra">{{.Connections.Detail.ExtraLabel}}</label>
+<div class="inp"><input id="conn-extra" type="text" name="extra" value="{{.Connections.Detail.ExtraValue}}" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="{{.Connections.Detail.ExtraLabel}}"></div>
+<p class="help">Saved with the token. The agent cannot choose a different one. Leave this blank to keep it.</p>{{end}}
 </div>{{end}}
 <div class="field"><span class="lab">Tools</span><p class="fineprint">Ask waits before the tool runs. Always allow runs it without asking. Deny keeps it listed and blocks it.</p>
 {{range .Connections.Detail.Tools}}<div class="toolrow"><div class="grow"><div class="t1">{{.Title}}</div><div class="t2 mono">{{.Name}}</div></div><div class="selwrap"><select class="sel" name="level_{{.Name}}" aria-label="{{.Title}} permission"><option value="ask"{{if eq .Level "ask"}} selected{{end}}>Ask</option><option value="always-allow"{{if eq .Level "always-allow"}} selected{{end}}>Always allow</option><option value="deny"{{if eq .Level "deny"}} selected{{end}}>Deny</option></select></div></div>{{end}}

@@ -168,9 +168,9 @@ func TestEgressFailClosed(t *testing.T) {
 		t.Fatal("fail closed hung")
 	}
 	rec = httptest.NewRecorder()
-	sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"connection":"aws","reason":"phish"}`))
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"connection":"not-a-name","reason":"phish"}`))
 	if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), fixtureValue) {
-		t.Fatalf("aws %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("malformed %d %s", rec.Code, rec.Body.String())
 	}
 	if strings.Contains(hit.blob(), fixtureValue) {
 		t.Fatal("host saw the env value")
@@ -316,12 +316,17 @@ func TestSecretRequestWhenTheProviderIsNotConnected(t *testing.T) {
 			t.Fatalf("unlisted provider was forwarded: %s", hit.blob())
 		}
 		rec = httptest.NewRecorder()
-		sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"connection":"aws","reason":"phish"}`))
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"connection":"not-a-name","reason":"phish"}`))
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("aws %d %s", rec.Code, rec.Body.String())
+			t.Fatalf("malformed %d %s", rec.Code, rec.Body.String())
 		}
 		if hit.count("/egress/secret-request") != 1 {
-			t.Fatal("aws was forwarded")
+			t.Fatal("malformed id was forwarded")
+		}
+		rec = httptest.NewRecorder()
+		sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"connection":"linear","reason":"queue"}`))
+		if rec.Code != http.StatusOK || hit.count("/egress/secret-request") != 2 {
+			t.Fatalf("catalog id %d forwards %d", rec.Code, hit.count("/egress/secret-request"))
 		}
 	}
 }
@@ -616,8 +621,8 @@ func TestNamedSecretForwardsWhenProxyEnabled(t *testing.T) {
 		t.Fatalf("posted %s", posted)
 	}
 	rec = httptest.NewRecorder()
-	sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"connection":"aws","reason":"phish"}`))
+	sup.ServeEgress(rec, localReq(http.MethodPost, "/secret-request", `{"connection":"not-a-name","reason":"phish"}`))
 	if rec.Code != http.StatusBadRequest || hit.count("/egress/secret-request") != 2 {
-		t.Fatalf("aws %d forwards %d", rec.Code, hit.count("/egress/secret-request"))
+		t.Fatalf("malformed %d forwards %d", rec.Code, hit.count("/egress/secret-request"))
 	}
 }

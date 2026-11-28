@@ -1,23 +1,50 @@
 # Connections
 
-A connection lets an agent call GitHub or DigitalOcean without holding the token. The token stays in the vault on the control plane. The guest receives a grant, never the secret.
+A connection lets an agent call a catalog service without holding the token. The token stays in the vault on the control plane. The guest receives a grant, never the secret.
 
 This is the host half of the design. The guest shim, the image, and the `gh` and `doctl` wrappers belong to the image slice. Until that slice lands, the control plane still refuses to put a connection token in the bundle, the guest environment, or the transcript.
 
 ## What is stored
 
-Two catalog entries exist: GitHub and DigitalOcean. There is no custom MCP server in the product.
+The catalog ships the connections in the table. Each connection is one catalog entry, registered from its own file. There is no custom MCP server in the product. The guest accepts any well-formed catalog id the host lists. The host refuses an id that is not in the catalog.
 
 | Connection | Vault name | Hosts |
 | --- | --- | --- |
 | GitHub | `GITHUB_CONNECTION` | `api.github.com`, `github.com` |
 | DigitalOcean | `DIGITALOCEAN_CONNECTION` | `mcp.digitalocean.com`, `api.digitalocean.com` |
+| Web | `WEB_CONNECTION` | `api.search.brave.com` |
+| Linear | `LINEAR_CONNECTION` | `api.linear.app` |
+| Google | `GOOGLE_CONNECTION` | `imap.gmail.com`, `smtp.gmail.com`, `apidata.googleusercontent.com` |
+| Slack | `SLACK_CONNECTION` | `slack.com` |
+| Notion | `NOTION_CONNECTION` | `api.notion.com` |
+| Telegram | `TELEGRAM_CONNECTION` | `api.telegram.org` |
+| Sentry | `SENTRY_CONNECTION` | `sentry.io` |
+| Cloudflare | `CLOUDFLARE_CONNECTION` | `api.cloudflare.com` |
+| Todoist | `TODOIST_CONNECTION` | `api.todoist.com` |
+| Stripe | `STRIPE_CONNECTION` | `api.stripe.com` |
 
-The vault name is not an environment grant. `GrantSecret` rejects it. The guest pull rejects it. A hand-written grant row still does not leave the control plane: the pull keeps `kind = env` and also drops `GITHUB_CONNECTION` and `DIGITALOCEAN_CONNECTION` if a row is forced into that kind. castlet refuses the whole secrets response if either name appears.
+The vault name is not an environment grant. `GrantSecret` rejects it. The guest pull rejects it. A hand-written grant row still does not leave the control plane: the pull keeps `kind = env` and also drops `GITHUB_CONNECTION` and `DIGITALOCEAN_CONNECTION` if a row is forced into that kind. A later connection's vault name is refused the same way. castlet refuses the whole secrets response if a connection vault name appears.
+
+A catalog id is a lowercase letter followed by up to 31 letters, digits, or underscores. `request_secret` and `agents` are not catalog ids. A connection may store a second field in the same vault row, separated from the token by a tab. The agent cannot choose that field. A later connection adds `docs/connections/<id>.md` and one link in the list below.
+
+## Catalog pages
+
+- GitHub, on this page
+- DigitalOcean, on this page
+- [Web](connections/web.md)
+- [Linear](connections/linear.md)
+- [Google](connections/google.md)
+- [Slack](connections/slack.md)
+- [Notion](connections/notion.md)
+- [Telegram](connections/telegram.md)
+- [Sentry](connections/sentry.md)
+- [Cloudflare](connections/cloudflare.md)
+- [Todoist](connections/todoist.md)
+- [Stripe](connections/stripe.md)
 
 The owner chooses the token's own scopes. castbot does not add a service list on top.
 
-Settings, Connections owns GitHub and DigitalOcean, including the account switch. Connecting stores the token in the vault and turns the connection on for every agent on the account. After a token is saved, the page shows the first characters and xxxxxxx. Change opens a blank field. A new value replaces the vault row. Leaving that field blank keeps the saved token. Save returns to the connections list. A connected card on that list says Configure. Disconnect turns the connection off for every agent and reloads a running agent. The token and the tool choices stay. No new machine is created. A connection can be on before any agent exists. The next agent you create inherits it.
+Settings, Connections owns each catalog connection, including the account switch. Connecting stores the token in the vault and turns the connection on for every agent on the account. After a token is saved, the page shows the first characters and xxxxxxx. Change opens a blank field. A new value replaces the vault row. Leaving that field blank keeps the saved token. Save returns to the connections list. A connected card on that list says Configure. Disconnect turns the connection off for every agent and reloads a running agent. The token and the tool choices stay. No new machine is created. A connection can be on before any agent exists. The next agent you create inherits it.
 
 Each tool has a level: Ask, Always allow, or Deny. Deny keeps a named tool listed and blocks it. Always allow on a GitHub or DigitalOcean write tool skips the host approval card. Ask keeps that card for a write. A read tool set to Ask does not open a second host card. A raw git or HTTP call that is not one of those named tools still asks before a mutating request.
 
@@ -80,15 +107,15 @@ A connected DigitalOcean account gets an SSH key named castbot. New droplets use
 
 A local GitHub MCP process is not started on the 512 MB control plane. Set `CASTBOT_MCP_GITHUB` only on a host that has the memory. That process gets a clean environment with one token variable, stops after 45 seconds idle, and its stdout is checked for the token. That path is optional and off by default. It is not used for DigitalOcean.
 
-The guest still sees a normal stdio MCP command: `/usr/local/bin/castbot-mcp` with one argument, `github`, `digitalocean`, or `request_secret`. The command file has no `env` block and no token. The image slice installs that binary and the loopback egress. This repo writes the command file into the bundle so a reload can pick it up.
+The guest still sees a normal stdio MCP command: `/usr/local/bin/castbot-mcp` with one argument. The argument is `request_secret`, `agents`, or a catalog id such as `github` or `digitalocean`. A malformed id is rejected. The command file has no `env` block and no token. The image slice installs that binary and the loopback egress. This repo writes the command file into the bundle so a reload can pick it up.
 
 If that binary is not in the image yet, the agent cannot start the shim. The token still does not enter the guest. The documented fallback is the same castlet egress: git, gh, and doctl in the guest call loopback, and the host adds the token. The guest environment still has no real token.
 
 ## request_secret
 
-`request_secret(connection, reason)` renders a masked card in the chat for GitHub or DigitalOcean. The typed value is posted to the control plane and stored in the vault. The tool's result is only `saved`, `declined`, `expired`, or `already_configured`. The card expires after 60 minutes. One pending card per connection is reused. More than five cards an hour return `declined`.
+`request_secret(connection, reason)` renders a masked card in the chat for a catalog connection. The host accepts GitHub and DigitalOcean today. The typed value is posted to the control plane and stored in the vault. The tool's result is only `saved`, `declined`, `expired`, or `already_configured`. The card expires after 60 minutes. One pending card per connection is reused. More than five cards an hour return `declined`.
 
-A named API key is not a connection token. `request_secret` can take `name`, `reason`, and an optional `label` with an empty `connection`. `delete_secret` asks before that key is removed. An image that only accepts `github` and `digitalocean` uses a `castbot-secret` fence until Replace machine. See [secrets.md](secrets.md).
+A named API key is not a connection token. `request_secret` can take `name`, `reason`, and an optional `label` with an empty `connection`. `delete_secret` asks before that key is removed. An image built before catalog ids were generic only accepts `github` and `digitalocean` and uses a `castbot-secret` fence until Replace machine. See [secrets.md](secrets.md).
 
 If a vault row already exists, the card asks for confirmation and does not require typing the token again. An optional field can replace it. The page never shows the saved value. Saving the card turns that connection on for every agent you own.
 

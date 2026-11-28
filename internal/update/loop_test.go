@@ -3,10 +3,50 @@ package update
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestProbeRecordsWithoutInstalling(t *testing.T) {
+	running := "1111111111111111111111111111111111111111"
+	release := "2222222222222222222222222222222222222222"
+	dir, pub := packRelease(t, "0.20261124.2", release, 37)
+	srv := serveRelease(t, dir, "ahead")
+	defer srv.Close()
+	when := time.Date(2026, 11, 24, 18, 0, 0, 0, time.UTC)
+	calls := 0
+	path := filepath.Join(t.TempDir(), "update.json")
+	cfg := RunConfig{
+		Version:   "0.20261124.1",
+		Commit:    running,
+		Schema:    37,
+		EnvMode:   ModeAuto,
+		CachePath: path,
+		Checker:   *checkerFor(srv, pub, when),
+		Apply: func(context.Context) error {
+			calls++
+			return nil
+		},
+	}
+	if err := Probe(context.Background(), cfg); err != nil || calls != 0 {
+		t.Fatalf("probe err %v calls %d", err, calls)
+	}
+	cache, err := ReadCache(path)
+	if err != nil || !cache.Available || cache.Version != "0.20261124.2" {
+		t.Fatalf("cache %+v %v", cache, err)
+	}
+
+	cfg.EnvMode = ModeOff
+	cfg.CachePath = filepath.Join(t.TempDir(), "off.json")
+	if err := Probe(context.Background(), cfg); err != nil || calls != 0 {
+		t.Fatalf("off probe err %v calls %d", err, calls)
+	}
+	if _, err := os.Stat(cfg.CachePath); !os.IsNotExist(err) {
+		t.Fatalf("off wrote a cache: %v", err)
+	}
+}
 
 func TestOnceAutoInstallsOnlyWhenIdle(t *testing.T) {
 	running := "1111111111111111111111111111111111111111"

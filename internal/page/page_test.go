@@ -1,12 +1,13 @@
 package page
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
 
 func TestParseSample(t *testing.T) {
-	doc, err := Parse(sample())
+	doc, err := Parse(Example())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,16 +72,21 @@ func TestCleanTitle(t *testing.T) {
 	}
 }
 
-func sample() string {
-	return `{
-	  "v": 1,
-	  "blocks": [
-	    {"type": "markdown", "text": "Trials beat the other quotes.", "when": {"range": "30 days"}},
-	    {"type": "callout", "tone": "note", "text": "Figures are counts, not money."},
-	    {"type": "stats", "items": [{"label": "Trials", "value": "12", "note": "30 days"}]},
-	    {"type": "table", "caption": "By day", "columns": ["Day", "Trials"], "rows": [{"cells": ["Mon", "3"], "when": {"range": "7 days"}}, {"cells": ["Tue", "4"]}]},
-	    {"type": "chart", "kind": "bar", "title": "Trials", "x": "Day", "y": "Count", "series": [{"name": "Trials", "points": [{"x": "Mon", "y": 3}, {"x": "Tue", "y": 4}]}]},
-	    {"type": "control", "id": "range", "label": "Range", "options": ["7 days", "30 days"]}
-	  ]
-	}`
+func TestParseReasons(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{`{"v":2,"blocks":[{"type":"markdown","text":"Hi"}]}`, "Set v to 1."},
+		{`{"v":1,"blocks":[{"type":"markdown","text":"Hi","html":"<script>"}]}`, "Remove the unknown field html."},
+		{`{"v":1,"blocks":[{"type":"table","columns":["A"],"rows":[{"cells":["1","2"]}]}]}`, "Each table row needs 1 cell, one per column."},
+		{`{"v":1,"blocks":[{"type":"chart","kind":"pie","series":[{"name":"A","points":[{"x":"M","y":1}]}]}]}`, "A chart kind is bar or line."},
+		{`{"v":1,"blocks":[{"type":"table","columns":["A"],"rows":[{"cells":["1"],"col":"extra"}]}]}`, "Remove the unknown field col."},
+	}
+	for _, tc := range cases {
+		_, err := Parse(tc.raw)
+		if !errors.Is(err, ErrInvalid) || err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: %v", tc.raw, err)
+		}
+	}
 }

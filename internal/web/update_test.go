@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -106,6 +107,7 @@ func TestMemberUpdateIsHidden(t *testing.T) {
 	}{
 		{http.MethodGet, "/settings/update", false},
 		{http.MethodPost, "/settings/update", true},
+		{http.MethodPost, "/settings/update/check", true},
 		{http.MethodPost, "/settings/update/apply", true},
 	} {
 		form := ""
@@ -156,8 +158,12 @@ func TestDevUpdateCopy(t *testing.T) {
 		t.Fatalf("dev copy %d", code)
 	}
 	section := updateSection(t, body)
-	if strings.Contains(section, "Update now") || strings.Contains(section, "Up to date.") || strings.Contains(section, "v0.20261124.2") {
+	if strings.Contains(section, "Update now") || strings.Contains(section, "Check now") || strings.Contains(section, "Up to date.") || strings.Contains(section, "v0.20261124.2") {
 		t.Fatal("a checkout offered an update")
+	}
+	code, _, _ = h.do(http.MethodPost, "/settings/update/check", h.form(nil), ip, nil)
+	if code != http.StatusNotFound {
+		t.Fatalf("dev check %d", code)
 	}
 	code, _, _ = h.do(http.MethodPost, "/settings/update/apply", h.form(nil), ip, nil)
 	if code != http.StatusNotFound {
@@ -187,8 +193,12 @@ func TestUpdateModePinnedByEnv(t *testing.T) {
 	if strings.Contains(section, ">Save</button>") {
 		t.Fatal("pinned form had a save button")
 	}
-	if strings.Contains(section, "Update now") || strings.Contains(section, "Up to date.") || strings.Contains(section, "v0.20261124.2") {
+	if strings.Contains(section, "Update now") || strings.Contains(section, "Check now") || strings.Contains(section, "Up to date.") || strings.Contains(section, "v0.20261124.2") {
 		t.Fatal("off mode showed a release")
+	}
+	code, _, _ = h.do(http.MethodPost, "/settings/update/check", h.form(nil), ip, nil)
+	if code != http.StatusNotFound {
+		t.Fatalf("off check %d", code)
 	}
 	code, _, hdr := h.do(http.MethodPost, "/settings/update", h.form(url.Values{"mode": {update.ModeAuto}}), ip, nil)
 	if code != http.StatusSeeOther || hdr.Get("Location") != "/settings#update" {
@@ -359,6 +369,177 @@ func TestUpdateSectionStaysOffUntilConfigured(t *testing.T) {
 	code, body, _ := h.do(http.MethodGet, "/settings", "", ip, nil)
 	if code != http.StatusOK || strings.Contains(body, `id="update"`) {
 		t.Fatalf("unconfigured settings showed update (%d)", code)
+	}
+}
+
+func TestCheckNowShowsARelease(t *testing.T) {
+	h := newHarness(t)
+	ip := "203.0.113.60:4000"
+	path := filepath.Join(t.TempDir(), "update.json")
+	if err := update.WriteCache(path, update.Cache{}); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.SetUpdate("0.20261124.1", strings.Repeat("ab", 20), "", path)
+	applied := 0
+	h.srv.SetUpdateApply(func(context.Context) error {
+		applied++
+		return nil
+	})
+	h.srv.SetUpdateCheck(func(context.Context) error {
+		writeUpdateCache(t, path, true, true)
+		return nil
+	})
+	_, secret := h.account("owner-check@example.com", "Alex Rivera", "correct-horse-1")
+	h.login("owner-check@example.com", "correct-horse-1", secret, ip, false)
+
+	code, body, _ := h.do(http.MethodGet, "/settings", "", ip, nil)
+	if code != http.StatusOK {
+		t.Fatal(code)
+	}
+	section := updateSection(t, body)
+	if !strings.Contains(section, "Check now") || !strings.Contains(section, "Up to date.") || strings.Contains(section, "Update now") {
+		t.Fatal("before check")
+	}
+
+	code, _, hdr := h.do(http.MethodPost, "/settings/update/check", h.form(nil), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/settings#update" {
+		t.Fatalf("check %d %s", code, hdr.Get("Location"))
+	}
+	if applied != 0 {
+		t.Fatalf("check installed %d", applied)
+	}
+	code, body, _ = h.do(http.MethodGet, "/settings", "", ip, nil)
+	if code != http.StatusOK {
+		t.Fatal(code)
+	}
+	section = updateSection(t, body)
+	if !strings.Contains(section, "Castbot v0.20261124.2 is ready.") || !strings.Contains(section, ">Update now</button>") || !strings.Contains(section, ">Check now</button>") {
+		t.Fatal("ready copy missing after check")
+	}
+	if !strings.Contains(section, "Release notes") {
+		t.Fatal("notes missing after check")
+	}
+}
+
+func TestCheckNowKeepsTheLastResult(t *testing.T) {
+	h := newHarness(t)
+	ip := "203.0.113.61:4000"
+	path := filepath.Join(t.TempDir(), "update.json")
+	if err := update.WriteCache(path, update.Cache{}); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.SetUpdate("0.20261124.1", strings.Repeat("ab", 20), "", path)
+	h.srv.SetUpdateCheck(func(context.Context) error {
+		return errors.New("release download failed")
+	})
+	_, secret := h.account("owner-check-err@example.com", "Alex Rivera", "correct-horse-1")
+	h.login("owner-check-err@example.com", "correct-horse-1", secret, ip, false)
+
+	code, body, _ := h.do(http.MethodPost, "/settings/update/check", h.form(nil), ip, nil)
+	if code != http.StatusBadGateway || !strings.Contains(body, "The check did not finish. This page still shows the last result.") {
+		t.Fatalf("check error %d", code)
+	}
+	section := updateSection(t, body)
+	if !strings.Contains(section, "Up to date.") || strings.Contains(section, "Update now") || strings.Contains(section, "v0.20261124.2") {
+		t.Fatal("failed check changed the card")
+	}
+	if strings.Contains(section, "release download failed") {
+		t.Fatal("check error leaked")
+	}
+}
+
+func TestCheckNowClearsAStaleOffer(t *testing.T) {
+	h := newHarness(t)
+	ip := "203.0.113.62:4000"
+	path := filepath.Join(t.TempDir(), "update.json")
+	writeUpdateCache(t, path, true, false)
+	h.srv.SetUpdate("0.20261124.1", strings.Repeat("ab", 20), "", path)
+	h.srv.SetUpdateCheck(func(context.Context) error {
+		return update.WriteCache(path, update.Cache{})
+	})
+	_, secret := h.account("owner-check-clear@example.com", "Alex Rivera", "correct-horse-1")
+	h.login("owner-check-clear@example.com", "correct-horse-1", secret, ip, false)
+
+	code, body, _ := h.do(http.MethodGet, "/settings", "", ip, nil)
+	if code != http.StatusOK || !strings.Contains(updateSection(t, body), "Update now") {
+		t.Fatal("offer missing before check")
+	}
+	code, _, hdr := h.do(http.MethodPost, "/settings/update/check", h.form(nil), ip, nil)
+	if code != http.StatusSeeOther || hdr.Get("Location") != "/settings#update" {
+		t.Fatalf("check %d %s", code, hdr.Get("Location"))
+	}
+	code, body, _ = h.do(http.MethodGet, "/settings", "", ip, nil)
+	section := updateSection(t, body)
+	if code != http.StatusOK || !strings.Contains(section, "Up to date.") || strings.Contains(section, "Update now") || strings.Contains(section, "v0.20261124.2") {
+		t.Fatal("stale offer stayed")
+	}
+}
+
+func TestCheckNowRefusesAnotherUser(t *testing.T) {
+	h := newHarness(t)
+	ip := "203.0.113.63:4000"
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "update.json")
+	writeUpdateCache(t, path, true, false)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.srv.SetUpdate("0.20261124.1", strings.Repeat("ab", 20), "", path)
+	called := 0
+	h.srv.SetUpdateCheck(func(context.Context) error {
+		called++
+		return update.WriteCache(path, update.Cache{})
+	})
+	owner, secret := h.account("owner-check-auth@example.com", "Alex Rivera", "correct-horse-1")
+	h.login("owner-check-auth@example.com", "correct-horse-1", secret, ip, false)
+	const password = "correct-horse-1"
+	hash, err := auth.Hash(password, h.st.Argon())
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberSecret, err := auth.NewTOTPSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, token, err := h.st.CreateInvite(ctx, owner.ID, "member-check@example.com", "Pip Lane")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.AcceptInvite(ctx, token, hash, memberSecret); err != nil {
+		t.Fatal(err)
+	}
+	h.logout(ip)
+	h.login("member-check@example.com", password, memberSecret, ip, false)
+
+	code, _, _ := h.do(http.MethodPost, "/settings/update/check", h.form(nil), ip, nil)
+	if code != http.StatusNotFound || called != 0 {
+		t.Fatalf("member check %d called %d", code, called)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatal("member changed the recorded release")
+	}
+}
+
+func TestCheckNowCSRF(t *testing.T) {
+	h := newHarness(t)
+	ip := "203.0.113.64:4000"
+	path := filepath.Join(t.TempDir(), "update.json")
+	if err := update.WriteCache(path, update.Cache{}); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.SetUpdate("0.20261124.1", strings.Repeat("ab", 20), "", path)
+	called := 0
+	h.srv.SetUpdateCheck(func(context.Context) error {
+		called++
+		return nil
+	})
+	_, secret := h.account("owner-check-csrf@example.com", "Alex Rivera", "correct-horse-1")
+	h.login("owner-check-csrf@example.com", "correct-horse-1", secret, ip, false)
+	code, body, _ := h.do(http.MethodPost, "/settings/update/check", "csrf=nope", ip, nil)
+	if code != http.StatusForbidden || !strings.Contains(body, "The form expired.") || called != 0 {
+		t.Fatalf("csrf %d called %d", code, called)
 	}
 }
 
