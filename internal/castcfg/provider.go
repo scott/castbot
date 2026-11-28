@@ -196,6 +196,8 @@ func providerMark(key string) string {
 		return "GG"
 	case "xai":
 		return "XA"
+	case "opencode-go":
+		return "OG"
 	default:
 		return ""
 	}

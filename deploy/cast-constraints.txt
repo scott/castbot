@@ -1,4 +1,4 @@
-# Dependencies of castagent 5fc2bdb46c4041831fc51c9f909d59e54f887d31.
+# Dependencies of castagent 1d208ce078c707200060fdc8b34d4dcbaa1f6436.
 # The cast package itself is that tarball, not a line in this list.
 annotated-types==0.8.0
 anthropic==1.17.0

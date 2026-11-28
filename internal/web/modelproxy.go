@@ -107,6 +107,10 @@ func (s *Server) machineModel(w http.ResponseWriter, r *http.Request) {
 	}
 	copyHeader(up.Header, r.Header, "Content-Type", 200)
 	copyHeader(up.Header, r.Header, "Accept", 200)
+	copyHeader(up.Header, r.Header, "x-opencode-session", 200)
+	if route.Key == "opencode-go" && strings.TrimSpace(up.Header.Get("User-Agent")) == "" {
+		up.Header.Set("User-Agent", "castbot/1.0")
+	}
 	if route.Key == "anthropic-api" {
 		version := r.Header.Get("anthropic-version")
 		if version == "" || strings.ContainsAny(version, "\r\n") {
